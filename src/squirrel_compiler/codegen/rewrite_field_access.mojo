@@ -1,4 +1,4 @@
-from squirrel_compiler.parser import Scanner, AccessStep, FieldAccess, NameRef
+from squirrel_compiler.parser import Scanner, AccessStep, FieldAccess, NameRef, is_ident_char
 from squirrel_compiler.codegen.helpers import (
     sqrrl_prefixed,
     encode_container_type,
@@ -11,6 +11,7 @@ from squirrel_compiler.codegen.helpers import (
 )
 from squirrel_compiler.codegen.script_utils import (
     is_in_import_statement,
+    is_in_def_signature,
     enforce_entity_binding,
     _is_bare_identifier,
 )
@@ -53,8 +54,6 @@ def handle_field_access(
     previous step's own `end_pos`, and emits everything up to there as an
     ordinary read -- letting `rewrite_markers`'s outer loop resume plain
     text-copying exactly where our own knowledge of the chain ran out."""
-    from squirrel_compiler.codegen.rewrite import rewrite_markers
-
     var fa = sc.parse_field_access()
 
     if fa.entity not in ctx.entity_to_type:
@@ -126,9 +125,66 @@ def handle_field_access(
     var expr = sqrrl_prefixed(fa.entity)
     var prev_end_pos = marker_start + (3 if fa.entity_marked_world else 2) + fa.entity.byte_length()
 
-    for i in range(len(fa.steps)):
-        ref step = fa.steps[i]
-        var is_last = i == len(fa.steps) - 1
+    _walk_access_chain(
+        sc,
+        source,
+        marker_start,
+        ctx,
+        fa.steps,
+        fa.is_call,
+        fa.write_value,
+        current_type,
+        expr,
+        prev_end_pos,
+        fa.entity,
+        pending_decl,
+        pending_for_loop_decl,
+        out,
+    )
+
+
+def _walk_access_chain(
+    mut sc: Scanner,
+    source: String,
+    marker_start: Int,
+    mut ctx: RewriteContext,
+    steps: List[AccessStep],
+    is_call: Bool,
+    write_value: Optional[String],
+    current_type_in: String,
+    expr_in: String,
+    prev_end_pos_in: Int,
+    entity_label: String,
+    mut pending_decl: Optional[String],
+    mut pending_for_loop_decl: Optional[String],
+    mut out: String,
+) raises:
+    """The general per-step chain walk shared by `handle_field_access`
+    (a chain rooted at a bound `@@entity`) and `handle_func_call_marker`
+    (mandatory-marking milestone -- a chain rooted at the *return value*
+    of an `@@`/`@@@`-marked function call, `@@get_dept(@@alice).name`,
+    which has no `FieldAccess.entity`/`.entity_marked_world` of its own
+    to carry `is_call`/`write_value` on, hence those two arrive as plain
+    parameters here instead of a whole `fa`).
+
+    `current_type_in`/`expr_in`/`prev_end_pos_in` seed the walk exactly
+    the way `handle_field_access`'s own pre-loop setup already did
+    inline before this was extracted -- `current_type` is the walked
+    type so far, `expr` the Mojo text already emitted for it, `prev_end_
+    pos` the byte offset `sc.pos` rolls back to on a "premature-leaf"
+    exit (see the module doc comment). `entity_label` is purely for error
+    messages (`enforce_entity_binding`'s own `call_text`) -- `fa.entity`
+    in the bound-variable case, the function's own call text in the
+    func-call-chain case."""
+    from squirrel_compiler.codegen.rewrite import rewrite_markers
+
+    var current_type = current_type_in
+    var expr = expr_in
+    var prev_end_pos = prev_end_pos_in
+
+    for i in range(len(steps)):
+        ref step = steps[i]
+        var is_last = i == len(steps) - 1
 
         if is_container_type(current_type) and container_wrapper_of(current_type) in ctx.plain_struct_names:
             # A generic plain-struct instantiation (`Tagged[String]`) is
@@ -147,8 +203,8 @@ def handle_field_access(
                 expr += "[" + rewritten_index + "]"
                 var elem_type = container_element_of(current_type)
                 if is_last:
-                    if fa.write_value:
-                        var rewritten_value = rewrite_markers(fa.write_value.value(), ctx)
+                    if write_value:
+                        var rewritten_value = rewrite_markers(write_value.value(), ctx)
                         out += expr + " = " + rewritten_value + ";"
                         pending_decl = None
                         pending_for_loop_decl = None
@@ -184,7 +240,7 @@ def handle_field_access(
             # the container itself (`.append(...)`, needs no sqrrl__world,
             # no `._inner[]`), or an invalid non-indexed, non-iterated
             # field access.
-            if is_last and fa.is_call and step.name != "":
+            if is_last and is_call and step.name != "":
                 out += expr + "." + step.name
                 pending_decl = None
                 pending_for_loop_decl = None
@@ -230,8 +286,8 @@ def handle_field_access(
             pending_for_loop_decl = None
             return
 
-        if is_last and fa.is_call:
-            _handle_instance_call(sc, fa, step, current_type, owner_is_real, expr, ctx, pending_decl, pending_for_loop_decl, out)
+        if is_last and is_call:
+            _handle_instance_call(sc, step, current_type, owner_is_real, expr, ctx, pending_decl, pending_for_loop_decl, out)
             return
 
         var is_relation = current_type in ctx.relation_schema and step.name in ctx.relation_schema[current_type]
@@ -288,8 +344,8 @@ def handle_field_access(
         )
 
         if is_last:
-            if fa.write_value:
-                var rewritten_value = rewrite_markers(fa.write_value.value(), ctx)
+            if write_value:
+                var rewritten_value = rewrite_markers(write_value.value(), ctx)
                 # A direct `.field = value` write, same as `set_<field>`'s
                 # own generated signature (`needs_move_assignment`) and
                 # `build_create_call`'s own construction args -- a `multi`
@@ -342,7 +398,7 @@ def handle_field_access(
                     pending_decl,
                     ctx.entity_to_type,
                     registered_type,
-                    fa.entity + "." + step.name,
+                    entity_label + "." + step.name,
                 )
                 # `for @@x in @@entity.@@container_field:` -- register the
                 # loop variable's own element type the same way a table-
@@ -370,12 +426,153 @@ def handle_field_access(
         prev_end_pos = step.end_pos
 
     # Unreachable -- the loop above always returns from its last iteration
-    # (guaranteed non-empty `fa.steps`, see `Scanner.parse_field_access`).
+    # (only ever called with a non-empty `steps`, guaranteed by both call
+    # sites -- `Scanner.parse_field_access`'s own non-empty check, and
+    # `handle_func_call_marker`'s own "chain follows" lookahead).
+
+
+def handle_func_call_marker(
+    mut sc: Scanner,
+    source: String,
+    marker_start: Int,
+    mut ctx: RewriteContext,
+    is_world: Bool,
+    mut pending_decl: Optional[String],
+    mut pending_for_loop_decl: Optional[String],
+    mut out: String,
+) raises:
+    """Handles `MarkerKind.WORLD_FUNC` (`@@@name(...)`, needs `sqrrl__
+    world`) and `MarkerKind.ENTITY_FUNC` (`@@name(...)`, doesn't -- both a
+    definition and a call site, same as `WORLD_FUNC` always covered).
+
+    Mandatory-marking milestone: any function whose return type involves
+    an `@@`-marked value must mark its own name (`@@` if it doesn't also
+    need `sqrrl__world`, `@@@` if it does -- never both; `build_function_
+    returns` enforces this project-wide, at signature-scan time, so by the
+    time rewriting reaches a call site here `ctx.function_returns` is
+    already the full, validated truth). This is what makes a *direct*
+    access-chain off a call's own return value tractable at all --
+    `@@get_dept(@@alice).name`, no intermediate variable, no `for` loop --
+    since the call itself is now a real, unambiguous marker position the
+    scanner already stops at (`find_next_marker`'s own `@@ident(`
+    dispatch), unlike a *bare* (unmarked) function name, which it never
+    could.
+
+    A definition's own signature is rewritten exactly as before (`WORLD_
+    FUNC`'s pre-existing `self`/`mut sqrrl__world` injection, verbatim --
+    an `ENTITY_FUNC` definition needs none of that, just its own name
+    rewritten). A call site now consumes its *entire* argument list
+    synchronously (`scan_call_args_to_close`, recursively re-run through
+    `rewrite_markers` -- any `@@`-marked argument still rewrites exactly
+    as it always did) instead of letting the outer loop step through it
+    marker-by-marker, specifically so `sc.pos` lands right past the
+    matching `)` and a trailing `.field`/`[index]` chain (if any) can be
+    detected and handed to `_walk_access_chain`, seeded with the
+    function's own registered return type."""
+    from squirrel_compiler.codegen.rewrite import rewrite_markers
+
+    var func_name = sc.parse_world_func() if is_world else sc.parse_entity_func()
+
+    if is_in_def_signature(source, marker_start):
+        if is_world:
+            sc.skip_whitespace()
+            var starts_with_self = sc.starts_with("self") and not is_ident_char(sc.peek_at(4))
+            var has_more_args = sc.peek() != UInt8(ord(")"))
+            if starts_with_self:
+                sc.pos += 4  # consume "self"
+                out += sqrrl_prefixed(func_name) + "(self, mut sqrrl__world: sqrrl__World"
+                sc.skip_trivia()
+                if sc.try_consume(","):
+                    out += ", "
+                ctx.world_declared = True
+                pending_decl = None
+                pending_for_loop_decl = None
+                return
+            out += sqrrl_prefixed(func_name) + "(mut sqrrl__world: sqrrl__World"
+            ctx.world_declared = True
+            if has_more_args:
+                out += ", "
+        else:
+            out += sqrrl_prefixed(func_name) + "("
+        pending_decl = None
+        pending_for_loop_decl = None
+        return
+
+    # Call site.
+    if is_world and not ctx.world_declared:
+        raise sc.err(
+            "InvalidSquirrelSyntax: calling '@@@"
+            + func_name
+            + "(...)' needs 'sqrrl__world' -- open @@:"
+            " or mark this function's own name with '@@@' too"
+        )
+    var arg_text = sc.scan_call_args_to_close()
+    var rewritten_args = rewrite_markers(arg_text, ctx)
+    var call_end_pos = sc.pos
+    var registered: Optional[String] = (
+        Optional[String](ctx.function_returns[func_name]) if func_name in ctx.function_returns else None
+    )
+    if not is_world and not registered:
+        raise sc.err(
+            "InvalidSquirrelSyntax: '@@"
+            + func_name
+            + "(...)' -- '"
+            + func_name
+            + "' doesn't return an '@@'-marked value (or isn't defined) --"
+            " '@@' only marks a function that returns one; write '"
+            + func_name
+            + "(...)' (no '@@') otherwise"
+        )
+    var call_text: String
+    if is_world:
+        call_text = (
+            sqrrl_prefixed(func_name) + "(sqrrl__world"
+            + (", " + rewritten_args if arg_text.strip().byte_length() > 0 else "")
+            + ")"
+        )
+    else:
+        call_text = sqrrl_prefixed(func_name) + "(" + rewritten_args + ")"
+
+    if sc.peek_trailing_chain_follows():
+        if not registered:
+            raise sc.err(
+                "InvalidSquirrelSyntax: can't continue an access chain off"
+                " '@@" + ("@" if is_world else "") + func_name
+                + "(...)' -- '" + func_name + "' doesn't return an"
+                " '@@'-marked value"
+            )
+        var steps = sc.scan_access_steps()
+        var tail = sc.scan_call_or_write_tail()
+        _walk_access_chain(
+            sc,
+            source,
+            marker_start,
+            ctx,
+            steps,
+            tail.is_call,
+            tail.write_value,
+            registered.value(),
+            call_text,
+            call_end_pos,
+            func_name + "(...)",
+            pending_decl,
+            pending_for_loop_decl,
+            out,
+        )
+        return
+
+    out += call_text
+    if registered:
+        if pending_decl:
+            ctx.entity_to_type[pending_decl.value()] = registered.value()
+        if pending_for_loop_decl and is_container_type(registered.value()):
+            ctx.entity_to_type[pending_for_loop_decl.value()] = container_element_of(registered.value())
+    pending_decl = None
+    pending_for_loop_decl = None
 
 
 def _handle_instance_call(
     mut sc: Scanner,
-    fa: FieldAccess,
     step: AccessStep,
     current_type: String,
     owner_is_real: Bool,
@@ -385,15 +582,16 @@ def _handle_instance_call(
     mut pending_for_loop_decl: Optional[String],
     mut out: String,
 ) raises:
-    """The terminal step of a chain is a call (`fa.is_call`) whose owner
-    (`current_type`) is a known struct, real or plain. A plain-struct
-    owner's call is always a direct passthrough -- real Mojo, calling a
-    real, hand-written method the DSL doesn't track at all (out of scope
-    for `@@`-marked dispatch, see the plan's §6). A real-struct owner's
-    call is `add_to_<field>`/`remove_from_<field>` (a `multi` field's own
-    instance mutation, M2) or a spliced user method (M3), re-keyed to the
-    walked `current_type` instead of always assuming `fa.entity`'s own
-    original type -- the general access-chain redesign's whole point."""
+    """The terminal step of a chain is a call (`is_call`, checked by
+    `_walk_access_chain` before calling here) whose owner (`current_type`)
+    is a known struct, real or plain. A plain-struct owner's call is
+    always a direct passthrough -- real Mojo, calling a real, hand-written
+    method the DSL doesn't track at all (out of scope for `@@`-marked
+    dispatch, see the plan's §6). A real-struct owner's call is `add_to_
+    <field>`/`remove_from_<field>` (a `multi` field's own instance
+    mutation, M2) or a spliced user method (M3), re-keyed to the walked
+    `current_type` instead of always assuming the chain's own root type --
+    the general access-chain redesign's whole point."""
     if not owner_is_real:
         if step.marked or step.marked_world:
             raise sc.err(
@@ -710,28 +908,40 @@ def handle_name_ref(
         sc.pos += 1  # consume '='
         sc.skip_trivia()
         if not sc.starts_with("@@"):
+            # Mandatory-marking milestone: a function that returns an
+            # `@@`-marked value is now *always* itself marked (`@@` or
+            # `@@@`, `handle_func_call_marker`'s own doc comment has the
+            # full rationale) -- so `var @@x = some_func(...)` unmarked
+            # here is never that case any more, just the one remaining
+            # unmarked shape that's still valid: a container constructor
+            # (`List[@@Type]()`). A marked call (`var @@x = @@get_dept(
+            # ...)`) instead falls straight through to the `pending_decl`
+            # this function already sets below -- consumed by `handle_
+            # func_call_marker` once it reaches that marker next, exactly
+            # like every other "@@"-prefixed initializer shape.
             var lookahead = sc.pos
+            var matched = False
             var wrapper = sc.scan_ident()
             sc.skip_trivia()
-            var matched_container = False
             if wrapper.byte_length() > 0 and sc.try_consume("["):
                 sc.skip_trivia()
                 if sc.try_consume("@@"):
                     var type_name = sc.scan_ident()
                     if type_name.byte_length() > 0:
-                        matched_container = True
+                        matched = True
                         ctx.entity_to_type[nr.name] = encode_container_type(wrapper, type_name)
             sc.pos = lookahead
-            if not matched_container:
+            if not matched:
                 raise sc.err(
                     "InvalidSquirrelSyntax: '@@"
                     + nr.name
                     + "' must be initialized from a '@@'-marked"
                     " value (e.g. '@@Type{...}', another"
-                    " '@@'-marked entity, or a container"
-                    " constructor like 'List[@@Type]()') -- an"
-                    " unmarked right-hand side would silently"
-                    " skip the construct rewrite"
+                    " '@@'-marked entity, an '@@'/'@@@'-marked"
+                    " function call, or a container constructor like"
+                    " 'List[@@Type]()') -- an unmarked right-hand"
+                    " side would silently skip the construct"
+                    " rewrite"
                 )
     sc.pos = save
     if not is_decl and pending_for_loop_decl and nr.name in ctx.entity_to_type and is_container_type(ctx.entity_to_type[nr.name]):

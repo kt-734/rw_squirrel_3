@@ -402,15 +402,19 @@ def test_to_json_rejects_nonempty_args() raises:
 def test_begin_init_from_json_plain_two_at_is_rejected() raises:
     """Every JSON marker needs 'sqrrl__world' (three `@`s), same rule every
     other M3-addendum construct/call/scope marker already enforces -- a
-    plain `@@begin_init_from_json(...)` falls into the ordinary `@@name(`
-    'needs sqrrl__world' parse error, not a silent different marker kind."""
+    plain `@@begin_init_from_json(...)` no longer raises at the scanner
+    level (mandatory-marking milestone: plain `@@name(...)` is now a
+    legitimate marker, `ENTITY_FUNC`, for a function that returns an
+    `@@`-marked value without needing `sqrrl__world` -- the scanner can't
+    yet tell `begin_init_from_json` isn't actually such a function, only
+    `rewrite.mojo`'s own `handle_func_call_marker` can, once `ctx.
+    function_returns` is available). This still surfaces as a real
+    `InvalidSquirrelSyntax` end-to-end (`begin_init_from_json` is never a
+    registered function), just one marker-kind classification later than
+    before."""
     var s = Scanner("@@begin_init_from_json(dump)")
-    var raised = False
-    try:
-        _ = s.find_next_marker()
-    except:
-        raised = True
-    assert_true(raised)
+    var kind = s.find_next_marker()
+    assert_true(kind == MarkerKind.ENTITY_FUNC)
 
 
 def test_at_bare_struct_keyword_word_boundaries() raises:

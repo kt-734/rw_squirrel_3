@@ -3,16 +3,37 @@ from squirrel_compiler.codegen import encode_container_type
 
 
 def build_function_returns(sqrrl_files: List[String]) raises -> Dict[String, String]:
-    """Function name -> the `@@Type` it returns, for every `def @@@funcName(
-    ...) -> @@Type:` signature project-wide (a def's own signature is
-    assumed to fit on one line). Also recognizes the container form,
-    `-> Container[@@Type]:`. Only the function name's own marking is `@@@`
-    (M3 addendum: a top-level function needing `sqrrl__world`) -- the
-    return type is still plain `@@`, unaffected (`RETURN_TYPE` never needed
-    `sqrrl__world` to begin with).
+    """Function name -> the `@@Type` (or `Container[@@Type]`, encoded via
+    `encode_container_type`) it returns, for *every* top-level `def
+    funcName(...) -> <ReturnType>:` signature project-wide (a def's own
+    signature is assumed to fit on one line) -- mandatory-marking
+    milestone: any function whose return type involves an `@@`-marked
+    value must mark its own name too, `@@` if it doesn't also need
+    `sqrrl__world`, `@@@` if it does (never both) -- so this scans and
+    cross-validates *every* marking of a top-level `def`, not just
+    world-marked ones, raising a real `InvalidSquirrelSyntax` the moment a
+    mismatch is found (over-marked: `@@`-marked but doesn't actually
+    return an `@@`-marked value; under-marked: returns one but isn't
+    marked at all) -- enforced here, once, at signature-scan time, rather
+    than left to surface later as a confusing "isn't a registered
+    function" error at some arbitrary call site.
 
-    Adapted from rw_squirrel_2 -- otherwise unaffected by the storage
-    redesign, this only ever scans raw source text."""
+    This mandatory marking is what makes `rewrite_field_access.mojo`'s own
+    `handle_func_call_marker` able to resolve a *direct* access-chain off
+    a call's own return value at all (`@@get_dept(@@alice).name`, no
+    intermediate variable, no `for` loop) -- the call itself is now always
+    a real, unambiguous marker position the scanner stops at, never a
+    bare (unmarked) identifier it could never have stopped at regardless
+    of how this map were built.
+
+    A `def @@@funcName(...)` (three `@`s) is call-site/method-splicing's
+    own `WORLD_FUNC` shape (needs `sqrrl__world`); `def @@funcName(...)`
+    (exactly two `@`s) is `ENTITY_FUNC`'s (doesn't); a fully bare `def
+    funcName(...)` must return a plain, non-`@@` value, or this raises.
+
+    Adapted from rw_squirrel_2's own scanning shape -- the mandatory-
+    marking cross-validation itself is new, only ever scanning raw source
+    text, same as before."""
     var out = Dict[String, String]()
     for path in sqrrl_files:
         var f = open(path, "r")
@@ -24,14 +45,20 @@ def build_function_returns(sqrrl_files: List[String]) raises -> Dict[String, Str
             sc.skip_trivia()
             if sc.at_end():
                 break
-            if sc.starts_with("def @@@"):
+            var is_world_marked = sc.starts_with("def @@@")
+            var is_entity_marked = sc.starts_with("def @@") and not is_world_marked
+            var is_bare = sc.starts_with("def ") and not sc.starts_with("def @@")
+            if is_world_marked or is_entity_marked or is_bare:
                 var line_start = sc.pos
                 var line_end = line_start
                 while line_end < len(bytes) and bytes[line_end] != UInt8(ord("\n")):
                     line_end += 1
                 var line_sc = Scanner(String(source[byte = line_start : line_end]))
                 _ = line_sc.try_consume("def ")
-                _ = line_sc.try_consume("@@@")
+                if is_world_marked:
+                    _ = line_sc.try_consume("@@@")
+                elif is_entity_marked:
+                    _ = line_sc.try_consume("@@")
                 var func_name = line_sc.scan_ident()
                 var found_arrow = False
                 while not line_sc.at_end():
@@ -39,12 +66,13 @@ def build_function_returns(sqrrl_files: List[String]) raises -> Dict[String, Str
                         found_arrow = True
                         break
                     line_sc.pos += 1
+                var shaped_type: Optional[String] = None
                 if found_arrow:
                     line_sc.skip_trivia()
                     if line_sc.try_consume("@@"):
                         var ret_type = line_sc.scan_ident()
-                        if ret_type.byte_length() > 0 and func_name.byte_length() > 0:
-                            out[func_name] = ret_type
+                        if ret_type.byte_length() > 0:
+                            shaped_type = Optional[String](ret_type)
                     else:
                         var wrapper = line_sc.scan_ident()
                         line_sc.skip_trivia()
@@ -53,9 +81,9 @@ def build_function_returns(sqrrl_files: List[String]) raises -> Dict[String, Str
                             if line_sc.try_consume("@@"):
                                 var ret_type = line_sc.scan_ident()
                                 line_sc.skip_trivia()
-                                if ret_type.byte_length() > 0 and func_name.byte_length() > 0:
+                                if ret_type.byte_length() > 0:
                                     if line_sc.try_consume("]"):
-                                        out[func_name] = encode_container_type(wrapper, ret_type)
+                                        shaped_type = Optional[String](encode_container_type(wrapper, ret_type))
                                     elif line_sc.try_consume(","):
                                         var depth = 1
                                         while depth > 0 and not line_sc.at_end():
@@ -65,7 +93,33 @@ def build_function_returns(sqrrl_files: List[String]) raises -> Dict[String, Str
                                                 depth -= 1
                                             line_sc.pos += 1
                                         if depth == 0:
-                                            out[func_name] = encode_container_type(wrapper, ret_type)
+                                            shaped_type = Optional[String](encode_container_type(wrapper, ret_type))
+                if func_name.byte_length() > 0:
+                    if is_entity_marked and not shaped_type:
+                        raise Error(
+                            "InvalidSquirrelSyntax: "
+                            + path
+                            + ": '@@"
+                            + func_name
+                            + "' is marked '@@' but doesn't return an"
+                            " '@@'-marked value -- '@@' only marks a"
+                            " function that does; remove the '@@' marking"
+                        )
+                    if is_bare and shaped_type:
+                        raise Error(
+                            "InvalidSquirrelSyntax: "
+                            + path
+                            + ": '"
+                            + func_name
+                            + "' returns an '@@'-marked value but isn't"
+                            " itself marked -- write '@@"
+                            + func_name
+                            + "(...)' (or '@@@"
+                            + func_name
+                            + "(...)' if it also needs 'sqrrl__world')"
+                        )
+                    if shaped_type:
+                        out[func_name] = shaped_type.value()
                 sc.pos = line_end
                 continue
             sc.pos += 1

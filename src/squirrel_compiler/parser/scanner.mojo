@@ -6,6 +6,7 @@ from squirrel_compiler.parser.ast import (
     Construct,
     AccessStep,
     FieldAccess,
+    AccessChainTail,
     NameRef,
     EntityParam,
     MarkerKind,
@@ -683,13 +684,19 @@ struct Scanner(Movable):
                 elif self.peek() == UInt8(ord(".")) or self.peek() == UInt8(ord("[")):
                     kind = MarkerKind.FIELD_ACCESS
                 elif self.peek() == UInt8(ord("(")):
-                    raise self.err(
-                        "InvalidSquirrelSyntax: calling '@@"
-                        + ident
-                        + "(...)' needs 'sqrrl__world' -- write '@@@"
-                        + ident
-                        + "(...)'"
-                    )
+                    # `@@ident(...)` -- a function (definition or call site)
+                    # that returns an '@@'-marked value but needs no
+                    # 'sqrrl__world' of its own (mandatory marking: any
+                    # function whose return type involves an '@@'-marked
+                    # value must be marked, plain '@@' if it doesn't also
+                    # need 'sqrrl__world', '@@@' -- never both -- if it
+                    # does). The scanner can't yet tell whether `ident`
+                    # actually returns such a value at all (that needs
+                    # `function_returns`, a project-wide, build-time-only
+                    # map) -- `rewrite.mojo`'s own handling validates that
+                    # once rewriting reaches this point, same split every
+                    # other semantic check in this file already uses.
+                    kind = MarkerKind.ENTITY_FUNC
                 elif self.peek() == UInt8(ord(":")):
                     var save_colon = self.pos
                     self.pos += 1
@@ -863,6 +870,31 @@ struct Scanner(Movable):
         if entity.byte_length() == 0:
             raise self.err("InvalidSquirrelSyntax: expected entity name")
 
+        var steps = self.scan_access_steps()
+        if len(steps) == 0:
+            raise self.err(
+                "InvalidSquirrelSyntax: expected '.' or '[' after"
+                " entity/relation name"
+            )
+        var tail = self.scan_call_or_write_tail()
+        return FieldAccess(
+            entity=entity,
+            entity_marked_world=entity_marked_world,
+            steps=steps^,
+            is_call=tail.is_call,
+            write_value=tail.write_value,
+        )
+
+    def scan_access_steps(mut self) raises -> List[AccessStep]:
+        """Scans a chain of `.field`/`.@@field`/`.@@@field`/`[index]`
+        segments from `self.pos` for as long as one keeps following --
+        the general recursive access-chain loop, factored out of `parse_
+        field_access` so it's also usable rooted at something other than
+        a bound `@@entity` (the return value of an `@@`/`@@@`-marked
+        function call, `@@get_dept(@@alice).name` -- mandatory-marking
+        milestone). May return an empty list -- whether that's valid is
+        the caller's own concern (`parse_field_access` requires at least
+        one step; a bare call's own trailing-chain scan doesn't)."""
         var steps = List[AccessStep]()
         while True:
             var save = self.pos
@@ -927,37 +959,31 @@ struct Scanner(Movable):
                     name = name + suffix
                     marked = True
             steps.append(AccessStep(kind=AccessStep.FIELD, name=name, marked=marked, marked_world=False, end_pos=self.pos))
+        return steps^
 
-        if len(steps) == 0:
-            raise self.err(
-                "InvalidSquirrelSyntax: expected '.' or '[' after"
-                " entity/relation name"
-            )
+    def scan_call_or_write_tail(mut self) raises -> AccessChainTail:
+        """Requires `self.pos` right after the last step `scan_access_
+        steps` produced (or right after an entity/call with zero steps).
+        Classifies what follows: an immediate `(` is a call (table-level,
+        or an instance method on the walked terminal type -- `is_call`),
+        an `=` is a write (`write_value` holds the raw, unparsed
+        right-hand side), anything else is an ordinary read. Factored out
+        of `parse_field_access` for the same reuse reason `scan_access_
+        steps` was."""
         var after_chain = self.pos
-
         self.skip_trivia()
         if self.peek() == UInt8(ord("(")):
             self.pos = after_chain
-            return FieldAccess(
-                entity=entity, entity_marked_world=entity_marked_world, steps=steps^, is_call=True, write_value=None
-            )
+            return AccessChainTail(is_call=True, write_value=None)
 
         if not self.at_assignment():
             self.pos = after_chain
-            return FieldAccess(
-                entity=entity, entity_marked_world=entity_marked_world, steps=steps^, is_call=False, write_value=None
-            )
+            return AccessChainTail(is_call=False, write_value=None)
 
         self.pos += 1  # consume '='
         self.skip_whitespace()
         var value = self._scan_write_value_span()
-        return FieldAccess(
-            entity=entity,
-            entity_marked_world=entity_marked_world,
-            steps=steps^,
-            is_call=False,
-            write_value=String(value),
-        )
+        return AccessChainTail(is_call=False, write_value=String(value))
 
     def parse_world_scope(mut self) raises -> Int:
         """Requires `self.pos` at the `@@@` of `@@@:`. Consumes just the
@@ -998,6 +1024,63 @@ struct Scanner(Movable):
         if not self.try_consume("("):
             raise self.err("InvalidSquirrelSyntax: expected '(' after function name")
         return name
+
+    def parse_entity_func(mut self) raises -> String:
+        """Requires `self.pos` at the `@@` (exactly two `@`s -- `@@@` is
+        `parse_world_func`'s own case) of `@@name(` -- a top-level
+        function that returns an `@@`-marked value but needs no
+        `sqrrl__world` of its own (mandatory-marking milestone), whether
+        this is its own definition or a call site. Consumes through the
+        opening `(` and returns `name`. Mirrors `parse_world_func`
+        exactly, minus the third `@`."""
+        if not self.try_consume("@@"):
+            raise self.err("InvalidSquirrelSyntax: expected '@@'")
+        var name = self.scan_ident()
+        if name.byte_length() == 0:
+            raise self.err("InvalidSquirrelSyntax: expected function name")
+        self.skip_trivia()
+        if not self.try_consume("("):
+            raise self.err("InvalidSquirrelSyntax: expected '(' after function name")
+        return name
+
+    def scan_call_args_to_close(mut self) raises -> String:
+        """Requires `self.pos` already just past a call's own opening `(`
+        (as `parse_world_func`/`parse_entity_func` both leave it). Returns
+        the raw, untrimmed argument-list text and advances `self.pos` past
+        the matching `)` -- mirrors `_parse_json_call_arg`'s own depth-
+        tracking tail, minus the "consume the opening '(' myself" part
+        (the caller already did, via one of the two `parse_*_func`s
+        above, before it even knows yet whether this call needs a
+        trailing-chain resolution or not)."""
+        var body_start = self.pos
+        var depth = 1
+        while not self.at_end() and depth > 0:
+            var before = self.pos
+            self.skip_non_code()
+            if self.pos != before:
+                continue
+            var b = self.peek()
+            if b == UInt8(ord("(")) or b == UInt8(ord("[")) or b == UInt8(ord("{")):
+                depth += 1
+            elif b == UInt8(ord(")")) or b == UInt8(ord("]")) or b == UInt8(ord("}")):
+                depth -= 1
+            self.pos += 1
+        if depth != 0:
+            raise self.err("InvalidSquirrelSyntax: unterminated '(' in function call")
+        return String(self.source[byte = body_start : self.pos - 1])
+
+    def peek_trailing_chain_follows(mut self) -> Bool:
+        """Pure lookahead (restores `self.pos` either way): true if,
+        skipping trivia from `self.pos`, the next byte is `.` or `[` --
+        i.e. a function call's return value continues into a `.field`/
+        `[index]` access chain rather than ending there (mandatory-
+        marking milestone)."""
+        var save = self.pos
+        self.skip_trivia()
+        var b = self.peek()
+        var follows = b == UInt8(ord(".")) or b == UInt8(ord("["))
+        self.pos = save
+        return follows
 
     def _parse_json_call_arg(mut self, call_text: String) raises -> String:
         """Scans from just after `call_text`'s own '(' through the matching

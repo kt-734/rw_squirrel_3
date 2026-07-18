@@ -199,6 +199,20 @@ struct FieldAccess(Copyable, Movable):
 
 
 @fieldwise_init
+struct AccessChainTail(Copyable, Movable):
+    """What `Scanner.scan_call_or_write_tail` found immediately after a
+    `.field`/`[index]` step chain -- shared between `parse_field_access`
+    (a chain rooted at a bound `@@entity`) and `Scanner.scan_trailing_
+    chain` (a chain rooted at the *return value* of an `@@`/`@@@`-marked
+    function call, e.g. `@@get_dept(@@alice).name` -- mandatory-marking
+    milestone). Mirrors `FieldAccess.is_call`/`.write_value` exactly, just
+    without an `entity` of its own to carry them on."""
+
+    var is_call: Bool
+    var write_value: Optional[String]
+
+
+@fieldwise_init
 struct NameRef(Copyable, Movable):
     """A bare `@@name` -- covers both a declaration (`var @@alice = ...`)
     and a plain reference; both rewrite the same way (strip the `@@`). Also
@@ -248,6 +262,7 @@ struct MarkerKind(ImplicitlyCopyable, Movable, Equatable):
     comptime INIT_FROM_JSON = Self(12)
     comptime WORLD_SCOPE = Self(13)
     comptime TO_JSON = Self(15)
+    comptime ENTITY_FUNC = Self(16)
 
     def __eq__(self, other: Self) -> Bool:
         return self.value == other.value

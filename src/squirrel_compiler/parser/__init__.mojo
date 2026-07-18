@@ -16,6 +16,7 @@ from squirrel_compiler.parser.ast import (
     Construct,
     AccessStep,
     FieldAccess,
+    AccessChainTail,
     NameRef,
     EntityParam,
     MarkerKind,

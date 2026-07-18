@@ -4,6 +4,7 @@ from squirrel_compiler.codegen import transform_source
 from squirrel_compiler.driver.cycles import check_no_relation_cycles
 from squirrel_compiler.driver.discovery import DiscoveryResult, DiscoveredStruct, PlainStructDiscovery, build_relation_schema
 from squirrel_compiler.driver.topo_order import topo_sort_structs
+from squirrel_compiler.driver.misc_builders import build_function_returns
 from squirrel_compiler.driver.json_module import emit_json_module
 from squirrel_compiler.parser import ParsedStruct, Field, FieldModifier, TypeParam
 
@@ -470,6 +471,140 @@ def test_transform_method_without_world_marking() raises:
     assert_true("def greeting(self) -> String:" in out)
     assert_true('return "Hello, " + self._inner[]._name' in out)
     assert_false("sqrrl__world" in out)
+
+
+def test_transform_entity_func_return_registers_variable_type() raises:
+    """An `@@`-marked (not `@@@` -- mandatory-marking milestone: it only
+    ever hops through an existing relation, needing no `sqrrl__world` at
+    all) function's registered return type (`function_returns`) is
+    looked up when its call is the right-hand side of `var @@x = ...`,
+    via `MarkerKind.ENTITY_FUNC`/`handle_func_call_marker`, the same way
+    a world-marked function's call already was."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    relation_schema["Employee"] = Dict[String, String]()
+    relation_schema["Employee"]["dept"] = "Department"
+    var struct_names = Dict[String, Bool]()
+    struct_names["Employee"] = True
+    struct_names["Department"] = True
+    var function_returns = Dict[String, String]()
+    function_returns["get_dept"] = "Department"
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+
+    var src = String(
+        "def @@get_dept(@@e: @@Employee) -> @@Department:\n"
+        + "    return @@e.@@dept\n"
+        + "\n"
+        + "def foo(@@e: @@Employee) raises:\n"
+        + "    var @@d = @@get_dept(@@e)\n"
+        + "    print(@@d.name)\n"
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+    )
+    assert_true("var sqrrl__d = sqrrl__get_dept(sqrrl__e)" in out)
+    assert_true("print(sqrrl__d._inner[]._name)" in out)
+
+
+def test_transform_entity_func_direct_chain_without_binding() raises:
+    """The mandatory-marking milestone's whole point: a *direct* access-
+    chain off an `@@`-marked function's own return value, with no
+    intermediate variable and not inside a `for` loop --
+    `@@get_dept(@@alice).name` -- resolves correctly. Confirmed broken
+    before this milestone via a real end-to-end run: the call itself was
+    never a marker at all (a bare, unmarked function name is never a
+    position `find_next_marker` can stop at), so `.name` passed through
+    completely unrewritten regardless of any variable-binding-based fix."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    relation_schema["Employee"] = Dict[String, String]()
+    relation_schema["Employee"]["dept"] = "Department"
+    var struct_names = Dict[String, Bool]()
+    struct_names["Employee"] = True
+    struct_names["Department"] = True
+    var function_returns = Dict[String, String]()
+    function_returns["get_dept"] = "Department"
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+
+    var src = String(
+        "def @@get_dept(@@e: @@Employee) -> @@Department:\n"
+        + "    return @@e.@@dept\n"
+        + "\n"
+        + "def foo(@@e: @@Employee) raises:\n"
+        + "    print(@@get_dept(@@e).name)\n"
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+    )
+    assert_true("print(sqrrl__get_dept(sqrrl__e)._inner[]._name)" in out)
+
+
+def test_build_function_returns_recognizes_entity_marked_signature() raises:
+    """`build_function_returns` scans a `def @@funcName(...) -> @@Type:`
+    (mandatory-marking milestone: `@@`, not `@@@` -- this function never
+    needs `sqrrl__world`) the same way it already scanned a world-marked
+    one, covering both a bare-entity and a container return type."""
+    var path = String("/tmp/test_build_function_returns_entity_marked.mojo.sqrrl")
+    var f = open(path, "w")
+    f.write(
+        "def @@get_dept(@@e: @@Employee) -> @@Department:\n"
+        + "    return @@e.@@dept\n"
+        + "\n"
+        + "def @@get_members(@@d: @@Department) -> List[@@Employee]:\n"
+        + "    return @@d.@@members\n"
+    )
+    f.close()
+    var files = List[String]()
+    files.append(path)
+    var out = build_function_returns(files)
+    assert_true("get_dept" in out)
+    assert_equal(out["get_dept"], "Department")
+    assert_true("get_members" in out)
+    assert_equal(out["get_members"], "List[Employee]")
+
+
+def test_build_function_returns_rejects_unmarked_entity_returning_function() raises:
+    """Mandatory marking, the under-marked direction: a fully bare `def
+    funcName(...) -> @@Type:` (no `@@`/`@@@` on its own name at all) is a
+    hard `InvalidSquirrelSyntax` -- any function returning an `@@`-marked
+    value must mark its own name too."""
+    var path = String("/tmp/test_build_function_returns_unmarked.mojo.sqrrl")
+    var f = open(path, "w")
+    f.write(
+        "def get_dept(@@e: @@Employee) -> @@Department:\n"
+        + "    return @@e.@@dept\n"
+    )
+    f.close()
+    var files = List[String]()
+    files.append(path)
+    var raised = False
+    try:
+        _ = build_function_returns(files)
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_build_function_returns_rejects_overmarked_function() raises:
+    """Mandatory marking, the over-marked direction: a `def @@funcName(
+    ...) -> String:` (marked `@@` but its return type isn't `@@`-shaped
+    at all) is a hard `InvalidSquirrelSyntax` too -- `@@` only marks a
+    function that actually returns an `@@`-marked value."""
+    var path = String("/tmp/test_build_function_returns_overmarked.mojo.sqrrl")
+    var f = open(path, "w")
+    f.write(
+        "def @@get_name(@@e: @@Employee) -> String:\n"
+        + "    return @@e.name\n"
+    )
+    f.close()
+    var files = List[String]()
+    files.append(path)
+    var raised = False
+    try:
+        _ = build_function_returns(files)
+    except:
+        raised = True
+    assert_true(raised)
 
 
 def test_transform_method_self_write_and_relation_hop_and_word_boundary() raises:

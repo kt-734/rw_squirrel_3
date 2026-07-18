@@ -1,4 +1,4 @@
-from squirrel_compiler.parser import Scanner, MarkerKind, is_ident_char
+from squirrel_compiler.parser import Scanner, MarkerKind
 from squirrel_compiler.codegen.helpers import (
     sqrrl_prefixed,
     encode_container_type,
@@ -17,7 +17,7 @@ from squirrel_compiler.codegen.script_utils import (
     indent_of,
 )
 from squirrel_compiler.codegen.rewrite_context import RewriteContext
-from squirrel_compiler.codegen.rewrite_field_access import handle_field_access, handle_name_ref
+from squirrel_compiler.codegen.rewrite_field_access import handle_field_access, handle_name_ref, handle_func_call_marker
 
 
 def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
@@ -177,43 +177,10 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
             pending_for_loop_decl = None
 
         elif kind == MarkerKind.WORLD_FUNC:
-            var func_name = sc.parse_world_func()
-            sc.skip_whitespace()
-            var starts_with_self = sc.starts_with("self") and not is_ident_char(sc.peek_at(4))
-            var has_more_args = sc.peek() != UInt8(ord(")"))
-            if is_in_def_signature(source, marker_start):
-                if starts_with_self:
-                    sc.pos += 4  # consume "self"
-                    out += sqrrl_prefixed(func_name) + "(self, mut sqrrl__world: sqrrl__World"
-                    sc.skip_trivia()
-                    if sc.try_consume(","):
-                        out += ", "
-                    ctx.world_declared = True
-                    pending_decl = None
-                    pending_for_loop_decl = None
-                    pos = sc.pos
-                    continue
-                out += sqrrl_prefixed(func_name) + "(mut sqrrl__world: sqrrl__World"
-                ctx.world_declared = True
-            else:
-                if not ctx.world_declared:
-                    raise sc.err(
-                        "InvalidSquirrelSyntax: calling '@@"
-                        + func_name
-                        + "(...)' needs 'sqrrl__world' -- open @@:"
-                        " or mark this function's own name with '@@' too"
-                    )
-                out += sqrrl_prefixed(func_name) + "(sqrrl__world"
-                if func_name in ctx.function_returns:
-                    var registered_type = ctx.function_returns[func_name]
-                    if pending_decl:
-                        ctx.entity_to_type[pending_decl.value()] = registered_type
-                    if pending_for_loop_decl and is_container_type(registered_type):
-                        ctx.entity_to_type[pending_for_loop_decl.value()] = container_element_of(registered_type)
-            if has_more_args:
-                out += ", "
-            pending_decl = None
-            pending_for_loop_decl = None
+            handle_func_call_marker(sc, source, marker_start, ctx, True, pending_decl, pending_for_loop_decl, out)
+
+        elif kind == MarkerKind.ENTITY_FUNC:
+            handle_func_call_marker(sc, source, marker_start, ctx, False, pending_decl, pending_for_loop_decl, out)
 
         elif kind == MarkerKind.ENTITY_PARAM:
             var ep = sc.parse_entity_param()
@@ -295,6 +262,14 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
             var name = sc.parse_for_entity_loop()
             out += sqrrl_prefixed(name) + " in "
             pending_decl = None
+            # `for @@x in @@get_list(...):`/`for @@x in @@@get_list(...):`
+            # -- mandatory-marking milestone: any function returning a
+            # container of `@@`-marked values is itself always `@@`/`@@@`-
+            # marked, so its own call is a real marker (`handle_func_call_
+            # marker`) that consumes `pending_for_loop_decl` exactly like
+            # every other marker already does -- no special-casing needed
+            # here at all, unlike when a bare (unmarked) function name
+            # could never itself be a marker-stop position.
             pending_for_loop_decl = Optional[String](name)
 
         elif kind == MarkerKind.FIELD_ACCESS:
