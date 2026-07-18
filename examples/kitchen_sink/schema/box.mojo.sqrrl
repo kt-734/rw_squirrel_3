@@ -1,0 +1,3 @@
+@fieldwise_init
+struct Box[T: Copyable & ImplicitlyDeletable](Copyable, Movable, ImplicitlyDeletable):
+    var value: Self.T

@@ -64,6 +64,8 @@ def pairs_from_json[K: Copyable & ImplicitlyDeletable, V: Copyable & ImplicitlyD
 def sqrrl__to_json[T: AnyType](value: T) -> String:
     comptime if False:
         pass
+    elif T == Tagged[String]:
+        return sqrrl__Tagged_to_json[String](rebind[Tagged[String]](value))
     else:
         return sqrrl__to_json_default(value)
 
@@ -225,6 +227,16 @@ def sqrrl__Person_all_from_json(table: sqrrl__PersonTable, sqrrl__tbl_Employee: 
                 break
         sc.expect_byte(UInt8(ord("]")))
 
+def sqrrl__Address_to_json(value: Address) -> String:
+    var out = String("{")
+    out += '"city":'
+    out += sqrrl__to_json(value.city)
+    out += ","
+    out += '"owner":'
+    out += String(value.owner.id())
+    out += "}"
+    return out^
+
 def sqrrl__Address_from_json(sqrrl__tbl_Employee: sqrrl__EmployeeTable, mut sc: sqrrl__JsonScanner) raises -> Address:
     var parsed_city: Optional[String] = None
     var parsed_owner: Optional[sqrrl__Employee] = None
@@ -249,6 +261,16 @@ def sqrrl__Address_from_json(sqrrl__tbl_Employee: sqrrl__EmployeeTable, mut sc: 
         raise Error("InvalidJson: missing field owner for Address")
     return Address(city=parsed_city.take(), owner=parsed_owner.take())
 
+def sqrrl__Tagged_to_json[Kind: Copyable & ImplicitlyDeletable](value: Tagged[Kind]) -> String:
+    var out = String("{")
+    out += '"label":'
+    out += sqrrl__to_json(value.label)
+    out += ","
+    out += '"count":'
+    out += sqrrl__to_json(value.count)
+    out += "}"
+    return out^
+
 def sqrrl__Tagged_from_json[Kind: Copyable & ImplicitlyDeletable](mut sc: sqrrl__JsonScanner) raises -> Tagged[Kind]:
     var parsed_label: Optional[String] = None
     var parsed_count: Optional[UInt32] = None
@@ -271,6 +293,13 @@ def sqrrl__Tagged_from_json[Kind: Copyable & ImplicitlyDeletable](mut sc: sqrrl_
     if not parsed_count:
         raise Error("InvalidJson: missing field count for Tagged")
     return Tagged[Kind](label=parsed_label.take(), count=parsed_count.take())
+
+def sqrrl__Box_to_json[T: Copyable & ImplicitlyDeletable](value: Box[T]) -> String:
+    var out = String("{")
+    out += '"value":'
+    out += sqrrl__to_json(value.value)
+    out += "}"
+    return out^
 
 def sqrrl__Box_from_json[T: Copyable & ImplicitlyDeletable](mut sc: sqrrl__JsonScanner) raises -> Box[T]:
     var parsed_value: Optional[T] = None

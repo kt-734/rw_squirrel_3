@@ -116,7 +116,23 @@ def emit_file(
             " sqrrl__end_init_from_json, sqrrl__init_from_json, sqrrl__world_to_json\n"
         )
 
+    # Sorted, not raw `Dict.keys()` iteration order -- otherwise this
+    # import block's own line order (and therefore the generated file's
+    # own byte-for-byte content) varies from one compiler run to the next
+    # with no source change at all, purely from `Dict`'s own hash-seed-
+    # dependent iteration order. Harmless on its own, but confirmed to
+    # matter for real once it interacted with a large enough project (the
+    # kitchen-sink example): a *different* import order changed struct
+    # registration order enough to move which run hit vs. missed a real,
+    # pre-existing Mojo destructor-ordering bug this project already has
+    # to work around elsewhere. Sorting doesn't fix that bug -- it just
+    # makes generated output (and therefore behavior) reproducible across
+    # runs of the same source, instead of silently flaky.
+    var cross_file_symbol_names = List[String]()
     for symbol in cross_file_symbols.keys():
+        cross_file_symbol_names.append(String(symbol))
+    sort(cross_file_symbol_names)
+    for symbol in cross_file_symbol_names:
         var target_module = cross_file_symbols[symbol]
         if target_module == own_module_path:
             continue

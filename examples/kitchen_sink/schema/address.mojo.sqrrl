@@ -1,0 +1,4 @@
+@fieldwise_init
+struct Address(Copyable, Movable, ImplicitlyDeletable):
+    var street: String
+    var city: String

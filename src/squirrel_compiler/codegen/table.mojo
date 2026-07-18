@@ -148,7 +148,15 @@ def emit_table(parsed: ParsedStruct, plain_struct_names: Dict[String, Bool] = Di
     # add_to_<field>/remove_from_<field> (see entity.mojo) -- both paths work
     # unchanged, no special-casing needed beyond the default value itself.
     out += "\n"
-    var params = String()
+    # Keyword-only (`*, `) -- `build_create_call` only ever calls `create`
+    # by keyword, and a `multi` field's own default value (below) would
+    # otherwise force Mojo's "every defaulted positional param must come
+    # after every non-defaulted one" rule onto field *declaration* order --
+    # real for a struct declaring a `multi` field before a later plain one
+    # (`multi @@projects: @@Project` then `@@vendors: Set[@@Vendor]`),
+    # confirmed via a real compile. Keyword-only params carry no such
+    # ordering constraint.
+    var params = String("*, ")
     var first = True
     for f in parsed.fields:
         if not first:

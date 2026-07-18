@@ -1,0 +1,6 @@
+@@struct equatable @@Department:
+    name: String
+    tags: List[String]
+    multi @@projects: @@Project
+    @@vendors: Set[@@Vendor]
+    multi skills: String

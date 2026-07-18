@@ -1,4 +1,31 @@
+from squirrel_compiler.parser import parse_type_expr, TypeExpr
 from squirrel_compiler.driver.discovery import DiscoveryResult, DiscoveredStruct
+
+
+def _relation_schema_target_base_name(target: String) -> String:
+    """`relation_schema[name][field]`'s own stored value is `render_
+    relation_stripped` text -- the *whole* container shape for a wrapped
+    relation field (`List[@@Person]` -> `"List[Person]"`, `Optional[
+    @@Employee]` -> `"Optional[Employee]"`), not just the bare target
+    name a *bare* relation field's entry already is (`"Department"`).
+    Unwraps down to that innermost bare name either way -- what actually
+    needs to exist in `by_name` for `_visit_topo` to find the edge at
+    all. Missing this unwrap was a real, confirmed bug (not just an
+    edge case): `target in by_name` is trivially always `False` for a
+    wrapped value, since `by_name` is keyed by bare struct names only --
+    silently dropping the dependency edge entirely for *any* relation
+    field wrapped in a container, letting a struct sort before a target
+    it only ever reaches that way (`Team`'s own `lead: Assignment`
+    embedding `@@person: @@Person` is *also* directly reachable via
+    `@@members: List[@@Person]` -- itself wrapped, so *that* edge was
+    silently dropped too) -- confirmed via a real crash during reload
+    (`EntityStorage.handle_for: id is no longer live`) once a large
+    enough project (the kitchen-sink example) had a struct whose only
+    live dependency edges were wrapped ones."""
+    var t = parse_type_expr(target)
+    while t.is_parameterized():
+        t = t.arg(0).copy()
+    return t.name
 
 
 def _visit_topo(
@@ -12,7 +39,20 @@ def _visit_topo(
         return
     visited[name] = True
     if name in relation_schema:
-        for target in relation_schema[name].values():
+        # Sorted field names, not raw `Dict.values()` iteration order --
+        # a struct with 2+ relation fields targeting different structs
+        # would otherwise visit its own targets in a hash-seed-dependent
+        # order from one compiler run to the next, producing a
+        # *different*, but equally "valid" (no cycle exists either way),
+        # topo order/dump-key order each time -- reproducibility, not a
+        # correctness requirement on its own (unlike the unwrap in
+        # `_relation_schema_target_base_name` above, which *is*).
+        var field_names = List[String]()
+        for k in relation_schema[name].keys():
+            field_names.append(String(k))
+        sort(field_names)
+        for field_name in field_names:
+            var target = _relation_schema_target_base_name(relation_schema[name][field_name])
             if target in by_name:
                 _visit_topo(target, relation_schema, by_name, visited, out)
     if name in by_name:

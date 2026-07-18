@@ -66,6 +66,19 @@ def convert_directory(target_root: String) raises:
     var stats_fields = build_stats_fields(discovery)
     var plain_value_fields = build_plain_value_fields(discovery, plain_struct_fields)
     var entity_symbols = build_entity_symbols(discovery)
+    # A plain struct's own bare name (never `sqrrl__`-prefixed) needs the
+    # exact same cross-file import treatment as a real entity's `sqrrl__
+    # <Name>` -- a plain struct used as a field's type in a *different*
+    # file than the one declaring it (`schema/employee.mojo.sqrrl`'s
+    # `profile: Profile`, declared in `schema/profile.mojo.sqrrl`) is just
+    # as real a cross-file reference as a relation field's own target
+    # type, but `build_entity_symbols` only ever walked `@@struct`
+    # declarations -- every existing example happened to declare its
+    # plain structs in the same file as whatever `@@struct` used them, so
+    # this gap stayed latent until a real multi-file schema (the kitchen
+    # sink example) exercised it.
+    for plain_name in plain_struct_discovery.module_of.keys():
+        entity_symbols[String(plain_name)] = plain_struct_discovery.module_of[String(plain_name)]
 
     var world_module = emit_world_module(discovery)
     var world_path = join(target_root, "sqrrl__world.mojo")

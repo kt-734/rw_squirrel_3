@@ -1,0 +1,9 @@
+@fieldwise_init
+struct Profile(Copyable, Movable, ImplicitlyDeletable):
+    var contact: ContactInfo
+    var nicknames: Optional[List[String]]
+    var scores: Dict[String, Int]
+    var rating: Box[UInt32]
+    var coordinates: Pair[Int, Int]
+    var past_addresses: List[Address]
+    var boxed_ratings: List[Box[UInt32]]

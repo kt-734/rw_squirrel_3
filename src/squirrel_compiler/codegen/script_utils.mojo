@@ -143,6 +143,14 @@ def _is_bare_identifier(s: String) -> Bool:
     before now."""
     if s.byte_length() == 0:
         return False
+    # `None`/`True`/`False` are identifier-shaped text but Mojo literals,
+    # not a named binding with anywhere to move *from* -- `^` on one is
+    # rejected the same way as on a fresh rvalue ("cannot transfer from a
+    # parameter expression"), confirmed via a real compile once a
+    # `Optional`-wrapped relation field's own construction-site value
+    # (`.@@advisor = None`) exercised this for the first time.
+    if s == "None" or s == "True" or s == "False":
+        return False
     var bytes = s.as_bytes()
     var first = bytes[0]
     if not (

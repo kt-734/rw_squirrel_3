@@ -1,131 +1,39 @@
 from squirrel_runtime.entity_storage import EntityStorage
 from squirrel_runtime.index import PlainIndex, UniqueIndex, MultiIndex, OrderedIndex
+from squirrel_runtime.json import sqrrl__JsonSerializable
 from std.memory import ArcPointer
 from std.hashlib import Hasher
 from std.collections import Set
 from std.os import abort
-from sqrrl__world import sqrrl__init, sqrrl__World
+from schema.profile import Profile
+from schema.department import sqrrl__Department
 
-
-@fieldwise_init
-struct sqrrl__DepartmentInner(Movable, ImplicitlyDeletable):
-    var _id: UInt32
-    var _table: ArcPointer[EntityStorage[sqrrl__DepartmentIndexes, sqrrl__DepartmentInner]]
-    var _name: String
-
-    def __del__(deinit self):
-        self._table[].indexes.name.remove(self._id, self._name)
-        self._table[].free_id(self._id)
-        self._table[].clear_weak_ref(self._id)
-
-    def set_name(mut self, v: String) raises:
-        self._table[].indexes.name.check_unique(v, self._id)
-        self._table[].indexes.name.remove(self._id, self._name)
-        self._name = v
-
-    @always_inline
-    def get_name(self) -> ref [self._name] String:
-        return self._name
-
-
-struct sqrrl__Department(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable):
-    var _inner: ArcPointer[sqrrl__DepartmentInner]
-
-    def __init__(out self, var inner: sqrrl__DepartmentInner):
-        self._inner = ArcPointer(inner^)
-
-    def __init__(out self, var inner: ArcPointer[sqrrl__DepartmentInner]):
-        self._inner = inner^
-
-    def id(self) -> UInt32:
-        return self._inner[]._id
-
-    def ref_count(self) -> Int:
-        return Int(self._inner.count())
-
-    def __hash__[H: Hasher](self, mut hasher: H):
-        hasher.update(self.id())
-
-    def __eq__(self, other: Self) -> Bool:
-        return self.id() == other.id()
-
-    def __ne__(self, other: Self) -> Bool:
-        return self.id() != other.id()
-
-
-
-struct sqrrl__DepartmentIndexes(Movable, ImplicitlyDeletable):
-    var name: UniqueIndex[String]
-
-    def __init__(out self):
-        self.name = UniqueIndex[String]()
-
-
-struct sqrrl__DepartmentTable(Movable):
-    var storage: ArcPointer[EntityStorage[sqrrl__DepartmentIndexes, sqrrl__DepartmentInner]]
-
-    def __init__(out self):
-        self.storage = ArcPointer(EntityStorage[sqrrl__DepartmentIndexes, sqrrl__DepartmentInner](sqrrl__DepartmentIndexes()))
-
-    def create(mut self, *, name: String) raises -> sqrrl__Department:
-        if self.storage[].indexes.name.contains(name):
-            raise Error("UniqueConstraintViolation: 'name' already in use by another entity")
-        var id = self.storage[].alloc_id()
-        var inner = ArcPointer(sqrrl__DepartmentInner(_id=id, _table=self.storage, _name=name))
-        self.storage[].register_weak(id, inner)
-        self.storage[].indexes.name.add(id, inner[]._name)
-        return sqrrl__Department(inner^)
-
-    def all(self) -> Set[sqrrl__Department]:
-        var out = Set[sqrrl__Department]()
-        for id in self.storage[].all():
-            out.add(sqrrl__Department(self.storage[].handle_for(id)))
-        return out^
-
-    def count(self) -> Int:
-        return self.storage[].live_count()
-
-    def for_name(self, value: String) raises -> sqrrl__Department:
-        var id = self.storage[].indexes.name.get_bwd(value)
-        return sqrrl__Department(self.storage[].handle_for(id))
-
-    def count_name(self, value: String) -> Int:
-        return 1 if self.storage[].indexes.name.contains(value) else 0
-
-    def group_by_name(self) -> Dict[String, sqrrl__Department]:
-        ref ids = self.storage[].indexes.name.all_bwd()
-        var out = Dict[String, sqrrl__Department]()
-        for entry in ids.items():
-            out[entry.key] = sqrrl__Department(self.storage[].handle_for(entry.value))
-        return out^
-
-    def distinct_name(self) -> Set[String]:
-        var out = Set[String]()
-        ref ids = self.storage[].indexes.name.all_bwd()
-        for key in ids.keys():
-            out.add(key.copy())
-        return out^
 
 @fieldwise_init
 struct sqrrl__EmployeeInner(Movable, ImplicitlyDeletable):
     var _id: UInt32
     var _table: ArcPointer[EntityStorage[sqrrl__EmployeeIndexes, sqrrl__EmployeeInner]]
-    var _name: String
+    var _email: String
+    var _title: String
     var _years_employed: UInt32
     var _salary: Float64
     var _sqrrl__dept: sqrrl__Department
+    var _profile: Profile
 
     def __del__(deinit self):
-        self._table[].indexes.name.remove(self._id, self._name)
+        self._table[].indexes.email.remove(self._id, self._email)
         self._table[].indexes.years_employed.remove(self._id, self._years_employed)
         self._table[].indexes.dept.remove(self._id, self._sqrrl__dept)
         self._table[].free_id(self._id)
         self._table[].clear_weak_ref(self._id)
 
-    def set_name(mut self, v: String) raises:
-        self._table[].indexes.name.check_unique(v, self._id)
-        self._table[].indexes.name.remove(self._id, self._name)
-        self._name = v
+    def set_email(mut self, v: String) raises:
+        self._table[].indexes.email.check_unique(v, self._id)
+        self._table[].indexes.email.remove(self._id, self._email)
+        self._email = v
+
+    def set_title(mut self, v: String):
+        self._title = v
 
     def set_years_employed(mut self, v: UInt32):
         self._table[].indexes.years_employed.remove(self._id, self._years_employed)
@@ -140,9 +48,16 @@ struct sqrrl__EmployeeInner(Movable, ImplicitlyDeletable):
         self._sqrrl__dept = v
         self._table[].indexes.dept.add(self._id, self._sqrrl__dept)
 
+    def set_profile(mut self, var v: Profile):
+        self._profile = v^
+
     @always_inline
-    def get_name(self) -> ref [self._name] String:
-        return self._name
+    def get_email(self) -> ref [self._email] String:
+        return self._email
+
+    @always_inline
+    def get_title(self) -> ref [self._title] String:
+        return self._title
 
     @always_inline
     def get_years_employed(self) -> ref [self._years_employed] UInt32:
@@ -156,8 +71,12 @@ struct sqrrl__EmployeeInner(Movable, ImplicitlyDeletable):
     def get_sqrrl__dept(self) -> ref [self._sqrrl__dept] sqrrl__Department:
         return self._sqrrl__dept
 
+    @always_inline
+    def get_profile(self) -> ref [self._profile] Profile:
+        return self._profile
 
-struct sqrrl__Employee(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable):
+
+struct sqrrl__Employee(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable, sqrrl__JsonSerializable):
     var _inner: ArcPointer[sqrrl__EmployeeInner]
 
     def __init__(out self, var inner: sqrrl__EmployeeInner):
@@ -181,15 +100,17 @@ struct sqrrl__Employee(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeleta
     def __ne__(self, other: Self) -> Bool:
         return self.id() != other.id()
 
+    def sqrrl__to_json(self) -> String:
+        return String(self.id())
 
 
 struct sqrrl__EmployeeIndexes(Movable, ImplicitlyDeletable):
-    var name: UniqueIndex[String]
+    var email: UniqueIndex[String]
     var years_employed: OrderedIndex[UInt32]
     var dept: PlainIndex[sqrrl__Department]
 
     def __init__(out self):
-        self.name = UniqueIndex[String]()
+        self.email = UniqueIndex[String]()
         self.years_employed = OrderedIndex[UInt32]()
         self.dept = PlainIndex[sqrrl__Department]()
 
@@ -200,13 +121,13 @@ struct sqrrl__EmployeeTable(Movable):
     def __init__(out self):
         self.storage = ArcPointer(EntityStorage[sqrrl__EmployeeIndexes, sqrrl__EmployeeInner](sqrrl__EmployeeIndexes()))
 
-    def create(mut self, *, name: String, years_employed: UInt32, salary: Float64, sqrrl__dept: sqrrl__Department) raises -> sqrrl__Employee:
-        if self.storage[].indexes.name.contains(name):
-            raise Error("UniqueConstraintViolation: 'name' already in use by another entity")
+    def create(mut self, *, email: String, title: String, years_employed: UInt32, salary: Float64, sqrrl__dept: sqrrl__Department, var profile: Profile) raises -> sqrrl__Employee:
+        if self.storage[].indexes.email.contains(email):
+            raise Error("UniqueConstraintViolation: 'email' already in use by another entity")
         var id = self.storage[].alloc_id()
-        var inner = ArcPointer(sqrrl__EmployeeInner(_id=id, _table=self.storage, _name=name, _years_employed=years_employed, _salary=salary, _sqrrl__dept=sqrrl__dept))
+        var inner = ArcPointer(sqrrl__EmployeeInner(_id=id, _table=self.storage, _email=email, _title=title, _years_employed=years_employed, _salary=salary, _sqrrl__dept=sqrrl__dept, _profile=profile^))
         self.storage[].register_weak(id, inner)
-        self.storage[].indexes.name.add(id, inner[]._name)
+        self.storage[].indexes.email.add(id, inner[]._email)
         self.storage[].indexes.years_employed.add(id, inner[]._years_employed)
         self.storage[].indexes.dept.add(id, inner[]._sqrrl__dept)
         return sqrrl__Employee(inner^)
@@ -220,8 +141,8 @@ struct sqrrl__EmployeeTable(Movable):
     def count(self) -> Int:
         return self.storage[].live_count()
 
-    def for_name(self, value: String) raises -> sqrrl__Employee:
-        var id = self.storage[].indexes.name.get_bwd(value)
+    def for_email(self, value: String) raises -> sqrrl__Employee:
+        var id = self.storage[].indexes.email.get_bwd(value)
         return sqrrl__Employee(self.storage[].handle_for(id))
 
     def for_years_employed(self, value: UInt32) -> Set[sqrrl__Employee]:
@@ -266,19 +187,19 @@ struct sqrrl__EmployeeTable(Movable):
             out.add(sqrrl__Employee(self.storage[].handle_for(id)))
         return out^
 
-    def count_name(self, value: String) -> Int:
-        return 1 if self.storage[].indexes.name.contains(value) else 0
+    def count_email(self, value: String) -> Int:
+        return 1 if self.storage[].indexes.email.contains(value) else 0
 
-    def group_by_name(self) -> Dict[String, sqrrl__Employee]:
-        ref ids = self.storage[].indexes.name.all_bwd()
+    def group_by_email(self) -> Dict[String, sqrrl__Employee]:
+        ref ids = self.storage[].indexes.email.all_bwd()
         var out = Dict[String, sqrrl__Employee]()
         for entry in ids.items():
             out[entry.key] = sqrrl__Employee(self.storage[].handle_for(entry.value))
         return out^
 
-    def distinct_name(self) -> Set[String]:
+    def distinct_email(self) -> Set[String]:
         var out = Set[String]()
-        ref ids = self.storage[].indexes.name.all_bwd()
+        ref ids = self.storage[].indexes.email.all_bwd()
         for key in ids.keys():
             out.add(key.copy())
         return out^
@@ -348,16 +269,16 @@ struct sqrrl__EmployeeTable(Movable):
                 sqrrl__acc = sqrrl__v
         return sqrrl__acc.value()
 
-    def min_years_employed_by_name(self) -> Dict[String, UInt32]:
-        ref sqrrl__ids = self.storage[].indexes.name.all_bwd()
+    def min_years_employed_by_email(self) -> Dict[String, UInt32]:
+        ref sqrrl__ids = self.storage[].indexes.email.all_bwd()
         var out = Dict[String, UInt32]()
         for entry in sqrrl__ids.items():
             var sqrrl__v = self.storage[].handle_for(entry.value)[]._years_employed
             out[entry.key] = sqrrl__v
         return out^
 
-    def min_years_employed_for_name(self, value: String) raises -> UInt32:
-        var sqrrl__id = self.storage[].indexes.name.get_bwd(value)
+    def min_years_employed_for_email(self, value: String) raises -> UInt32:
+        var sqrrl__id = self.storage[].indexes.email.get_bwd(value)
         var sqrrl__v = self.storage[].handle_for(sqrrl__id)[]._years_employed
         return sqrrl__v
 
@@ -395,16 +316,16 @@ struct sqrrl__EmployeeTable(Movable):
                 sqrrl__acc = sqrrl__v
         return sqrrl__acc.value()
 
-    def max_years_employed_by_name(self) -> Dict[String, UInt32]:
-        ref sqrrl__ids = self.storage[].indexes.name.all_bwd()
+    def max_years_employed_by_email(self) -> Dict[String, UInt32]:
+        ref sqrrl__ids = self.storage[].indexes.email.all_bwd()
         var out = Dict[String, UInt32]()
         for entry in sqrrl__ids.items():
             var sqrrl__v = self.storage[].handle_for(entry.value)[]._years_employed
             out[entry.key] = sqrrl__v
         return out^
 
-    def max_years_employed_for_name(self, value: String) raises -> UInt32:
-        var sqrrl__id = self.storage[].indexes.name.get_bwd(value)
+    def max_years_employed_for_email(self, value: String) raises -> UInt32:
+        var sqrrl__id = self.storage[].indexes.email.get_bwd(value)
         var sqrrl__v = self.storage[].handle_for(sqrrl__id)[]._years_employed
         return sqrrl__v
 
@@ -437,16 +358,16 @@ struct sqrrl__EmployeeTable(Movable):
             raise Error("median_years_employed: table has no entities")
         return sqrrl__sorted[len(sqrrl__sorted) // 2].value
 
-    def median_years_employed_by_name(self) -> Dict[String, UInt32]:
-        ref sqrrl__ids = self.storage[].indexes.name.all_bwd()
+    def median_years_employed_by_email(self) -> Dict[String, UInt32]:
+        ref sqrrl__ids = self.storage[].indexes.email.all_bwd()
         var out = Dict[String, UInt32]()
         for entry in sqrrl__ids.items():
             var sqrrl__v = self.storage[].handle_for(entry.value)[]._years_employed
             out[entry.key] = sqrrl__v
         return out^
 
-    def median_years_employed_for_name(self, value: String) raises -> UInt32:
-        var sqrrl__id = self.storage[].indexes.name.get_bwd(value)
+    def median_years_employed_for_email(self, value: String) raises -> UInt32:
+        var sqrrl__id = self.storage[].indexes.email.get_bwd(value)
         var sqrrl__v = self.storage[].handle_for(sqrrl__id)[]._years_employed
         return sqrrl__v
 
@@ -486,16 +407,16 @@ struct sqrrl__EmployeeTable(Movable):
                 sqrrl__acc = sqrrl__v
         return sqrrl__acc.value()
 
-    def min_salary_by_name(self) -> Dict[String, Float64]:
-        ref sqrrl__ids = self.storage[].indexes.name.all_bwd()
+    def min_salary_by_email(self) -> Dict[String, Float64]:
+        ref sqrrl__ids = self.storage[].indexes.email.all_bwd()
         var out = Dict[String, Float64]()
         for entry in sqrrl__ids.items():
             var sqrrl__v = self.storage[].handle_for(entry.value)[]._salary
             out[entry.key] = sqrrl__v
         return out^
 
-    def min_salary_for_name(self, value: String) raises -> Float64:
-        var sqrrl__id = self.storage[].indexes.name.get_bwd(value)
+    def min_salary_for_email(self, value: String) raises -> Float64:
+        var sqrrl__id = self.storage[].indexes.email.get_bwd(value)
         var sqrrl__v = self.storage[].handle_for(sqrrl__id)[]._salary
         return sqrrl__v
 
@@ -556,16 +477,16 @@ struct sqrrl__EmployeeTable(Movable):
                 sqrrl__acc = sqrrl__v
         return sqrrl__acc.value()
 
-    def max_salary_by_name(self) -> Dict[String, Float64]:
-        ref sqrrl__ids = self.storage[].indexes.name.all_bwd()
+    def max_salary_by_email(self) -> Dict[String, Float64]:
+        ref sqrrl__ids = self.storage[].indexes.email.all_bwd()
         var out = Dict[String, Float64]()
         for entry in sqrrl__ids.items():
             var sqrrl__v = self.storage[].handle_for(entry.value)[]._salary
             out[entry.key] = sqrrl__v
         return out^
 
-    def max_salary_for_name(self, value: String) raises -> Float64:
-        var sqrrl__id = self.storage[].indexes.name.get_bwd(value)
+    def max_salary_for_email(self, value: String) raises -> Float64:
+        var sqrrl__id = self.storage[].indexes.email.get_bwd(value)
         var sqrrl__v = self.storage[].handle_for(sqrrl__id)[]._salary
         return sqrrl__v
 
@@ -625,16 +546,16 @@ struct sqrrl__EmployeeTable(Movable):
         sort(sqrrl__values)
         return sqrrl__values[len(sqrrl__values) // 2]
 
-    def median_salary_by_name(self) -> Dict[String, Float64]:
-        ref sqrrl__ids = self.storage[].indexes.name.all_bwd()
+    def median_salary_by_email(self) -> Dict[String, Float64]:
+        ref sqrrl__ids = self.storage[].indexes.email.all_bwd()
         var out = Dict[String, Float64]()
         for entry in sqrrl__ids.items():
             var sqrrl__v = self.storage[].handle_for(entry.value)[]._salary
             out[entry.key] = sqrrl__v
         return out^
 
-    def median_salary_for_name(self, value: String) raises -> Float64:
-        var sqrrl__id = self.storage[].indexes.name.get_bwd(value)
+    def median_salary_for_email(self, value: String) raises -> Float64:
+        var sqrrl__id = self.storage[].indexes.email.get_bwd(value)
         var sqrrl__v = self.storage[].handle_for(sqrrl__id)[]._salary
         return sqrrl__v
 
@@ -693,16 +614,16 @@ struct sqrrl__EmployeeTable(Movable):
                 sqrrl__acc = sqrrl__v
         return sqrrl__acc.value()
 
-    def sum_salary_by_name(self) -> Dict[String, Float64]:
-        ref sqrrl__ids = self.storage[].indexes.name.all_bwd()
+    def sum_salary_by_email(self) -> Dict[String, Float64]:
+        ref sqrrl__ids = self.storage[].indexes.email.all_bwd()
         var out = Dict[String, Float64]()
         for entry in sqrrl__ids.items():
             var sqrrl__v = self.storage[].handle_for(entry.value)[]._salary
             out[entry.key] = sqrrl__v
         return out^
 
-    def sum_salary_for_name(self, value: String) raises -> Float64:
-        var sqrrl__id = self.storage[].indexes.name.get_bwd(value)
+    def sum_salary_for_email(self, value: String) raises -> Float64:
+        var sqrrl__id = self.storage[].indexes.email.get_bwd(value)
         var sqrrl__v = self.storage[].handle_for(sqrrl__id)[]._salary
         return sqrrl__v
 
@@ -775,16 +696,16 @@ struct sqrrl__EmployeeTable(Movable):
                 sqrrl__acc = sqrrl__v
         return Float64(sqrrl__acc.value()) / Float64(sqrrl__count)
 
-    def avg_salary_by_name(self) -> Dict[String, Float64]:
-        ref sqrrl__ids = self.storage[].indexes.name.all_bwd()
+    def avg_salary_by_email(self) -> Dict[String, Float64]:
+        ref sqrrl__ids = self.storage[].indexes.email.all_bwd()
         var out = Dict[String, Float64]()
         for entry in sqrrl__ids.items():
             var sqrrl__v = self.storage[].handle_for(entry.value)[]._salary
             out[entry.key] = Float64(sqrrl__v)
         return out^
 
-    def avg_salary_for_name(self, value: String) raises -> Float64:
-        var sqrrl__id = self.storage[].indexes.name.get_bwd(value)
+    def avg_salary_for_email(self, value: String) raises -> Float64:
+        var sqrrl__id = self.storage[].indexes.email.get_bwd(value)
         var sqrrl__v = self.storage[].handle_for(sqrrl__id)[]._salary
         return Float64(sqrrl__v)
 
@@ -850,49 +771,3 @@ struct sqrrl__EmployeeTable(Movable):
                 sqrrl__acc = sqrrl__v
         return Float64(sqrrl__acc.value()) / Float64(sqrrl__count)
 
-def main() raises:
-    var sqrrl__world = sqrrl__init()
-    try:
-        var sqrrl__eng = sqrrl__world.Department.create(name = "Engineering")
-        var sqrrl__sales = sqrrl__world.Department.create(name = "Sales")
-        var sqrrl__alice = sqrrl__world.Employee.create(name = "Alice", years_employed = 5, salary = 90000.0, sqrrl__dept = sqrrl__eng)
-        var sqrrl__bob = sqrrl__world.Employee.create(name = "Bob", years_employed = 2, salary = 70000.0, sqrrl__dept = sqrrl__eng)
-        var sqrrl__carol = sqrrl__world.Employee.create(name = "Carol", years_employed = 8, salary = 120000.0, sqrrl__dept = sqrrl__sales)
-        var sqrrl__dave = sqrrl__world.Employee.create(name = "Dave", years_employed = 5, salary = 85000.0, sqrrl__dept = sqrrl__sales)
-
-        print("exact match (5 years):", len(sqrrl__world.Employee.for_years_employed(5)))
-        print("more than 3 years:", len(sqrrl__world.Employee.for_years_employed_greater_than(3)))
-        print("at least 5 years:", len(sqrrl__world.Employee.for_years_employed_at_least(5)))
-        print("less than 5 years:", len(sqrrl__world.Employee.for_years_employed_less_than(5)))
-        print("at most 5 years:", len(sqrrl__world.Employee.for_years_employed_at_most(5)))
-        print("3 to 6 years inclusive:", len(sqrrl__world.Employee.for_years_employed_between(3, 6)))
-
-        var sqrrl__ranged = sqrrl__world.Employee.for_years_employed_between(0, 100)
-        for sqrrl__e in  sqrrl__ranged:
-            print("in range:", sqrrl__e._inner[]._name, sqrrl__e._inner[]._years_employed)
-
-        sqrrl__bob._inner[].set_years_employed(9);
-        print("after raise, more than 8 years:", len(sqrrl__world.Employee.for_years_employed_greater_than(8)))
-
-        print("total salary:", sqrrl__world.Employee.sum_salary())
-        print("average salary:", sqrrl__world.Employee.avg_salary())
-        print("min years employed:", sqrrl__world.Employee.min_years_employed())
-        print("max years employed:", sqrrl__world.Employee.max_years_employed())
-        print("median years employed:", sqrrl__world.Employee.median_years_employed())
-        print("median salary:", sqrrl__world.Employee.median_salary())
-
-        print("eng total salary:", sqrrl__world.Employee.sum_salary_for_sqrrl__dept(sqrrl__eng))
-        print("sales average salary:", sqrrl__world.Employee.avg_salary_for_sqrrl__dept(sqrrl__sales))
-
-        var sqrrl__salary_by_dept = sqrrl__world.Employee.sum_salary_by_sqrrl__dept()
-        print("departments with salary totals:", len(sqrrl__salary_by_dept))
-
-        print("distinct years employed:", len(sqrrl__world.Employee.distinct_years_employed()))
-        print("count with 5 years:", sqrrl__world.Employee.count_years_employed(5))
-
-        var sqrrl__by_dept = sqrrl__world.Employee.group_by_sqrrl__dept()
-        print("departments with employees:", len(sqrrl__by_dept))
-
-        print("alice", sqrrl__alice._inner[]._name, "bob", sqrrl__bob._inner[]._name, "carol", sqrrl__carol._inner[]._name, "dave", sqrrl__dave._inner[]._name)
-    finally:
-        sqrrl__world.sqrrl__check_no_leaks()

@@ -12,6 +12,7 @@ from squirrel_compiler.codegen.helpers import (
 from squirrel_compiler.codegen.script_utils import (
     is_in_import_statement,
     enforce_entity_binding,
+    _is_bare_identifier,
 )
 from squirrel_compiler.codegen.rewrite_context import RewriteContext
 
@@ -271,8 +272,36 @@ def handle_field_access(
         if is_last:
             if fa.write_value:
                 var rewritten_value = rewrite_markers(fa.write_value.value(), ctx)
+                # A direct `.field = value` write, same as `set_<field>`'s
+                # own generated signature (`needs_move_assignment`) and
+                # `build_create_call`'s own construction args -- a `multi`
+                # field's `Set[T]`, any container-shaped field (`List`/
+                # `Set`/`Optional`/`Dict`, relation or plain leaf), or a
+                # plain-struct value isn't guaranteed `ImplicitlyCopyable`,
+                # so the call site has to move (`^`) the already-owned RHS
+                # in -- but only when it's a *named* value (`_is_bare_
+                # identifier`); a fresh rvalue (`Set(...)`/`[@@a, @@b]`) is
+                # already a temporary Mojo moves from automatically, and
+                # `^`-ing one is rejected outright, not a harmless no-op
+                # (`build_create_call`'s own doc comment has the full
+                # rationale, confirmed via a real compile there already).
+                var target_type_text = (
+                    ctx.relation_schema[current_type][step.name] if is_relation
+                    else (ctx.plain_value_fields[current_type][step.name] if is_plain_value else "")
+                )
+                var is_multi_field = current_type in ctx.multi_fields and _contains(
+                    ctx.multi_fields[current_type], step.name
+                )
+                var needs_move = (
+                    is_multi_field
+                    or is_container_type(target_type_text)
+                    or target_type_text in ctx.plain_struct_names
+                )
+                var value_arg = (
+                    rewritten_value + "^" if (needs_move and _is_bare_identifier(rewritten_value)) else rewritten_value
+                )
                 if owner_is_plain:
-                    out += expr + deref + "." + storage_name + " = " + rewritten_value + ";"
+                    out += expr + deref + "." + storage_name + " = " + value_arg + ";"
                 else:
                     out += (
                         expr
@@ -280,7 +309,7 @@ def handle_field_access(
                         + ".set_"
                         + param_name_for_construct_field(step.name, is_relation)
                         + "("
-                        + rewritten_value
+                        + value_arg
                         + ");"
                     )
                 pending_decl = None
@@ -375,16 +404,35 @@ def _handle_instance_call(
         and current_type in ctx.multi_fields
         and _contains(ctx.multi_fields[current_type], multi_call_field.value())
     ):
-        if not step.marked:
+        # A `multi` field isn't always a relation field (`multi skills:
+        # String` -- a plain, `Set[String]`-backed one) -- `param_name`'s
+        # own rule (mirrored here via `param_name_for_construct_field`)
+        # decides the call-site marking/generated-name prefix, same as
+        # every other field-derived method name, not an unconditional
+        # "multi implies relation" assumption.
+        var is_multi_relation = (
+            current_type in ctx.relation_schema and multi_call_field.value() in ctx.relation_schema[current_type]
+        )
+        if is_multi_relation and not step.marked:
             raise sc.err(
                 "InvalidSquirrelSyntax: '" + multi_call_field.value()
                 + "' on '" + current_type + "' is a relation field --"
                 " write '" + multi_call_prefix + "@@"
                 + multi_call_field.value() + "', not '" + step.name + "'"
             )
+        if step.marked and not is_multi_relation:
+            raise sc.err(
+                "InvalidSquirrelSyntax: '" + multi_call_field.value()
+                + "' on '" + current_type + "' is a plain field --"
+                " write '" + multi_call_prefix
+                + multi_call_field.value() + "', not '" + step.name + "'"
+            )
         if not sc.try_consume("("):
             raise sc.err("InvalidSquirrelSyntax: expected '(' after '" + step.name + "'")
-        out += expr + "._inner[]." + multi_call_prefix + sqrrl_prefixed(multi_call_field.value()) + "("
+        out += (
+            expr + "._inner[]." + multi_call_prefix
+            + param_name_for_construct_field(multi_call_field.value(), is_multi_relation) + "("
+        )
         pending_decl = None
         pending_for_loop_decl = None
         return
@@ -505,7 +553,12 @@ def _handle_table_level_call(
             var is_indexed = fa.entity in ctx.indexed_fields and _contains(ctx.indexed_fields[fa.entity], target_field)
             var is_multi = fa.entity in ctx.multi_fields and _contains(ctx.multi_fields[fa.entity], target_field)
             var is_ordered = fa.entity in ctx.ordered_fields and _contains(ctx.ordered_fields[fa.entity], target_field)
-            var is_relation_target = is_multi or (fa.entity in ctx.relation_schema and target_field in ctx.relation_schema[fa.entity])
+            # A `multi` field isn't always a relation field (`multi
+            # skills: String`) -- gated on `relation_schema` membership
+            # alone, same as every other field-derived-name marking
+            # decision, not an unconditional "multi implies relation"
+            # assumption.
+            var is_relation_target = fa.entity in ctx.relation_schema and target_field in ctx.relation_schema[fa.entity]
             if is_relation_target and not field_marked:
                 raise sc.err(
                     "InvalidSquirrelSyntax: '" + target_field + "' on '"
@@ -748,7 +801,11 @@ def _resolve_groupable_target(
             + target_field
             + "'"
         )
-    var is_relation_target = is_multi or (fa.entity in ctx.relation_schema and target_field in ctx.relation_schema[fa.entity])
+    # A `multi` field isn't always a relation field (`multi skills:
+    # String`) -- gated on `relation_schema` membership alone, same as
+    # every other field-derived-name marking decision, not an
+    # unconditional "multi implies relation" assumption.
+    var is_relation_target = fa.entity in ctx.relation_schema and target_field in ctx.relation_schema[fa.entity]
     if is_relation_target and not fa.steps[0].marked:
         raise sc.err(
             "InvalidSquirrelSyntax: '"

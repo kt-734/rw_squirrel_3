@@ -67,7 +67,7 @@ struct sqrrl__DepartmentTable(Movable):
     def __init__(out self):
         self.storage = ArcPointer(EntityStorage[sqrrl__DepartmentIndexes, sqrrl__DepartmentInner](sqrrl__DepartmentIndexes()))
 
-    def create(mut self, name: String) raises -> sqrrl__Department:
+    def create(mut self, *, name: String) raises -> sqrrl__Department:
         if self.storage[].indexes.name.contains(name):
             raise Error("UniqueConstraintViolation: 'name' already in use by another entity")
         var id = self.storage[].alloc_id()
@@ -182,7 +182,7 @@ struct sqrrl__PersonTable(Movable):
     def __init__(out self):
         self.storage = ArcPointer(EntityStorage[sqrrl__PersonIndexes, sqrrl__PersonInner](sqrrl__PersonIndexes()))
 
-    def create(mut self, name: String, age: UInt32, sqrrl__dept: sqrrl__Department) -> sqrrl__Person:
+    def create(mut self, *, name: String, age: UInt32, sqrrl__dept: sqrrl__Department) -> sqrrl__Person:
         var id = self.storage[].alloc_id()
         var inner = ArcPointer(sqrrl__PersonInner(_id=id, _table=self.storage, _name=name, _age=age, _sqrrl__dept=sqrrl__dept))
         self.storage[].register_weak(id, inner)

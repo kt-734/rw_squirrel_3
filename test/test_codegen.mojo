@@ -2,7 +2,8 @@ from std.testing import assert_true, assert_false, assert_equal, TestSuite
 
 from squirrel_compiler.codegen import transform_source
 from squirrel_compiler.driver.cycles import check_no_relation_cycles
-from squirrel_compiler.driver.discovery import DiscoveryResult, DiscoveredStruct, PlainStructDiscovery
+from squirrel_compiler.driver.discovery import DiscoveryResult, DiscoveredStruct, PlainStructDiscovery, build_relation_schema
+from squirrel_compiler.driver.topo_order import topo_sort_structs
 from squirrel_compiler.driver.json_module import emit_json_module
 from squirrel_compiler.parser import ParsedStruct, Field, FieldModifier, TypeParam
 
@@ -99,7 +100,7 @@ def test_transform_relation_field_read_and_write() raises:
     # A relation field's create() parameter, and the matching call-site
     # keyword, both carry sqrrl__ too -- the prefix mirrors @@-marking with
     # no exceptions, construction sites included.
-    assert_true("def create(mut self, title: String, sqrrl__dept: sqrrl__Department)" in out)
+    assert_true("def create(mut self, *, title: String, sqrrl__dept: sqrrl__Department)" in out)
     assert_true('sqrrl__world.Employee.create(title = "Engineer", sqrrl__dept = sqrrl__eng)' in out)
     # A write to a relation field calls the matching sqrrl__-prefixed
     # set_<field>, same as the definition side emits.
@@ -139,7 +140,7 @@ def test_transform_wrapped_relation_field_needs_move_assignment() raises:
     assert_true("var _sqrrl__members: List[sqrrl__Employee]" in out)
     assert_true("def set_sqrrl__members(mut self, var v: List[sqrrl__Employee]):" in out)
     assert_true("self._sqrrl__members = v^" in out)
-    assert_true("def create(mut self, name: String, var sqrrl__members: List[sqrrl__Employee])" in out)
+    assert_true("def create(mut self, *, name: String, var sqrrl__members: List[sqrrl__Employee])" in out)
 
 
 def test_transform_multi_field() raises:
@@ -204,7 +205,7 @@ def test_transform_multi_field() raises:
     # ImplicitlyCopyable, so building the entity moves it in (`^`) rather
     # than copying.
     assert_true(
-        "def create(mut self, name: String, var sqrrl__projects: Set[sqrrl__Project] = Set[sqrrl__Project]()) -> sqrrl__Department:"
+        "def create(mut self, *, name: String, var sqrrl__projects: Set[sqrrl__Project] = Set[sqrrl__Project]()) -> sqrrl__Department:"
         in out
     )
     assert_true("_sqrrl__projects=sqrrl__projects^" in out)
@@ -1522,7 +1523,7 @@ def test_transform_struct_field_referencing_plain_struct_renders_bare_type() rai
     assert_true("var _home: Address" in out)
     assert_true("def set_home(mut self, var v: Address):" in out)
     assert_true("self._home = v^" in out)
-    assert_true("def create(mut self, name: String, var home: Address)" in out)
+    assert_true("def create(mut self, *, name: String, var home: Address)" in out)
 
 
 def test_transform_real_plain_real_hop_chain_read_and_write() raises:
@@ -1684,6 +1685,73 @@ def test_check_no_relation_cycles_through_plain_struct_rejected() raises:
     except:
         raised = True
     assert_true(raised)
+
+
+def test_check_no_relation_cycles_through_dict_value_position_rejected() raises:
+    """A relation cycle running through a `Dict`'s own *value* position
+    (`Department.leads: Dict[String, @@Employee]`, `Employee.dept:
+    @@Department`) is caught too -- `collect_relation_targets`'s own walk
+    only used to follow a container's first type argument, so a cycle
+    reachable solely through a later one would previously have been
+    entirely invisible to this exact check (on top of such a field being
+    rejected at parse time in the first place)."""
+    var employee_fields = List[Field]()
+    employee_fields.append(Field(name="dept", type_str="@@Department", modifier=FieldModifier.NONE, is_stats=False))
+    var department_fields = List[Field]()
+    department_fields.append(
+        Field(name="leads", type_str="Dict[String, @@Employee]", modifier=FieldModifier.NONE, is_stats=False)
+    )
+    var structs = List[DiscoveredStruct]()
+    structs.append(DiscoveredStruct(module_path="main", parsed=ParsedStruct(name="Employee", fields=employee_fields^)))
+    structs.append(DiscoveredStruct(module_path="main", parsed=ParsedStruct(name="Department", fields=department_fields^)))
+    var discovery = DiscoveryResult(structs^, Dict[String, String]())
+
+    var raised = False
+    try:
+        check_no_relation_cycles(discovery, Dict[String, List[Field]]())
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_topo_sort_orders_after_a_wrapped_relation_target_too() raises:
+    """`topo_sort_structs` has to place `Person` before `Team` here, even
+    though `Team`'s *only* relation field is `@@members: List[@@Person]`
+    -- a *wrapped* one. `relation_schema["Team"]["members"]` stores the
+    whole container-shaped, relation-stripped text (`"List[Person]"`), not
+    the bare target name a *bare* relation field's own entry already is
+    (`"Department"` for `@@dept: @@Department`) -- `_visit_topo` used to
+    check that text against `by_name` (keyed by bare struct names)
+    directly, so `"List[Person]" in by_name` was always `False` and the
+    whole dependency edge was silently dropped, letting `Team` sort
+    *before* `Person` with no cycle ever existing to reject it. Confirmed
+    as a real bug (not a hypothetical one) via a real crash during reload
+    (`EntityStorage.handle_for: id is no longer live`) once a project
+    (the kitchen-sink example) had a struct whose only live dependency
+    edges were wrapped ones."""
+    var person_fields = List[Field]()
+    person_fields.append(Field(name="name", type_str="String", modifier=FieldModifier.UNIQUE, is_stats=False))
+    var team_fields = List[Field]()
+    team_fields.append(Field(name="name", type_str="String", modifier=FieldModifier.UNIQUE, is_stats=False))
+    team_fields.append(
+        Field(name="members", type_str="List[@@Person]", modifier=FieldModifier.NONE, is_stats=False)
+    )
+    var structs = List[DiscoveredStruct]()
+    structs.append(DiscoveredStruct(module_path="main", parsed=ParsedStruct(name="Team", fields=team_fields^)))
+    structs.append(DiscoveredStruct(module_path="main", parsed=ParsedStruct(name="Person", fields=person_fields^)))
+    var discovery = DiscoveryResult(structs^, Dict[String, String]())
+    var relation_schema = build_relation_schema(discovery)
+
+    var order = topo_sort_structs(discovery, relation_schema)
+    var person_index = -1
+    var team_index = -1
+    for i in range(len(order)):
+        if order[i].parsed.name == "Person":
+            person_index = i
+        if order[i].parsed.name == "Team":
+            team_index = i
+    assert_true(person_index >= 0 and team_index >= 0)
+    assert_true(person_index < team_index)
 
 
 def _employee_department_discovery(member_wrapper: String) -> List[DiscoveredStruct]:

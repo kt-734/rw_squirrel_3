@@ -74,7 +74,7 @@ struct sqrrl__EmployeeTable(Movable):
     def __init__(out self):
         self.storage = ArcPointer(EntityStorage[sqrrl__EmployeeIndexes, sqrrl__EmployeeInner](sqrrl__EmployeeIndexes()))
 
-    def create(mut self, name: String) raises -> sqrrl__Employee:
+    def create(mut self, *, name: String) raises -> sqrrl__Employee:
         if self.storage[].indexes.name.contains(name):
             raise Error("UniqueConstraintViolation: 'name' already in use by another entity")
         var id = self.storage[].alloc_id()
@@ -247,7 +247,7 @@ struct sqrrl__DepartmentTable(Movable):
     def __init__(out self):
         self.storage = ArcPointer(EntityStorage[sqrrl__DepartmentIndexes, sqrrl__DepartmentInner](sqrrl__DepartmentIndexes()))
 
-    def create(mut self, name: String, var sqrrl__members: List[sqrrl__Employee], var sqrrl__backup: Set[sqrrl__Employee], var sqrrl__lead: Optional[sqrrl__Employee], var tags: List[String], var sqrrl__scores: Dict[sqrrl__Employee, String], var sqrrl__leads: Dict[String, sqrrl__Employee], var groups: List[List[String]], var ring: Ring[String], var grid: Grid[String, Int]) raises -> sqrrl__Department:
+    def create(mut self, *, name: String, var sqrrl__members: List[sqrrl__Employee], var sqrrl__backup: Set[sqrrl__Employee], var sqrrl__lead: Optional[sqrrl__Employee], var tags: List[String], var sqrrl__scores: Dict[sqrrl__Employee, String], var sqrrl__leads: Dict[String, sqrrl__Employee], var groups: List[List[String]], var ring: Ring[String], var grid: Grid[String, Int]) raises -> sqrrl__Department:
         if self.storage[].indexes.name.contains(name):
             raise Error("UniqueConstraintViolation: 'name' already in use by another entity")
         var id = self.storage[].alloc_id()

@@ -1,0 +1,4 @@
+@fieldwise_init
+struct ContactInfo(Copyable, Movable, ImplicitlyDeletable):
+    var home: Address
+    var emails: List[String]

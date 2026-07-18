@@ -76,7 +76,7 @@ struct sqrrl__EmployeeTable(Movable):
     def __init__(out self):
         self.storage = ArcPointer(EntityStorage[sqrrl__EmployeeIndexes, sqrrl__EmployeeInner](sqrrl__EmployeeIndexes()))
 
-    def create(mut self, name: String, sqrrl__dept: sqrrl__Department) -> sqrrl__Employee:
+    def create(mut self, *, name: String, sqrrl__dept: sqrrl__Department) -> sqrrl__Employee:
         var id = self.storage[].alloc_id()
         var inner = ArcPointer(sqrrl__EmployeeInner(_id=id, _table=self.storage, _name=name, _sqrrl__dept=sqrrl__dept))
         self.storage[].register_weak(id, inner)

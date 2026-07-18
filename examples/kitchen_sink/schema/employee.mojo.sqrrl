@@ -1,0 +1,7 @@
+@@struct @@Employee:
+    unique email: String
+    title: String
+    ordered years_employed: UInt32
+    stats salary: Float64
+    indexed @@dept: @@Department
+    profile: Profile

@@ -1,0 +1,4 @@
+@fieldwise_init
+struct Assignment(Copyable, Movable, ImplicitlyDeletable):
+    var @@person: @@Person
+    var role: String

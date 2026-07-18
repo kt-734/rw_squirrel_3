@@ -978,7 +978,14 @@ def _emit_to_json(
             out += "    for m_" + f.name + " in mval_" + f.name + ":\n"
             out += "        if not mfirst_" + f.name + ":\n"
             out += "            out += \",\"\n"
-            out += "        out += String(m_" + f.name + ".id())\n"
+            # A `multi` field isn't always a relation field (`multi
+            # skills: String`) -- dumped via the same generic
+            # `sqrrl__to_json` dispatch every other plain leaf value uses,
+            # not an `.id()` call only a relation handle has.
+            if is_relation_field(f):
+                out += "        out += String(m_" + f.name + ".id())\n"
+            else:
+                out += "        out += sqrrl__to_json(m_" + f.name + ")\n"
             out += "        mfirst_" + f.name + " = False\n"
             out += "    out += \"]\"\n"
         elif is_plain_struct_field:
@@ -1058,20 +1065,30 @@ def _emit_from_json_with_id(
         out += branch_kw + " key == " + _quoted(f.name) + ":\n"
         branch_kw = "            elif"
         if f.modifier == FieldModifier.MULTI:
-            var target = _relation_target_name(f)
             var elem_t = emit_multi_element_type(f)
             out += "                var mset = Set[" + elem_t + "]()\n"
             out += "                sc.expect_byte(UInt8(ord(\"[\")))\n"
             out += "                if not sc.try_consume_byte(UInt8(ord(\"]\"))):\n"
             out += "                    while True:\n"
-            out += "                        var elem_id = UInt32(sc.parse_json_int())\n"
-            out += (
-                "                        mset.add("
-                + elem_t
-                + "(sqrrl__tbl_"
-                + target
-                + ".storage[].handle_for(elem_id)))\n"
-            )
+            if is_relation_field(f):
+                var target = _relation_target_name(f)
+                out += "                        var elem_id = UInt32(sc.parse_json_int())\n"
+                out += (
+                    "                        mset.add("
+                    + elem_t
+                    + "(sqrrl__tbl_"
+                    + target
+                    + ".storage[].handle_for(elem_id)))\n"
+                )
+            else:
+                # A `multi` field isn't always a relation field (`multi
+                # skills: String`) -- its own bare element type is never
+                # bracket-shaped (a plain leaf, per `multi`'s own
+                # convention), so `_leaf_from_json_expr` alone -- not a
+                # relation-id/sibling-table lookup -- reconstructs it.
+                out += (
+                    "                        mset.add(" + _leaf_from_json_expr(parsed.name, f.name, f.type_str) + ")\n"
+                )
             out += "                        if not sc.try_consume_byte(UInt8(ord(\",\"))):\n"
             out += "                            break\n"
             out += "                    sc.expect_byte(UInt8(ord(\"]\")))\n"
@@ -1466,6 +1483,79 @@ def _collect_custom_leaf_types(
         _collect_custom_leaf_types_from_type(parse_type_expr(f.type_str), plain_struct_names, type_param_names, seen, out)
 
 
+def _emit_plain_struct_to_json(
+    name: String,
+    fields: List[Field],
+    plain_struct_fields: Dict[String, List[Field]],
+    plain_struct_names: Dict[String, Bool],
+    type_params: List[TypeParam] = List[TypeParam](),
+    plain_struct_type_params: Dict[String, List[TypeParam]] = Dict[String, List[TypeParam]](),
+) raises -> String:
+    """`sqrrl__<Name>_to_json[<T: Bound, ...>](value: <Name>[<T, ...>]) ->
+    String` -- the dump-direction companion `_emit_plain_struct_from_json`
+    already has a reload one for (`_emit_plain_struct_dispatch_branch`'s
+    own doc comment has the full "why this exists" rationale).
+
+    A relation-involving container field (needs `_dump_value_expr`'s own
+    explicit recursive codegen -- the shared dispatch table has no sibling
+    table to resolve one with) dumps exactly like `_emit_to_json` dumps a
+    real `@@struct`'s own field. A *relation-free* container field instead
+    dumps via the plain `sqrrl__to_json(value.<field>)` dispatch call --
+    matching `_emit_plain_struct_from_json`'s own identical gate for the
+    reload direction exactly, not `_dump_value_expr`'s own container
+    codegen. This distinction is load-bearing, not stylistic:
+    `_dump_value_expr`'s own `Optional[T]` shape is null-or-value, while
+    the shared dispatch table's (`_emit_container_dispatch_branches`)
+    treats `Optional` as a 0-or-1-element list instead -- two genuinely
+    different wire shapes for the same type. Using `_dump_value_expr`
+    unconditionally here (an earlier version of this function did)
+    produces a dump the *reload* side -- which always uses the dispatch
+    table for a relation-free container field -- can't parse back,
+    confirmed via a real round-trip failure on `Optional[List[String]]`
+    nested in a plain struct (`InvalidJson: expected byte 91`, the reload
+    side expecting the list-shaped `[[...]]` the dispatch table's own
+    convention produces, not `_dump_value_expr`'s null-or-value `[...]`
+    it actually got). Every other field kind (leaf, relation, plain-
+    struct, relation-involving container) already agrees between the two
+    directions, so only the relation-free-container case needs this
+    branch at all."""
+    var type_param_decl = String()
+    var type_param_names = String()
+    if len(type_params) > 0:
+        type_param_decl += "["
+        for i in range(len(type_params)):
+            if i > 0:
+                type_param_decl += ", "
+                type_param_names += ", "
+            type_param_decl += type_params[i].name + ": " + type_params[i].bound
+            type_param_names += type_params[i].name
+        type_param_decl += "]"
+    var value_type = name + "[" + type_param_names + "]" if len(type_params) > 0 else name
+
+    var out = String(
+        "\ndef sqrrl__" + name + "_to_json" + type_param_decl + "(value: " + value_type + ") -> String:\n"
+    )
+    out += "    var out = String(\"{\")\n"
+    var tmp_id = 0
+    var first = True
+    for f in fields:
+        if not first:
+            out += "    out += \",\"\n"
+        out += "    out += " + _json_key_literal_source(f.name) + "\n"
+        var t = parse_type_expr(f.type_str)
+        if _is_supported_container_field(f) and not _type_involves_relation(
+            t, plain_struct_fields, plain_struct_type_params
+        ):
+            out += "    out += sqrrl__to_json(value." + f.name + ")\n"
+        else:
+            var value_expr = _dump_value_expr("value." + f.name, t, plain_struct_names, "    ", tmp_id, out)
+            out += "    out += " + value_expr + "\n"
+        first = False
+    out += "    out += \"}\"\n"
+    out += "    return out^\n"
+    return out^
+
+
 def _emit_plain_struct_from_json(
     name: String,
     fields: List[Field],
@@ -1704,17 +1794,28 @@ def _emit_container_dispatch_branches(t: TypeExpr, mut to_json_out: String, mut 
     )
 
 
-def _emit_plain_struct_dispatch_branch(t: TypeExpr, mut from_json_out: String):
-    """Appends one `elif T == <type>:` branch to `sqrrl__from_json[T]`'s
-    own reload dispatch table, for the discovered-plain-struct instantiation
-    `t` (`_collect_dispatch_types` already guarantees relation-free, so
-    the call needs no sibling table -- `_emit_plain_struct_from_json`'s
-    own generated function for a relation-free plain struct takes only
-    `sc`, nothing else). No dump-direction branch needed at all --
-    `sqrrl__to_json_default`'s own `reflect[T]`-based fallback already
-    handles *any* struct shape generically, plain-struct or not, matching
-    rw_squirrel_2's own identical omission (confirmed by reading their
-    real source)."""
+def _emit_plain_struct_dispatch_branch(t: TypeExpr, mut to_json_out: String, mut from_json_out: String):
+    """Appends one `elif T == <type>:` branch each to `sqrrl__to_json[T]`'s
+    own dump dispatch table and `sqrrl__from_json[T]`'s own reload one,
+    for the discovered-plain-struct instantiation `t` (`_collect_dispatch_
+    types` already guarantees relation-free, so neither call needs a
+    sibling table).
+
+    The dump-direction branch (`sqrrl__<Name>_to_json`, `_emit_plain_
+    struct_to_json`) exists for the same reason the reload one always has:
+    `sqrrl__to_json_default`'s own `reflect[T]`-based fallback
+    (`squirrel_runtime/json.mojo`) recurses into *itself* directly per
+    field, never back through this project's own dispatch table -- so a
+    plain struct's own container-typed field (`Dict`/`List`/`Set`/
+    `Optional`, or a custom wrapper) was never actually intercepted by the
+    mechanism meant to handle it, and reflection genuinely can't walk one
+    at all (confirmed via a real compile: `struct_field_types requires a
+    struct type`, hit reflecting *into* a `Dict[String, Int]` field). This
+    was believed unnecessary (see the removed doc comment this replaced --
+    "reflect[T] already handles any struct shape generically") until a
+    real plain struct with a container-typed field (`Profile.scores:
+    Dict[String, Int]`, the kitchen-sink example) exercised it for the
+    first time."""
     var type_str = t.render()
     var base = t.name
     var args_str = String()
@@ -1725,6 +1826,8 @@ def _emit_plain_struct_dispatch_branch(t: TypeExpr, mut from_json_out: String):
                 args_str += ", "
             args_str += t.arg(i).render()
         args_str += "]"
+    to_json_out += "    elif T == " + type_str + ":\n"
+    to_json_out += "        return sqrrl__" + base + "_to_json" + args_str + "(rebind[" + type_str + "](value))\n"
     from_json_out += "    elif T == " + type_str + ":\n"
     from_json_out += (
         "        return sqrrl__movable_rebind[" + type_str + ", T](sqrrl__" + base + "_from_json" + args_str + "(sc))\n"
@@ -1886,7 +1989,7 @@ def emit_json_module(
     for t in container_dispatch_types:
         _emit_container_dispatch_branches(t, to_json_table, from_json_table)
     for t in plain_dispatch_types:
-        _emit_plain_struct_dispatch_branch(t, from_json_table)
+        _emit_plain_struct_dispatch_branch(t, to_json_table, from_json_table)
     to_json_table += "    else:\n        return sqrrl__to_json_default(value)\n"
     from_json_table += "    else:\n        return sqrrl__from_json_default[T](sc)\n"
 
@@ -1972,6 +2075,10 @@ def emit_json_module(
             plain_struct_discovery.type_params[plain_name].copy()
             if plain_name in plain_struct_discovery.type_params
             else List[TypeParam]()
+        )
+        out += _emit_plain_struct_to_json(
+            plain_name, this_fields, plain_struct_fields, plain_struct_names, this_type_params,
+            plain_struct_discovery.type_params,
         )
         out += _emit_plain_struct_from_json(
             plain_name, this_fields, plain_struct_fields, plain_struct_names, this_type_params,

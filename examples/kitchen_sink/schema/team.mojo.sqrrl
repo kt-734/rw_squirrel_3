@@ -1,0 +1,5 @@
+@@struct @@Team:
+    name: String
+    lead: Assignment
+    @@members: List[@@Person]
+    @@advisor: Optional[@@Employee]

@@ -1,0 +1,4 @@
+@fieldwise_init
+struct Pair[A: Copyable & ImplicitlyDeletable, B: Copyable & ImplicitlyDeletable](Copyable, Movable, ImplicitlyDeletable):
+    var first: Self.A
+    var second: Self.B
