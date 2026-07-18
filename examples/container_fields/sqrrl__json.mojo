@@ -84,245 +84,245 @@ def sqrrl__from_json[T: Movable & ImplicitlyDeletable](mut sc: sqrrl__JsonScanne
         return sqrrl__from_json_default[T](sc)
 
 def sqrrl__Employee_to_json(e: sqrrl__Employee) -> String:
-    var sqrrl__out = String("{")
-    sqrrl__out += '"name":'
-    sqrrl__out += sqrrl__to_json(e._inner[].get_name())
-    sqrrl__out += "}"
-    return sqrrl__out^
+    var out = String("{")
+    out += '"name":'
+    out += sqrrl__to_json(e._inner[].get_name())
+    out += "}"
+    return out^
 
-def sqrrl__Employee_from_json_with_id(table: sqrrl__EmployeeTable, id: UInt32, mut sqrrl__sc: sqrrl__JsonScanner) raises -> sqrrl__Employee:
-    var sqrrl__parsed_name: Optional[String] = None
-    sqrrl__sc.expect_byte(UInt8(ord("{")))
-    if not sqrrl__sc.try_consume_byte(UInt8(ord("}"))):
+def sqrrl__Employee_from_json_with_id(table: sqrrl__EmployeeTable, id: UInt32, mut sc: sqrrl__JsonScanner) raises -> sqrrl__Employee:
+    var parsed_name: Optional[String] = None
+    sc.expect_byte(UInt8(ord("{")))
+    if not sc.try_consume_byte(UInt8(ord("}"))):
         while True:
-            var sqrrl__key = sqrrl__sc.parse_json_string()
-            sqrrl__sc.expect_byte(UInt8(ord(":")))
-            if sqrrl__key == "name":
-                sqrrl__parsed_name = sqrrl__sc.parse_json_string()
+            var key = sc.parse_json_string()
+            sc.expect_byte(UInt8(ord(":")))
+            if key == "name":
+                parsed_name = sc.parse_json_string()
             else:
-                raise Error("InvalidJson: unknown field " + sqrrl__key + " for Employee")
-            if not sqrrl__sc.try_consume_byte(UInt8(ord(","))):
+                raise Error("InvalidJson: unknown field " + key + " for Employee")
+            if not sc.try_consume_byte(UInt8(ord(","))):
                 break
-        sqrrl__sc.expect_byte(UInt8(ord("}")))
-    if not sqrrl__parsed_name:
+        sc.expect_byte(UInt8(ord("}")))
+    if not parsed_name:
         raise Error("InvalidJson: missing field name for Employee")
     table.storage[].alloc_specific_id(id)
-    var sqrrl__v_name = sqrrl__parsed_name.value()
-    var sqrrl__inner = ArcPointer(sqrrl__EmployeeInner(_id=id, _table=table.storage, _name=sqrrl__v_name))
-    table.storage[].register_weak(id, sqrrl__inner)
-    table.storage[].indexes.name.add(id, sqrrl__inner[]._name)
-    return sqrrl__Employee(sqrrl__inner^)
+    var v_name = parsed_name.value()
+    var inner = ArcPointer(sqrrl__EmployeeInner(_id=id, _table=table.storage, _name=v_name))
+    table.storage[].register_weak(id, inner)
+    table.storage[].indexes.name.add(id, inner[]._name)
+    return sqrrl__Employee(inner^)
 
 def sqrrl__Employee_all_to_json(table: sqrrl__EmployeeTable) -> String:
-    var sqrrl__out = String("[")
-    var sqrrl__first = True
-    for sqrrl__id in table.storage[].all():
-        if not sqrrl__first:
-            sqrrl__out += ","
-        var sqrrl__e = sqrrl__Employee(table.storage[].handle_for(sqrrl__id))
-        sqrrl__out += "[" + String(sqrrl__id) + "," + sqrrl__Employee_to_json(sqrrl__e) + "]"
-        sqrrl__first = False
-    sqrrl__out += "]"
-    return sqrrl__out^
+    var out = String("[")
+    var first = True
+    for id in table.storage[].all():
+        if not first:
+            out += ","
+        var e = sqrrl__Employee(table.storage[].handle_for(id))
+        out += "[" + String(id) + "," + sqrrl__Employee_to_json(e) + "]"
+        first = False
+    out += "]"
+    return out^
 
-def sqrrl__Employee_all_from_json(table: sqrrl__EmployeeTable, mut sqrrl__temp: List[sqrrl__Employee], mut sqrrl__sc: sqrrl__JsonScanner) raises:
-    sqrrl__sc.expect_byte(UInt8(ord("[")))
-    if not sqrrl__sc.try_consume_byte(UInt8(ord("]"))):
+def sqrrl__Employee_all_from_json(table: sqrrl__EmployeeTable, mut temp: List[sqrrl__Employee], mut sc: sqrrl__JsonScanner) raises:
+    sc.expect_byte(UInt8(ord("[")))
+    if not sc.try_consume_byte(UInt8(ord("]"))):
         while True:
-            sqrrl__sc.expect_byte(UInt8(ord("[")))
-            var sqrrl__eid = UInt32(sqrrl__sc.parse_json_int())
-            sqrrl__sc.expect_byte(UInt8(ord(",")))
-            var sqrrl__e = sqrrl__Employee_from_json_with_id(table, sqrrl__eid, sqrrl__sc)
-            sqrrl__sc.expect_byte(UInt8(ord("]")))
-            sqrrl__temp.append(sqrrl__e)
-            if not sqrrl__sc.try_consume_byte(UInt8(ord(","))):
+            sc.expect_byte(UInt8(ord("[")))
+            var eid = UInt32(sc.parse_json_int())
+            sc.expect_byte(UInt8(ord(",")))
+            var e = sqrrl__Employee_from_json_with_id(table, eid, sc)
+            sc.expect_byte(UInt8(ord("]")))
+            temp.append(e)
+            if not sc.try_consume_byte(UInt8(ord(","))):
                 break
-        sqrrl__sc.expect_byte(UInt8(ord("]")))
+        sc.expect_byte(UInt8(ord("]")))
 
 def sqrrl__Department_to_json(e: sqrrl__Department) -> String:
-    var sqrrl__out = String("{")
-    sqrrl__out += '"name":'
-    sqrrl__out += sqrrl__to_json(e._inner[].get_name())
-    sqrrl__out += ","
-    sqrrl__out += '"members":'
-    ref sqrrl__fv_members = e._inner[].get_sqrrl__members()
-    var sqrrl__ds1 = String("[")
-    var sqrrl__dfirst1 = True
-    for sqrrl__dv1 in sqrrl__fv_members:
-        if not sqrrl__dfirst1:
-            sqrrl__ds1 += ","
-        sqrrl__ds1 += String(sqrrl__dv1.id())
-        sqrrl__dfirst1 = False
-    sqrrl__ds1 += "]"
-    sqrrl__out += sqrrl__ds1
-    sqrrl__out += ","
-    sqrrl__out += '"backup":'
-    ref sqrrl__fv_backup = e._inner[].get_sqrrl__backup()
-    var sqrrl__ds2 = String("[")
-    var sqrrl__dfirst2 = True
-    for sqrrl__dv2 in sqrrl__fv_backup:
-        if not sqrrl__dfirst2:
-            sqrrl__ds2 += ","
-        sqrrl__ds2 += String(sqrrl__dv2.id())
-        sqrrl__dfirst2 = False
-    sqrrl__ds2 += "]"
-    sqrrl__out += sqrrl__ds2
-    sqrrl__out += ","
-    sqrrl__out += '"lead":'
-    ref sqrrl__fv_lead = e._inner[].get_sqrrl__lead()
-    var sqrrl__ds3: String
-    if sqrrl__fv_lead:
-        sqrrl__ds3 = String(sqrrl__fv_lead.value().id())
+    var out = String("{")
+    out += '"name":'
+    out += sqrrl__to_json(e._inner[].get_name())
+    out += ","
+    out += '"members":'
+    ref fv_members = e._inner[].get_sqrrl__members()
+    var ds1 = String("[")
+    var dfirst1 = True
+    for dv1 in fv_members:
+        if not dfirst1:
+            ds1 += ","
+        ds1 += String(dv1.id())
+        dfirst1 = False
+    ds1 += "]"
+    out += ds1
+    out += ","
+    out += '"backup":'
+    ref fv_backup = e._inner[].get_sqrrl__backup()
+    var ds2 = String("[")
+    var dfirst2 = True
+    for dv2 in fv_backup:
+        if not dfirst2:
+            ds2 += ","
+        ds2 += String(dv2.id())
+        dfirst2 = False
+    ds2 += "]"
+    out += ds2
+    out += ","
+    out += '"lead":'
+    ref fv_lead = e._inner[].get_sqrrl__lead()
+    var ds3: String
+    if fv_lead:
+        ds3 = String(fv_lead.value().id())
     else:
-        sqrrl__ds3 = "null"
-    sqrrl__out += sqrrl__ds3
-    sqrrl__out += ","
-    sqrrl__out += '"tags":'
-    sqrrl__out += sqrrl__to_json(e._inner[].get_tags())
-    sqrrl__out += ","
-    sqrrl__out += '"scores":'
-    ref sqrrl__fv_scores = e._inner[].get_sqrrl__scores()
-    var sqrrl__ds4 = String("[")
-    var sqrrl__dfirst4 = True
-    for sqrrl__de4 in sqrrl__fv_scores.items():
-        if not sqrrl__dfirst4:
-            sqrrl__ds4 += ","
-        sqrrl__ds4 += "[" + String(sqrrl__de4.key.id()) + "," + sqrrl__to_json(sqrrl__de4.value) + "]"
-        sqrrl__dfirst4 = False
-    sqrrl__ds4 += "]"
-    sqrrl__out += sqrrl__ds4
-    sqrrl__out += ","
-    sqrrl__out += '"groups":'
-    sqrrl__out += sqrrl__to_json(e._inner[].get_groups())
-    sqrrl__out += ","
-    sqrrl__out += '"ring":'
-    sqrrl__out += sqrrl__to_json(e._inner[].get_ring())
-    sqrrl__out += "}"
-    return sqrrl__out^
+        ds3 = "null"
+    out += ds3
+    out += ","
+    out += '"tags":'
+    out += sqrrl__to_json(e._inner[].get_tags())
+    out += ","
+    out += '"scores":'
+    ref fv_scores = e._inner[].get_sqrrl__scores()
+    var ds4 = String("[")
+    var dfirst4 = True
+    for de4 in fv_scores.items():
+        if not dfirst4:
+            ds4 += ","
+        ds4 += "[" + String(de4.key.id()) + "," + sqrrl__to_json(de4.value) + "]"
+        dfirst4 = False
+    ds4 += "]"
+    out += ds4
+    out += ","
+    out += '"groups":'
+    out += sqrrl__to_json(e._inner[].get_groups())
+    out += ","
+    out += '"ring":'
+    out += sqrrl__to_json(e._inner[].get_ring())
+    out += "}"
+    return out^
 
-def sqrrl__Department_from_json_with_id(table: sqrrl__DepartmentTable, sqrrl__tbl_Employee: sqrrl__EmployeeTable, id: UInt32, mut sqrrl__sc: sqrrl__JsonScanner) raises -> sqrrl__Department:
-    var sqrrl__parsed_name: Optional[String] = None
-    var sqrrl__parsed_members: Optional[List[sqrrl__Employee]] = None
-    var sqrrl__parsed_backup: Optional[Set[sqrrl__Employee]] = None
-    var sqrrl__parsed_lead: Optional[Optional[sqrrl__Employee]] = None
-    var sqrrl__parsed_tags: Optional[List[String]] = None
-    var sqrrl__parsed_scores: Optional[Dict[sqrrl__Employee, String]] = None
-    var sqrrl__parsed_groups: Optional[List[List[String]]] = None
-    var sqrrl__parsed_ring: Optional[Ring[String]] = None
-    sqrrl__sc.expect_byte(UInt8(ord("{")))
-    if not sqrrl__sc.try_consume_byte(UInt8(ord("}"))):
+def sqrrl__Department_from_json_with_id(table: sqrrl__DepartmentTable, sqrrl__tbl_Employee: sqrrl__EmployeeTable, id: UInt32, mut sc: sqrrl__JsonScanner) raises -> sqrrl__Department:
+    var parsed_name: Optional[String] = None
+    var parsed_members: Optional[List[sqrrl__Employee]] = None
+    var parsed_backup: Optional[Set[sqrrl__Employee]] = None
+    var parsed_lead: Optional[Optional[sqrrl__Employee]] = None
+    var parsed_tags: Optional[List[String]] = None
+    var parsed_scores: Optional[Dict[sqrrl__Employee, String]] = None
+    var parsed_groups: Optional[List[List[String]]] = None
+    var parsed_ring: Optional[Ring[String]] = None
+    sc.expect_byte(UInt8(ord("{")))
+    if not sc.try_consume_byte(UInt8(ord("}"))):
         while True:
-            var sqrrl__key = sqrrl__sc.parse_json_string()
-            sqrrl__sc.expect_byte(UInt8(ord(":")))
-            if sqrrl__key == "name":
-                sqrrl__parsed_name = sqrrl__sc.parse_json_string()
-            elif sqrrl__key == "members":
-                var sqrrl__nc1 = List[sqrrl__Employee]()
-                sqrrl__sc.expect_byte(UInt8(ord("[")))
-                if not sqrrl__sc.try_consume_byte(UInt8(ord("]"))):
+            var key = sc.parse_json_string()
+            sc.expect_byte(UInt8(ord(":")))
+            if key == "name":
+                parsed_name = sc.parse_json_string()
+            elif key == "members":
+                var nc1 = List[sqrrl__Employee]()
+                sc.expect_byte(UInt8(ord("[")))
+                if not sc.try_consume_byte(UInt8(ord("]"))):
                     while True:
-                        sqrrl__nc1.append(sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sqrrl__sc.parse_json_int()))))
-                        if not sqrrl__sc.try_consume_byte(UInt8(ord(","))):
+                        nc1.append(sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sc.parse_json_int()))))
+                        if not sc.try_consume_byte(UInt8(ord(","))):
                             break
-                    sqrrl__sc.expect_byte(UInt8(ord("]")))
-                sqrrl__parsed_members = sqrrl__nc1^
-            elif sqrrl__key == "backup":
-                var sqrrl__nc1 = Set[sqrrl__Employee]()
-                sqrrl__sc.expect_byte(UInt8(ord("[")))
-                if not sqrrl__sc.try_consume_byte(UInt8(ord("]"))):
+                    sc.expect_byte(UInt8(ord("]")))
+                parsed_members = nc1^
+            elif key == "backup":
+                var nc1 = Set[sqrrl__Employee]()
+                sc.expect_byte(UInt8(ord("[")))
+                if not sc.try_consume_byte(UInt8(ord("]"))):
                     while True:
-                        sqrrl__nc1.add(sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sqrrl__sc.parse_json_int()))))
-                        if not sqrrl__sc.try_consume_byte(UInt8(ord(","))):
+                        nc1.add(sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sc.parse_json_int()))))
+                        if not sc.try_consume_byte(UInt8(ord(","))):
                             break
-                    sqrrl__sc.expect_byte(UInt8(ord("]")))
-                sqrrl__parsed_backup = sqrrl__nc1^
-            elif sqrrl__key == "lead":
-                var sqrrl__nc1: Optional[sqrrl__Employee]
-                if sqrrl__sc.try_consume_literal("null"):
-                    sqrrl__nc1 = Optional[sqrrl__Employee]()
+                    sc.expect_byte(UInt8(ord("]")))
+                parsed_backup = nc1^
+            elif key == "lead":
+                var nc1: Optional[sqrrl__Employee]
+                if sc.try_consume_literal("null"):
+                    nc1 = Optional[sqrrl__Employee]()
                 else:
-                    sqrrl__nc1 = Optional[sqrrl__Employee](sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sqrrl__sc.parse_json_int()))))
-                sqrrl__parsed_lead = sqrrl__nc1^
-            elif sqrrl__key == "tags":
-                sqrrl__parsed_tags = sqrrl__from_json[List[String]](sqrrl__sc)
-            elif sqrrl__key == "scores":
-                var sqrrl__nc1 = Dict[sqrrl__Employee, String]()
-                sqrrl__sc.expect_byte(UInt8(ord("[")))
-                if not sqrrl__sc.try_consume_byte(UInt8(ord("]"))):
+                    nc1 = Optional[sqrrl__Employee](sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sc.parse_json_int()))))
+                parsed_lead = nc1^
+            elif key == "tags":
+                parsed_tags = sqrrl__from_json[List[String]](sc)
+            elif key == "scores":
+                var nc1 = Dict[sqrrl__Employee, String]()
+                sc.expect_byte(UInt8(ord("[")))
+                if not sc.try_consume_byte(UInt8(ord("]"))):
                     while True:
-                        sqrrl__sc.expect_byte(UInt8(ord("[")))
-                        var sqrrl__nck1 = sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sqrrl__sc.parse_json_int())))
-                        sqrrl__sc.expect_byte(UInt8(ord(",")))
-                        sqrrl__nc1[sqrrl__nck1] = sqrrl__sc.parse_json_string()
-                        sqrrl__sc.expect_byte(UInt8(ord("]")))
-                        if not sqrrl__sc.try_consume_byte(UInt8(ord(","))):
+                        sc.expect_byte(UInt8(ord("[")))
+                        var nck1 = sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sc.parse_json_int())))
+                        sc.expect_byte(UInt8(ord(",")))
+                        nc1[nck1] = sc.parse_json_string()
+                        sc.expect_byte(UInt8(ord("]")))
+                        if not sc.try_consume_byte(UInt8(ord(","))):
                             break
-                    sqrrl__sc.expect_byte(UInt8(ord("]")))
-                sqrrl__parsed_scores = sqrrl__nc1^
-            elif sqrrl__key == "groups":
-                sqrrl__parsed_groups = sqrrl__from_json[List[List[String]]](sqrrl__sc)
-            elif sqrrl__key == "ring":
-                sqrrl__parsed_ring = sqrrl__from_json[Ring[String]](sqrrl__sc)
+                    sc.expect_byte(UInt8(ord("]")))
+                parsed_scores = nc1^
+            elif key == "groups":
+                parsed_groups = sqrrl__from_json[List[List[String]]](sc)
+            elif key == "ring":
+                parsed_ring = sqrrl__from_json[Ring[String]](sc)
             else:
-                raise Error("InvalidJson: unknown field " + sqrrl__key + " for Department")
-            if not sqrrl__sc.try_consume_byte(UInt8(ord(","))):
+                raise Error("InvalidJson: unknown field " + key + " for Department")
+            if not sc.try_consume_byte(UInt8(ord(","))):
                 break
-        sqrrl__sc.expect_byte(UInt8(ord("}")))
-    if not sqrrl__parsed_name:
+        sc.expect_byte(UInt8(ord("}")))
+    if not parsed_name:
         raise Error("InvalidJson: missing field name for Department")
-    if not sqrrl__parsed_members:
+    if not parsed_members:
         raise Error("InvalidJson: missing field members for Department")
-    if not sqrrl__parsed_backup:
+    if not parsed_backup:
         raise Error("InvalidJson: missing field backup for Department")
-    if not sqrrl__parsed_lead:
+    if not parsed_lead:
         raise Error("InvalidJson: missing field lead for Department")
-    if not sqrrl__parsed_tags:
+    if not parsed_tags:
         raise Error("InvalidJson: missing field tags for Department")
-    if not sqrrl__parsed_scores:
+    if not parsed_scores:
         raise Error("InvalidJson: missing field scores for Department")
-    if not sqrrl__parsed_groups:
+    if not parsed_groups:
         raise Error("InvalidJson: missing field groups for Department")
-    if not sqrrl__parsed_ring:
+    if not parsed_ring:
         raise Error("InvalidJson: missing field ring for Department")
     table.storage[].alloc_specific_id(id)
-    var sqrrl__v_name = sqrrl__parsed_name.value()
-    var sqrrl__v_members = sqrrl__parsed_members.take()
-    var sqrrl__v_backup = sqrrl__parsed_backup.take()
-    var sqrrl__v_lead = sqrrl__parsed_lead.take()
-    var sqrrl__v_tags = sqrrl__parsed_tags.take()
-    var sqrrl__v_scores = sqrrl__parsed_scores.take()
-    var sqrrl__v_groups = sqrrl__parsed_groups.take()
-    var sqrrl__v_ring = sqrrl__parsed_ring.take()
-    var sqrrl__inner = ArcPointer(sqrrl__DepartmentInner(_id=id, _table=table.storage, _name=sqrrl__v_name, _sqrrl__members=sqrrl__v_members^, _sqrrl__backup=sqrrl__v_backup^, _sqrrl__lead=sqrrl__v_lead^, _tags=sqrrl__v_tags^, _sqrrl__scores=sqrrl__v_scores^, _groups=sqrrl__v_groups^, _ring=sqrrl__v_ring^))
-    table.storage[].register_weak(id, sqrrl__inner)
-    table.storage[].indexes.name.add(id, sqrrl__inner[]._name)
-    return sqrrl__Department(sqrrl__inner^)
+    var v_name = parsed_name.value()
+    var v_members = parsed_members.take()
+    var v_backup = parsed_backup.take()
+    var v_lead = parsed_lead.take()
+    var v_tags = parsed_tags.take()
+    var v_scores = parsed_scores.take()
+    var v_groups = parsed_groups.take()
+    var v_ring = parsed_ring.take()
+    var inner = ArcPointer(sqrrl__DepartmentInner(_id=id, _table=table.storage, _name=v_name, _sqrrl__members=v_members^, _sqrrl__backup=v_backup^, _sqrrl__lead=v_lead^, _tags=v_tags^, _sqrrl__scores=v_scores^, _groups=v_groups^, _ring=v_ring^))
+    table.storage[].register_weak(id, inner)
+    table.storage[].indexes.name.add(id, inner[]._name)
+    return sqrrl__Department(inner^)
 
 def sqrrl__Department_all_to_json(table: sqrrl__DepartmentTable) -> String:
-    var sqrrl__out = String("[")
-    var sqrrl__first = True
-    for sqrrl__id in table.storage[].all():
-        if not sqrrl__first:
-            sqrrl__out += ","
-        var sqrrl__e = sqrrl__Department(table.storage[].handle_for(sqrrl__id))
-        sqrrl__out += "[" + String(sqrrl__id) + "," + sqrrl__Department_to_json(sqrrl__e) + "]"
-        sqrrl__first = False
-    sqrrl__out += "]"
-    return sqrrl__out^
+    var out = String("[")
+    var first = True
+    for id in table.storage[].all():
+        if not first:
+            out += ","
+        var e = sqrrl__Department(table.storage[].handle_for(id))
+        out += "[" + String(id) + "," + sqrrl__Department_to_json(e) + "]"
+        first = False
+    out += "]"
+    return out^
 
-def sqrrl__Department_all_from_json(table: sqrrl__DepartmentTable, sqrrl__tbl_Employee: sqrrl__EmployeeTable, mut sqrrl__temp: List[sqrrl__Department], mut sqrrl__sc: sqrrl__JsonScanner) raises:
-    sqrrl__sc.expect_byte(UInt8(ord("[")))
-    if not sqrrl__sc.try_consume_byte(UInt8(ord("]"))):
+def sqrrl__Department_all_from_json(table: sqrrl__DepartmentTable, sqrrl__tbl_Employee: sqrrl__EmployeeTable, mut temp: List[sqrrl__Department], mut sc: sqrrl__JsonScanner) raises:
+    sc.expect_byte(UInt8(ord("[")))
+    if not sc.try_consume_byte(UInt8(ord("]"))):
         while True:
-            sqrrl__sc.expect_byte(UInt8(ord("[")))
-            var sqrrl__eid = UInt32(sqrrl__sc.parse_json_int())
-            sqrrl__sc.expect_byte(UInt8(ord(",")))
-            var sqrrl__e = sqrrl__Department_from_json_with_id(table, sqrrl__tbl_Employee, sqrrl__eid, sqrrl__sc)
-            sqrrl__sc.expect_byte(UInt8(ord("]")))
-            sqrrl__temp.append(sqrrl__e)
-            if not sqrrl__sc.try_consume_byte(UInt8(ord(","))):
+            sc.expect_byte(UInt8(ord("[")))
+            var eid = UInt32(sc.parse_json_int())
+            sc.expect_byte(UInt8(ord(",")))
+            var e = sqrrl__Department_from_json_with_id(table, sqrrl__tbl_Employee, eid, sc)
+            sc.expect_byte(UInt8(ord("]")))
+            temp.append(e)
+            if not sc.try_consume_byte(UInt8(ord(","))):
                 break
-        sqrrl__sc.expect_byte(UInt8(ord("]")))
+        sc.expect_byte(UInt8(ord("]")))
 
 struct sqrrl__TempKeepAlives(Movable):
     var Employee: List[sqrrl__Employee]
@@ -333,42 +333,42 @@ struct sqrrl__TempKeepAlives(Movable):
         self.Department = List[sqrrl__Department]()
 
 def sqrrl__world_to_json(world: sqrrl__World) -> String:
-    var sqrrl__out = String("{")
-    sqrrl__out += '"Employee":'
-    sqrrl__out += sqrrl__Employee_all_to_json(world.Employee)
-    sqrrl__out += ","
-    sqrrl__out += '"Department":'
-    sqrrl__out += sqrrl__Department_all_to_json(world.Department)
-    sqrrl__out += "}"
-    return sqrrl__out^
+    var out = String("{")
+    out += '"Employee":'
+    out += sqrrl__Employee_all_to_json(world.Employee)
+    out += ","
+    out += '"Department":'
+    out += sqrrl__Department_all_to_json(world.Department)
+    out += "}"
+    return out^
 
-def sqrrl__world_from_json(mut world: sqrrl__World, mut sqrrl__sc: sqrrl__JsonScanner, mut sqrrl__temp: sqrrl__TempKeepAlives) raises:
-    sqrrl__sc.expect_byte(UInt8(ord("{")))
-    if not sqrrl__sc.try_consume_byte(UInt8(ord("}"))):
+def sqrrl__world_from_json(mut world: sqrrl__World, mut sc: sqrrl__JsonScanner, mut temp: sqrrl__TempKeepAlives) raises:
+    sc.expect_byte(UInt8(ord("{")))
+    if not sc.try_consume_byte(UInt8(ord("}"))):
         while True:
-            var sqrrl__key = sqrrl__sc.parse_json_string()
-            sqrrl__sc.expect_byte(UInt8(ord(":")))
-            if sqrrl__key == "Employee":
-                sqrrl__Employee_all_from_json(world.Employee, sqrrl__temp.Employee, sqrrl__sc)
-            elif sqrrl__key == "Department":
-                sqrrl__Department_all_from_json(world.Department, world.Employee, sqrrl__temp.Department, sqrrl__sc)
+            var key = sc.parse_json_string()
+            sc.expect_byte(UInt8(ord(":")))
+            if key == "Employee":
+                sqrrl__Employee_all_from_json(world.Employee, temp.Employee, sc)
+            elif key == "Department":
+                sqrrl__Department_all_from_json(world.Department, world.Employee, temp.Department, sc)
             else:
-                raise Error("InvalidJson: unknown struct " + sqrrl__key + " in dump")
-            if not sqrrl__sc.try_consume_byte(UInt8(ord(","))):
+                raise Error("InvalidJson: unknown struct " + key + " in dump")
+            if not sc.try_consume_byte(UInt8(ord(","))):
                 break
-        sqrrl__sc.expect_byte(UInt8(ord("}")))
+        sc.expect_byte(UInt8(ord("}")))
 
 def sqrrl__begin_init_from_json(mut world: sqrrl__World, json: String) raises -> sqrrl__TempKeepAlives:
     world.sqrrl__check_no_leaks()
     world = sqrrl__init()
-    var sqrrl__sc = sqrrl__JsonScanner(json)
-    var sqrrl__temp = sqrrl__TempKeepAlives()
-    sqrrl__world_from_json(world, sqrrl__sc, sqrrl__temp)
-    return sqrrl__temp^
+    var sc = sqrrl__JsonScanner(json)
+    var temp = sqrrl__TempKeepAlives()
+    sqrrl__world_from_json(world, sc, temp)
+    return temp^
 
-def sqrrl__end_init_from_json(var sqrrl__temp: sqrrl__TempKeepAlives):
+def sqrrl__end_init_from_json(var temp: sqrrl__TempKeepAlives):
     pass
 
 def sqrrl__init_from_json(mut world: sqrrl__World, json: String) raises:
-    var sqrrl__temp = sqrrl__begin_init_from_json(world, json)
-    sqrrl__end_init_from_json(sqrrl__temp^)
+    var temp = sqrrl__begin_init_from_json(world, json)
+    sqrrl__end_init_from_json(temp^)

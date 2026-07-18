@@ -1716,27 +1716,27 @@ def test_emit_json_module_wrapped_relation_list_round_trips() raises:
     way)."""
     var structs = _employee_department_discovery("List")
     var out = emit_json_module(structs, structs)
-    # Dump: goes through the recursive `_dump_value_expr` -- `sqrrl__fv_
+    # Dump: goes through the recursive `_dump_value_expr` -- `fv_
     # <field>` is the per-field getter ref (still field-suffixed, so a
     # struct with more than one container-shaped field can't collide),
-    # `sqrrl__ds1`/`sqrrl__dv1` are `_dump_value_expr`'s own uniquely-
+    # `ds1`/`dv1` are `_dump_value_expr`'s own uniquely-
     # numbered locals (not per-field -- there's only one container in
     # this field's own dump, so it's always "1").
-    assert_true("ref sqrrl__fv_members = e._inner[].get_sqrrl__members()" in out)
-    assert_true("for sqrrl__dv1 in sqrrl__fv_members:" in out)
-    assert_true("sqrrl__ds1 += String(sqrrl__dv1.id())" in out)
+    assert_true("ref fv_members = e._inner[].get_sqrrl__members()" in out)
+    assert_true("for dv1 in fv_members:" in out)
+    assert_true("ds1 += String(dv1.id())" in out)
     # Reload: builds a real List via .append(...), not Set/.add(...) --
     # the id-parse is inlined directly into the call (no separate local),
     # since `_parse_value_expr` returns a plain expression for a relation
-    # element. `sqrrl__nc1` is the recursive parser's own uniquely-
+    # element. `nc1` is the recursive parser's own uniquely-
     # numbered local (`tmp_id`), not a per-field name -- there's only one
     # container in this field's own parse, so it's always "1".
-    assert_true("var sqrrl__nc1 = List[sqrrl__Employee]()" in out)
+    assert_true("var nc1 = List[sqrrl__Employee]()" in out)
     assert_true(
-        "sqrrl__nc1.append(sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sqrrl__sc.parse_json_int()))))"
+        "nc1.append(sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sc.parse_json_int()))))"
         in out
     )
-    assert_true("sqrrl__parsed_members = sqrrl__nc1^" in out)
+    assert_true("parsed_members = nc1^" in out)
 
 
 def test_emit_json_module_wrapped_relation_set_round_trips() raises:
@@ -1747,12 +1747,12 @@ def test_emit_json_module_wrapped_relation_set_round_trips() raises:
     across both wrappers."""
     var structs = _employee_department_discovery("Set")
     var out = emit_json_module(structs, structs)
-    assert_true("var sqrrl__nc1 = Set[sqrrl__Employee]()" in out)
+    assert_true("var nc1 = Set[sqrrl__Employee]()" in out)
     assert_true(
-        "sqrrl__nc1.add(sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sqrrl__sc.parse_json_int()))))"
+        "nc1.add(sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sc.parse_json_int()))))"
         in out
     )
-    assert_true("sqrrl__parsed_members = sqrrl__nc1^" in out)
+    assert_true("parsed_members = nc1^" in out)
 
 
 def test_emit_json_module_wrapped_relation_optional_round_trips() raises:
@@ -1763,18 +1763,18 @@ def test_emit_json_module_wrapped_relation_optional_round_trips() raises:
     var structs = _employee_department_discovery("Optional")
     var out = emit_json_module(structs, structs)
     # Dump: null-or-value, not an array.
-    assert_true("ref sqrrl__fv_members = e._inner[].get_sqrrl__members()" in out)
-    assert_true("if sqrrl__fv_members:" in out)
-    assert_true("sqrrl__ds1 = String(sqrrl__fv_members.value().id())" in out)
-    assert_true('sqrrl__ds1 = "null"' in out)
+    assert_true("ref fv_members = e._inner[].get_sqrrl__members()" in out)
+    assert_true("if fv_members:" in out)
+    assert_true("ds1 = String(fv_members.value().id())" in out)
+    assert_true('ds1 = "null"' in out)
     # Reload: null -> empty Optional, else the parsed element wrapped in one.
-    assert_true('if sqrrl__sc.try_consume_literal("null"):' in out)
-    assert_true("sqrrl__nc1 = Optional[sqrrl__Employee]()" in out)
+    assert_true('if sc.try_consume_literal("null"):' in out)
+    assert_true("nc1 = Optional[sqrrl__Employee]()" in out)
     assert_true(
-        "sqrrl__nc1 = Optional[sqrrl__Employee](sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sqrrl__sc.parse_json_int()))))"
+        "nc1 = Optional[sqrrl__Employee](sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sc.parse_json_int()))))"
         in out
     )
-    assert_true("sqrrl__parsed_members = sqrrl__nc1^" in out)
+    assert_true("parsed_members = nc1^" in out)
 
 
 def test_emit_json_module_plain_leaf_container_round_trips() raises:
@@ -1793,8 +1793,8 @@ def test_emit_json_module_plain_leaf_container_round_trips() raises:
     structs.append(DiscoveredStruct(module_path="main", parsed=ParsedStruct(name="Employee", fields=employee_fields^)))
     var out = emit_json_module(structs, structs)
     # Field-level: both directions are a single uniform dispatcher call.
-    assert_true("sqrrl__out += sqrrl__to_json(e._inner[].get_tags())" in out)
-    assert_true("sqrrl__parsed_tags = sqrrl__from_json[List[String]](sqrrl__sc)" in out)
+    assert_true("out += sqrrl__to_json(e._inner[].get_tags())" in out)
+    assert_true("parsed_tags = sqrrl__from_json[List[String]](sc)" in out)
     # The dispatch table itself has a branch built from the built-in List
     # adapters and the shared list_to_json/list_from_json helpers.
     assert_true(
@@ -1825,21 +1825,21 @@ def test_emit_json_module_dict_field_round_trips() raises:
     structs.append(DiscoveredStruct(module_path="main", parsed=ParsedStruct(name="Department", fields=department_fields^)))
     var out = emit_json_module(structs, structs)
     # Dump: array of [key,value] pairs, both sides through sqrrl__to_json.
-    assert_true("ref sqrrl__fv_scores = e._inner[].get_sqrrl__scores()" in out)
-    assert_true("for sqrrl__de1 in sqrrl__fv_scores.items():" in out)
+    assert_true("ref fv_scores = e._inner[].get_sqrrl__scores()" in out)
+    assert_true("for de1 in fv_scores.items():" in out)
     assert_true(
-        'sqrrl__ds1 += "[" + String(sqrrl__de1.key.id()) + "," + sqrrl__to_json(sqrrl__de1.value) + "]"'
+        'ds1 += "[" + String(de1.key.id()) + "," + sqrrl__to_json(de1.value) + "]"'
         in out
     )
     # Reload: builds a real Dict, parsing the relation key and leaf value
     # each through the same recursive dispatch.
-    assert_true("var sqrrl__nc1 = Dict[sqrrl__Employee, String]()" in out)
+    assert_true("var nc1 = Dict[sqrrl__Employee, String]()" in out)
     assert_true(
-        "var sqrrl__nck1 = sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sqrrl__sc.parse_json_int())))"
+        "var nck1 = sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sc.parse_json_int())))"
         in out
     )
-    assert_true("sqrrl__nc1[sqrrl__nck1] = sqrrl__sc.parse_json_string()" in out)
-    assert_true("sqrrl__parsed_scores = sqrrl__nc1^" in out)
+    assert_true("nc1[nck1] = sc.parse_json_string()" in out)
+    assert_true("parsed_scores = nc1^" in out)
 
 
 def test_emit_json_module_nested_container_round_trips() raises:
@@ -1862,8 +1862,8 @@ def test_emit_json_module_nested_container_round_trips() raises:
     var structs = List[DiscoveredStruct]()
     structs.append(DiscoveredStruct(module_path="main", parsed=ParsedStruct(name="Employee", fields=employee_fields^)))
     var out = emit_json_module(structs, structs)
-    assert_true("sqrrl__out += sqrrl__to_json(e._inner[].get_groups())" in out)
-    assert_true("sqrrl__parsed_groups = sqrrl__from_json[List[List[String]]](sqrrl__sc)" in out)
+    assert_true("out += sqrrl__to_json(e._inner[].get_groups())" in out)
+    assert_true("parsed_groups = sqrrl__from_json[List[List[String]]](sc)" in out)
     # Both the outer and the inner List each get their own dispatch-table
     # branch -- confirms the collection walk recurses into elements.
     assert_true(
@@ -1901,8 +1901,8 @@ def test_emit_json_module_custom_container_wrapper_uses_escape_hatch() raises:
     structs.append(DiscoveredStruct(module_path="main", parsed=ParsedStruct(name="Employee", fields=employee_fields^)))
     var out = emit_json_module(structs, structs)
     assert_true("from main import Ring, sqrrl__Ring_json_to_list, sqrrl__Ring_json_from_list" in out)
-    assert_true("sqrrl__out += sqrrl__to_json(e._inner[].get_tags())" in out)
-    assert_true("sqrrl__parsed_tags = sqrrl__from_json[Ring[String]](sqrrl__sc)" in out)
+    assert_true("out += sqrrl__to_json(e._inner[].get_tags())" in out)
+    assert_true("parsed_tags = sqrrl__from_json[Ring[String]](sc)" in out)
     assert_true(
         "elif T == Ring[String]:\n        return list_to_json(sqrrl__Ring_json_to_list(rebind[Ring[String]](value)))"
         in out

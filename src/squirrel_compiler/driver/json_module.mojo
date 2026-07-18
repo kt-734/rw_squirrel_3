@@ -298,14 +298,14 @@ def _parse_value_expr(
     type_param_names: Dict[String, Bool] = Dict[String, Bool](),
 ) raises -> String:
     """The generated-code *expression* evaluating to one parsed JSON value
-    of type `t`, off `sqrrl__sc` -- the single recursive core every
+    of type `t`, off `sc` -- the single recursive core every
     `from_json` parse path (a whole field's own declared type, or one
     element nested inside a container, at any depth) goes through.
 
     For a leaf/relation/discovered-plain-struct `t`, this is a single
     nested-call expression with no side effect on `out` at all (safe to
     inline directly into an outer container's own `.append(...)`/`.add(
-    ...)` call -- a relation element's own id-parse, `sqrrl__sc.parse_
+    ...)` call -- a relation element's own id-parse, `sc.parse_
     json_int()`, is itself just a nested call, no intermediate named
     variable needed). For a *container* `t`, there's no single-expression
     reading of a JSON array/object, so this instead emits a complete parse
@@ -338,7 +338,7 @@ def _parse_value_expr(
             sqrrl_prefixed(target)
             + "(sqrrl__tbl_"
             + target
-            + ".storage[].handle_for(UInt32(sqrrl__sc.parse_json_int())))"
+            + ".storage[].handle_for(UInt32(sc.parse_json_int())))"
         )
     if t.name in plain_struct_names:
         return _plain_struct_from_json_call(t, plain_struct_fields, plain_struct_names)
@@ -348,13 +348,13 @@ def _parse_value_expr(
     var kind = _container_wrapper_kind(t)
     tmp_id += 1
     var this_id = tmp_id
-    var var_name = "sqrrl__nc" + String(this_id)
+    var var_name = "nc" + String(this_id)
 
     if kind == "optional":
         ref elem = t.arg(0)
         var elem_type_str = rewritten_field_type(elem.render(), plain_struct_names)
         out += indent + "var " + var_name + ": Optional[" + elem_type_str + "]\n"
-        out += indent + "if sqrrl__sc.try_consume_literal(\"null\"):\n"
+        out += indent + "if sc.try_consume_literal(\"null\"):\n"
         out += indent + "    " + var_name + " = Optional[" + elem_type_str + "]()\n"
         out += indent + "else:\n"
         var elem_expr = _parse_value_expr(
@@ -381,17 +381,17 @@ def _parse_value_expr(
         # matching `multi`'s own long-working precedent).
         var build_wrapper = "Set" if wrapper == "Set" else "List"
         out += indent + "var " + var_name + " = " + build_wrapper + "[" + elem_type_str + "]()\n"
-        out += indent + "sqrrl__sc.expect_byte(UInt8(ord(\"[\")))\n"
-        out += indent + "if not sqrrl__sc.try_consume_byte(UInt8(ord(\"]\"))):\n"
+        out += indent + "sc.expect_byte(UInt8(ord(\"[\")))\n"
+        out += indent + "if not sc.try_consume_byte(UInt8(ord(\"]\"))):\n"
         out += indent + "    while True:\n"
         var elem_expr = _parse_value_expr(
             elem, plain_struct_fields, plain_struct_names, struct_name, field_name, indent + "        ", tmp_id, out, type_param_names
         )
         var builder = "add" if build_wrapper == "Set" else "append"
         out += indent + "        " + var_name + "." + builder + "(" + elem_expr + ")\n"
-        out += indent + "        if not sqrrl__sc.try_consume_byte(UInt8(ord(\",\"))):\n"
+        out += indent + "        if not sc.try_consume_byte(UInt8(ord(\",\"))):\n"
         out += indent + "            break\n"
-        out += indent + "    sqrrl__sc.expect_byte(UInt8(ord(\"]\")))\n"
+        out += indent + "    sc.expect_byte(UInt8(ord(\"]\")))\n"
         if is_custom:
             return "sqrrl__" + wrapper + "_json_from_list(" + var_name + "^)"
         return var_name + "^"
@@ -401,25 +401,25 @@ def _parse_value_expr(
         ref val_t = t.arg(1)
         var key_type_str = rewritten_field_type(key_t.render(), plain_struct_names)
         var val_type_str = rewritten_field_type(val_t.render(), plain_struct_names)
-        var key_var = "sqrrl__nck" + String(this_id)
+        var key_var = "nck" + String(this_id)
         out += indent + "var " + var_name + " = Dict[" + key_type_str + ", " + val_type_str + "]()\n"
-        out += indent + "sqrrl__sc.expect_byte(UInt8(ord(\"[\")))\n"
-        out += indent + "if not sqrrl__sc.try_consume_byte(UInt8(ord(\"]\"))):\n"
+        out += indent + "sc.expect_byte(UInt8(ord(\"[\")))\n"
+        out += indent + "if not sc.try_consume_byte(UInt8(ord(\"]\"))):\n"
         out += indent + "    while True:\n"
-        out += indent + "        sqrrl__sc.expect_byte(UInt8(ord(\"[\")))\n"
+        out += indent + "        sc.expect_byte(UInt8(ord(\"[\")))\n"
         var key_expr = _parse_value_expr(
             key_t, plain_struct_fields, plain_struct_names, struct_name, field_name, indent + "        ", tmp_id, out, type_param_names
         )
         out += indent + "        var " + key_var + " = " + key_expr + "\n"
-        out += indent + "        sqrrl__sc.expect_byte(UInt8(ord(\",\")))\n"
+        out += indent + "        sc.expect_byte(UInt8(ord(\",\")))\n"
         var val_expr = _parse_value_expr(
             val_t, plain_struct_fields, plain_struct_names, struct_name, field_name, indent + "        ", tmp_id, out, type_param_names
         )
         out += indent + "        " + var_name + "[" + key_var + "] = " + val_expr + "\n"
-        out += indent + "        sqrrl__sc.expect_byte(UInt8(ord(\"]\")))\n"
-        out += indent + "        if not sqrrl__sc.try_consume_byte(UInt8(ord(\",\"))):\n"
+        out += indent + "        sc.expect_byte(UInt8(ord(\"]\")))\n"
+        out += indent + "        if not sc.try_consume_byte(UInt8(ord(\",\"))):\n"
         out += indent + "            break\n"
-        out += indent + "    sqrrl__sc.expect_byte(UInt8(ord(\"]\")))\n"
+        out += indent + "    sc.expect_byte(UInt8(ord(\"]\")))\n"
         return var_name + "^"
 
     raise Error(
@@ -454,7 +454,7 @@ def _emit_field_json_parse(
     var expr = _parse_value_expr(
         t, plain_struct_fields, plain_struct_names, struct_name, f.name, "                ", tmp_id, out, type_param_names
     )
-    out += "                sqrrl__parsed_" + f.name + " = " + expr + "\n"
+    out += "                parsed_" + f.name + " = " + expr + "\n"
     return out^
 
 
@@ -545,7 +545,7 @@ def _leaf_from_json_expr(
     type_param_names: Dict[String, Bool] = Dict[String, Bool](),
 ) raises -> String:
     """The generated-code expression parsing a leaf-typed field's own JSON
-    value off `sqrrl__sc`. A genuinely undiscovered hand-written type
+    value off `sc`. A genuinely undiscovered hand-written type
     (never scanned as `@@struct` or a plain struct anywhere in the
     project -- e.g. a plain `home: ExternalAddress` field imported from an
     ordinary, never-`.mojo.sqrrl` module) falls back to a hand-written
@@ -563,16 +563,16 @@ def _leaf_from_json_expr(
     real type name, so it gets its own explicit, distinct error instead
     of a confusing "undefined name" from a downstream Mojo compile."""
     if type_str == "String":
-        return "sqrrl__sc.parse_json_string()"
+        return "sc.parse_json_string()"
     if type_str == "Bool":
-        return "sqrrl__sc.parse_json_bool()"
+        return "sc.parse_json_bool()"
     if type_str == "Float64" or type_str == "Float32":
-        return type_str + "(sqrrl__sc.parse_json_float())"
+        return type_str + "(sc.parse_json_float())"
     if _is_integer_leaf(type_str):
-        return type_str + "(sqrrl__sc.parse_json_int())"
+        return type_str + "(sc.parse_json_int())"
     if type_str in type_param_names:
         raise _unbound_type_param_field_error(struct_name, field_name, type_str)
-    return "sqrrl__" + type_str + "_from_json(sqrrl__sc)"
+    return "sqrrl__" + type_str + "_from_json(sc)"
 
 
 def _plain_struct_value_base(f: Field, plain_struct_names: Dict[String, Bool]) -> Optional[TypeExpr]:
@@ -594,7 +594,7 @@ def _plain_struct_from_json_call(
     plain_struct_names: Dict[String, Bool],
 ) raises -> String:
     """The generated-code expression reconstructing a plain-struct-valued
-    value's own nested JSON object off `sqrrl__sc`, via its auto-generated
+    value's own nested JSON object off `sc`, via its auto-generated
     `sqrrl__<Base>_from_json` companion (`_emit_plain_struct_from_json`).
     Sibling table arguments are computed the same way for the callee as for
     the caller (`_sibling_relation_targets`, itself recursive through
@@ -622,7 +622,7 @@ def _plain_struct_from_json_call(
     var siblings = _sibling_relation_targets(base_fields, plain_struct_fields)
     for target in siblings:
         call += "sqrrl__tbl_" + target + ", "
-    call += "sqrrl__sc)"
+    call += "sc)"
     return call^
 
 
@@ -684,7 +684,7 @@ def _dump_value_expr(
 
     tmp_id += 1
     var this_id = tmp_id
-    var out_var = "sqrrl__ds" + String(this_id)
+    var out_var = "ds" + String(this_id)
 
     if kind == "optional":
         ref elem = t.arg(0)
@@ -702,18 +702,18 @@ def _dump_value_expr(
         ref key_t = t.arg(0)
         ref val_t = t.arg(1)
         out += indent + "var " + out_var + " = String(\"[\")\n"
-        out += indent + "var sqrrl__dfirst" + String(this_id) + " = True\n"
-        out += indent + "for sqrrl__de" + String(this_id) + " in " + value_expr + ".items():\n"
-        out += indent + "    if not sqrrl__dfirst" + String(this_id) + ":\n"
+        out += indent + "var dfirst" + String(this_id) + " = True\n"
+        out += indent + "for de" + String(this_id) + " in " + value_expr + ".items():\n"
+        out += indent + "    if not dfirst" + String(this_id) + ":\n"
         out += indent + "        " + out_var + " += \",\"\n"
         var key_expr = _dump_value_expr(
-            "sqrrl__de" + String(this_id) + ".key", key_t, plain_struct_names, indent + "    ", tmp_id, out
+            "de" + String(this_id) + ".key", key_t, plain_struct_names, indent + "    ", tmp_id, out
         )
         var val_expr = _dump_value_expr(
-            "sqrrl__de" + String(this_id) + ".value", val_t, plain_struct_names, indent + "    ", tmp_id, out
+            "de" + String(this_id) + ".value", val_t, plain_struct_names, indent + "    ", tmp_id, out
         )
         out += indent + "    " + out_var + " += \"[\" + " + key_expr + " + \",\" + " + val_expr + " + \"]\"\n"
-        out += indent + "    sqrrl__dfirst" + String(this_id) + " = False\n"
+        out += indent + "    dfirst" + String(this_id) + " = False\n"
         out += indent + out_var + " += \"]\"\n"
         return out_var
 
@@ -727,15 +727,15 @@ def _dump_value_expr(
         # to_list` companion the top-level field dispatch already needs.
         iter_expr = "sqrrl__" + wrapper + "_json_to_list(" + value_expr + ")"
     out += indent + "var " + out_var + " = String(\"[\")\n"
-    out += indent + "var sqrrl__dfirst" + String(this_id) + " = True\n"
-    out += indent + "for sqrrl__dv" + String(this_id) + " in " + iter_expr + ":\n"
-    out += indent + "    if not sqrrl__dfirst" + String(this_id) + ":\n"
+    out += indent + "var dfirst" + String(this_id) + " = True\n"
+    out += indent + "for dv" + String(this_id) + " in " + iter_expr + ":\n"
+    out += indent + "    if not dfirst" + String(this_id) + ":\n"
     out += indent + "        " + out_var + " += \",\"\n"
     var elem_expr = _dump_value_expr(
-        "sqrrl__dv" + String(this_id), elem, plain_struct_names, indent + "    ", tmp_id, out
+        "dv" + String(this_id), elem, plain_struct_names, indent + "    ", tmp_id, out
     )
     out += indent + "    " + out_var + " += " + elem_expr + "\n"
-    out += indent + "    sqrrl__dfirst" + String(this_id) + " = False\n"
+    out += indent + "    dfirst" + String(this_id) + " = False\n"
     out += indent + out_var + " += \"]\"\n"
     return out_var
 
@@ -760,7 +760,7 @@ def _emit_to_json(
     already handles it, unlike a genuine `List[...]`/`Set[...]`/`Dict[...]`)."""
     var entity_name = sqrrl_prefixed(parsed.name)
     var out = String("\ndef sqrrl__" + parsed.name + "_to_json(e: " + entity_name + ") -> String:\n")
-    out += "    var sqrrl__out = String(\"{\")\n"
+    out += "    var out = String(\"{\")\n"
     var first = True
     # Shared across every field in this function, not reset per field --
     # unlike `from_json`'s own per-field parse code (each living in its
@@ -774,8 +774,8 @@ def _emit_to_json(
     var tmp_id = 0
     for f in parsed.fields:
         if not first:
-            out += "    sqrrl__out += \",\"\n"
-        out += "    sqrrl__out += " + _json_key_literal_source(f.name) + "\n"
+            out += "    out += \",\"\n"
+        out += "    out += " + _json_key_literal_source(f.name) + "\n"
         # A discovered plain struct's own generic instantiation (`Tagged[
         # String]`) is bracket-shaped too -- checked *before* any
         # container-kind dispatch below, or a plain-struct field would be
@@ -792,17 +792,17 @@ def _emit_to_json(
             # of these"), so it can't go through `_dump_value_expr`'s own
             # TypeExpr-based dispatch the way every other container-shaped
             # field now does; kept as its own direct, minimal case.
-            out += "    sqrrl__out += \"[\"\n"
-            out += "    var sqrrl__mfirst_" + f.name + " = True\n"
-            out += "    ref sqrrl__mval_" + f.name + " = e._inner[].get_" + param_name(f) + "()\n"
-            out += "    for sqrrl__m_" + f.name + " in sqrrl__mval_" + f.name + ":\n"
-            out += "        if not sqrrl__mfirst_" + f.name + ":\n"
-            out += "            sqrrl__out += \",\"\n"
-            out += "        sqrrl__out += String(sqrrl__m_" + f.name + ".id())\n"
-            out += "        sqrrl__mfirst_" + f.name + " = False\n"
-            out += "    sqrrl__out += \"]\"\n"
+            out += "    out += \"[\"\n"
+            out += "    var mfirst_" + f.name + " = True\n"
+            out += "    ref mval_" + f.name + " = e._inner[].get_" + param_name(f) + "()\n"
+            out += "    for m_" + f.name + " in mval_" + f.name + ":\n"
+            out += "        if not mfirst_" + f.name + ":\n"
+            out += "            out += \",\"\n"
+            out += "        out += String(m_" + f.name + ".id())\n"
+            out += "        mfirst_" + f.name + " = False\n"
+            out += "    out += \"]\"\n"
         elif is_plain_struct_field:
-            out += "    sqrrl__out += sqrrl__to_json(e._inner[].get_" + param_name(f) + "())\n"
+            out += "    out += sqrrl__to_json(e._inner[].get_" + param_name(f) + "())\n"
         elif is_container_type(f.type_str):
             var t = parse_type_expr(f.type_str)
             if _container_wrapper_kind(t) == "":
@@ -818,24 +818,24 @@ def _emit_to_json(
                 # already uses below -- `sqrrl__to_json[T]`'s own
                 # generated dispatch table (`emit_json_module`) has a
                 # branch for it.
-                out += "    ref sqrrl__fv_" + f.name + " = e._inner[].get_" + param_name(f) + "()\n"
+                out += "    ref fv_" + f.name + " = e._inner[].get_" + param_name(f) + "()\n"
                 var dump_out = String()
-                var expr = _dump_value_expr("sqrrl__fv_" + f.name, t, plain_struct_names, "    ", tmp_id, dump_out)
+                var expr = _dump_value_expr("fv_" + f.name, t, plain_struct_names, "    ", tmp_id, dump_out)
                 out += dump_out
-                out += "    sqrrl__out += " + expr + "\n"
+                out += "    out += " + expr + "\n"
             else:
-                out += "    sqrrl__out += sqrrl__to_json(e._inner[].get_" + param_name(f) + "())\n"
+                out += "    out += sqrrl__to_json(e._inner[].get_" + param_name(f) + "())\n"
         elif is_relation_field(f) and not is_container_type(f.type_str):
             # A bare relation's own JSON shape is always just its id --
             # dumped directly, no `sqrrl__JsonSerializable`/generic-
             # dispatch detour needed at all (this module's own doc
             # comment has the full rationale for why that trait is gone).
-            out += "    sqrrl__out += String(e._inner[].get_" + param_name(f) + "().id())\n"
+            out += "    out += String(e._inner[].get_" + param_name(f) + "().id())\n"
         else:
-            out += "    sqrrl__out += sqrrl__to_json(e._inner[].get_" + param_name(f) + "())\n"
+            out += "    out += sqrrl__to_json(e._inner[].get_" + param_name(f) + "())\n"
         first = False
-    out += "    sqrrl__out += \"}\"\n"
-    out += "    return sqrrl__out^\n"
+    out += "    out += \"}\"\n"
+    out += "    return out^\n"
     return out^
 
 
@@ -859,43 +859,43 @@ def _emit_from_json_with_id(
     var params = String("table: " + table_name)
     for target in siblings:
         params += ", sqrrl__tbl_" + target + ": " + sqrrl_prefixed(target) + "Table"
-    params += ", id: UInt32, mut sqrrl__sc: sqrrl__JsonScanner"
+    params += ", id: UInt32, mut sc: sqrrl__JsonScanner"
 
     var out = String(
         "\ndef sqrrl__" + parsed.name + "_from_json_with_id(" + params + ") raises -> " + entity_name + ":\n"
     )
 
     for f in parsed.fields:
-        out += "    var sqrrl__parsed_" + f.name + ": Optional[" + emit_field_type(f) + "] = None\n"
+        out += "    var parsed_" + f.name + ": Optional[" + emit_field_type(f) + "] = None\n"
 
-    out += "    sqrrl__sc.expect_byte(UInt8(ord(\"{\")))\n"
-    out += "    if not sqrrl__sc.try_consume_byte(UInt8(ord(\"}\"))):\n"
+    out += "    sc.expect_byte(UInt8(ord(\"{\")))\n"
+    out += "    if not sc.try_consume_byte(UInt8(ord(\"}\"))):\n"
     out += "        while True:\n"
-    out += "            var sqrrl__key = sqrrl__sc.parse_json_string()\n"
-    out += "            sqrrl__sc.expect_byte(UInt8(ord(\":\")))\n"
+    out += "            var key = sc.parse_json_string()\n"
+    out += "            sc.expect_byte(UInt8(ord(\":\")))\n"
     var branch_kw = "            if"
     for f in parsed.fields:
-        out += branch_kw + " sqrrl__key == " + _quoted(f.name) + ":\n"
+        out += branch_kw + " key == " + _quoted(f.name) + ":\n"
         branch_kw = "            elif"
         if f.modifier == FieldModifier.MULTI:
             var target = _relation_target_name(f)
             var elem_t = emit_multi_element_type(f)
-            out += "                var sqrrl__mset = Set[" + elem_t + "]()\n"
-            out += "                sqrrl__sc.expect_byte(UInt8(ord(\"[\")))\n"
-            out += "                if not sqrrl__sc.try_consume_byte(UInt8(ord(\"]\"))):\n"
+            out += "                var mset = Set[" + elem_t + "]()\n"
+            out += "                sc.expect_byte(UInt8(ord(\"[\")))\n"
+            out += "                if not sc.try_consume_byte(UInt8(ord(\"]\"))):\n"
             out += "                    while True:\n"
-            out += "                        var sqrrl__elem_id = UInt32(sqrrl__sc.parse_json_int())\n"
+            out += "                        var elem_id = UInt32(sc.parse_json_int())\n"
             out += (
-                "                        sqrrl__mset.add("
+                "                        mset.add("
                 + elem_t
                 + "(sqrrl__tbl_"
                 + target
-                + ".storage[].handle_for(sqrrl__elem_id)))\n"
+                + ".storage[].handle_for(elem_id)))\n"
             )
-            out += "                        if not sqrrl__sc.try_consume_byte(UInt8(ord(\",\"))):\n"
+            out += "                        if not sc.try_consume_byte(UInt8(ord(\",\"))):\n"
             out += "                            break\n"
-            out += "                    sqrrl__sc.expect_byte(UInt8(ord(\"]\")))\n"
-            out += "                sqrrl__parsed_" + f.name + " = sqrrl__mset^\n"
+            out += "                    sc.expect_byte(UInt8(ord(\"]\")))\n"
+            out += "                parsed_" + f.name + " = mset^\n"
         elif _is_supported_container_field(f) and _type_involves_relation(
             parse_type_expr(f.type_str), plain_struct_fields, plain_struct_type_params
         ):
@@ -912,15 +912,15 @@ def _emit_from_json_with_id(
             # unsupported) falls through to the "unsupported container"
             # rejection below.
             var target = _relation_target_name(f)
-            out += "                var sqrrl__rid_" + f.name + " = UInt32(sqrrl__sc.parse_json_int())\n"
+            out += "                var rid_" + f.name + " = UInt32(sc.parse_json_int())\n"
             out += (
-                "                sqrrl__parsed_"
+                "                parsed_"
                 + f.name
                 + " = "
                 + emit_field_type(f)
                 + "(sqrrl__tbl_"
                 + target
-                + ".storage[].handle_for(sqrrl__rid_"
+                + ".storage[].handle_for(rid_"
                 + f.name
                 + "))\n"
             )
@@ -936,7 +936,7 @@ def _emit_from_json_with_id(
             var plain_base = _plain_struct_value_base(f, plain_struct_names)
             if plain_base:
                 var call = _plain_struct_from_json_call(plain_base.value(), plain_struct_fields, plain_struct_names)
-                out += "                sqrrl__parsed_" + f.name + " = " + call + "\n"
+                out += "                parsed_" + f.name + " = " + call + "\n"
             elif _is_json_unsupported_container_field(f):
                 raise _unsupported_container_field_error(parsed.name, f.name, f.type_str)
             elif _is_supported_container_field(f):
@@ -946,11 +946,11 @@ def _emit_from_json_with_id(
                 # dispatch-table branch for this exact type `emit_json_
                 # module`'s collection pass already registered.
                 out += (
-                    "                sqrrl__parsed_"
+                    "                parsed_"
                     + f.name
                     + " = sqrrl__from_json["
                     + emit_field_type(f)
-                    + "](sqrrl__sc)\n"
+                    + "](sc)\n"
                 )
             else:
                 # An ordinary leaf, or a genuinely undiscovered plain-
@@ -960,7 +960,7 @@ def _emit_from_json_with_id(
                 # parameter here, since a real `@@struct` (unlike a plain
                 # struct) is never itself generic.
                 out += (
-                    "                sqrrl__parsed_"
+                    "                parsed_"
                     + f.name
                     + " = "
                     + _leaf_from_json_expr(parsed.name, f.name, f.type_str)
@@ -968,19 +968,19 @@ def _emit_from_json_with_id(
                 )
     out += "            else:\n"
     out += (
-        "                raise Error(\"InvalidJson: unknown field \" + sqrrl__key + \" for "
+        "                raise Error(\"InvalidJson: unknown field \" + key + \" for "
         + parsed.name
         + "\")\n"
     )
-    out += "            if not sqrrl__sc.try_consume_byte(UInt8(ord(\",\"))):\n"
+    out += "            if not sc.try_consume_byte(UInt8(ord(\",\"))):\n"
     out += "                break\n"
-    out += "        sqrrl__sc.expect_byte(UInt8(ord(\"}\")))\n"
+    out += "        sc.expect_byte(UInt8(ord(\"}\")))\n"
 
     # Every field is a required parameter, same contract create() has --
     # unlike create() this can't lean on Mojo's own missing-argument check,
     # so it's an explicit runtime check here instead.
     for f in parsed.fields:
-        out += "    if not sqrrl__parsed_" + f.name + ":\n"
+        out += "    if not parsed_" + f.name + ":\n"
         out += (
             "        raise Error(\"InvalidJson: missing field "
             + f.name
@@ -999,19 +999,19 @@ def _emit_from_json_with_id(
             # read the parsed Optional back out; `.take()` (move, leaves
             # None behind) works regardless, same as create()'s own
             # parameter now needs (table.mojo).
-            out += "    var sqrrl__v_" + f.name + " = sqrrl__parsed_" + f.name + ".take()\n"
-            ctor_args += ", " + storage_field_name(f) + "=sqrrl__v_" + f.name + "^"
+            out += "    var v_" + f.name + " = parsed_" + f.name + ".take()\n"
+            ctor_args += ", " + storage_field_name(f) + "=v_" + f.name + "^"
         else:
-            out += "    var sqrrl__v_" + f.name + " = sqrrl__parsed_" + f.name + ".value()\n"
-            ctor_args += ", " + storage_field_name(f) + "=sqrrl__v_" + f.name
-    out += "    var sqrrl__inner = ArcPointer(" + inner_name + "(" + ctor_args + "))\n"
-    out += "    table.storage[].register_weak(id, sqrrl__inner)\n"
+            out += "    var v_" + f.name + " = parsed_" + f.name + ".value()\n"
+            ctor_args += ", " + storage_field_name(f) + "=v_" + f.name
+    out += "    var inner = ArcPointer(" + inner_name + "(" + ctor_args + "))\n"
+    out += "    table.storage[].register_weak(id, inner)\n"
     for f in parsed.fields:
         if f.modifier == FieldModifier.MULTI:
             out += (
                 "    table.storage[].indexes."
                 + f.name
-                + ".add_many(id, sqrrl__inner[]."
+                + ".add_many(id, inner[]."
                 + storage_field_name(f)
                 + ")\n"
             )
@@ -1019,13 +1019,13 @@ def _emit_from_json_with_id(
             out += (
                 "    table.storage[].indexes."
                 + f.name
-                + ".add(id, sqrrl__inner[]."
+                + ".add(id, inner[]."
                 + storage_field_name(f)
                 + ")\n"
             )
     if parsed.is_keepalive:
-        out += "    table.storage[].keepalive_add(id, sqrrl__inner.copy())\n"
-    out += "    return " + entity_name + "(sqrrl__inner^)\n"
+        out += "    table.storage[].keepalive_add(id, inner.copy())\n"
+    out += "    return " + entity_name + "(inner^)\n"
     return out^
 
 
@@ -1036,20 +1036,20 @@ def _emit_all_to_json(parsed: ParsedStruct) -> String:
     var entity_name = sqrrl_prefixed(parsed.name)
     var table_name = entity_name + "Table"
     var out = String("\ndef sqrrl__" + parsed.name + "_all_to_json(table: " + table_name + ") -> String:\n")
-    out += "    var sqrrl__out = String(\"[\")\n"
-    out += "    var sqrrl__first = True\n"
-    out += "    for sqrrl__id in table.storage[].all():\n"
-    out += "        if not sqrrl__first:\n"
-    out += "            sqrrl__out += \",\"\n"
-    out += "        var sqrrl__e = " + entity_name + "(table.storage[].handle_for(sqrrl__id))\n"
+    out += "    var out = String(\"[\")\n"
+    out += "    var first = True\n"
+    out += "    for id in table.storage[].all():\n"
+    out += "        if not first:\n"
+    out += "            out += \",\"\n"
+    out += "        var e = " + entity_name + "(table.storage[].handle_for(id))\n"
     out += (
-        "        sqrrl__out += \"[\" + String(sqrrl__id) + \",\" + sqrrl__"
+        "        out += \"[\" + String(id) + \",\" + sqrrl__"
         + parsed.name
-        + "_to_json(sqrrl__e) + \"]\"\n"
+        + "_to_json(e) + \"]\"\n"
     )
-    out += "        sqrrl__first = False\n"
-    out += "    sqrrl__out += \"]\"\n"
-    out += "    return sqrrl__out^\n"
+    out += "        first = False\n"
+    out += "    out += \"]\"\n"
+    out += "    return out^\n"
     return out^
 
 
@@ -1070,31 +1070,31 @@ def _emit_all_from_json(parsed: ParsedStruct, plain_struct_fields: Dict[String, 
         params += ", sqrrl__tbl_" + target + ": " + sqrrl_prefixed(target) + "Table"
         call_args += ", sqrrl__tbl_" + target
     if not parsed.is_keepalive:
-        params += ", mut sqrrl__temp: List[" + entity_name + "]"
-    params += ", mut sqrrl__sc: sqrrl__JsonScanner"
+        params += ", mut temp: List[" + entity_name + "]"
+    params += ", mut sc: sqrrl__JsonScanner"
 
     var out = String("\ndef sqrrl__" + parsed.name + "_all_from_json(" + params + ") raises:\n")
-    out += "    sqrrl__sc.expect_byte(UInt8(ord(\"[\")))\n"
-    out += "    if not sqrrl__sc.try_consume_byte(UInt8(ord(\"]\"))):\n"
+    out += "    sc.expect_byte(UInt8(ord(\"[\")))\n"
+    out += "    if not sc.try_consume_byte(UInt8(ord(\"]\"))):\n"
     out += "        while True:\n"
-    out += "            sqrrl__sc.expect_byte(UInt8(ord(\"[\")))\n"
-    out += "            var sqrrl__eid = UInt32(sqrrl__sc.parse_json_int())\n"
-    out += "            sqrrl__sc.expect_byte(UInt8(ord(\",\")))\n"
+    out += "            sc.expect_byte(UInt8(ord(\"[\")))\n"
+    out += "            var eid = UInt32(sc.parse_json_int())\n"
+    out += "            sc.expect_byte(UInt8(ord(\",\")))\n"
     out += (
-        "            var sqrrl__e = sqrrl__"
+        "            var e = sqrrl__"
         + parsed.name
         + "_from_json_with_id("
         + call_args
-        + ", sqrrl__eid, sqrrl__sc)\n"
+        + ", eid, sc)\n"
     )
-    out += "            sqrrl__sc.expect_byte(UInt8(ord(\"]\")))\n"
+    out += "            sc.expect_byte(UInt8(ord(\"]\")))\n"
     if not parsed.is_keepalive:
-        out += "            sqrrl__temp.append(sqrrl__e)\n"
+        out += "            temp.append(e)\n"
     else:
-        out += "            _ = sqrrl__e\n"
-    out += "            if not sqrrl__sc.try_consume_byte(UInt8(ord(\",\"))):\n"
+        out += "            _ = e\n"
+    out += "            if not sc.try_consume_byte(UInt8(ord(\",\"))):\n"
     out += "                break\n"
-    out += "        sqrrl__sc.expect_byte(UInt8(ord(\"]\")))\n"
+    out += "        sc.expect_byte(UInt8(ord(\"]\")))\n"
     return out^
 
 
@@ -1122,16 +1122,16 @@ def _emit_temp_keep_alives_struct(structs: List[DiscoveredStruct]) -> String:
 
 def _emit_world_to_json(topo_order: List[DiscoveredStruct]) -> String:
     var out = String("\ndef sqrrl__world_to_json(world: sqrrl__World) -> String:\n")
-    out += "    var sqrrl__out = String(\"{\")\n"
+    out += "    var out = String(\"{\")\n"
     var first = True
     for ds in topo_order:
         if not first:
-            out += "    sqrrl__out += \",\"\n"
-        out += "    sqrrl__out += " + _json_key_literal_source(ds.parsed.name) + "\n"
-        out += "    sqrrl__out += sqrrl__" + ds.parsed.name + "_all_to_json(world." + ds.parsed.name + ")\n"
+            out += "    out += \",\"\n"
+        out += "    out += " + _json_key_literal_source(ds.parsed.name) + "\n"
+        out += "    out += sqrrl__" + ds.parsed.name + "_all_to_json(world." + ds.parsed.name + ")\n"
         first = False
-    out += "    sqrrl__out += \"}\"\n"
-    out += "    return sqrrl__out^\n"
+    out += "    out += \"}\"\n"
+    out += "    return out^\n"
     return out^
 
 
@@ -1145,14 +1145,14 @@ def _emit_world_from_json(
     inside `handle_for` -- not a new gap this introduces, matching
     rw_squirrel_2's own identical property)."""
     var out = String(
-        "\ndef sqrrl__world_from_json(mut world: sqrrl__World, mut sqrrl__sc: sqrrl__JsonScanner, mut"
-        " sqrrl__temp: sqrrl__TempKeepAlives) raises:\n"
+        "\ndef sqrrl__world_from_json(mut world: sqrrl__World, mut sc: sqrrl__JsonScanner, mut"
+        " temp: sqrrl__TempKeepAlives) raises:\n"
     )
-    out += "    sqrrl__sc.expect_byte(UInt8(ord(\"{\")))\n"
-    out += "    if not sqrrl__sc.try_consume_byte(UInt8(ord(\"}\"))):\n"
+    out += "    sc.expect_byte(UInt8(ord(\"{\")))\n"
+    out += "    if not sc.try_consume_byte(UInt8(ord(\"}\"))):\n"
     out += "        while True:\n"
-    out += "            var sqrrl__key = sqrrl__sc.parse_json_string()\n"
-    out += "            sqrrl__sc.expect_byte(UInt8(ord(\":\")))\n"
+    out += "            var key = sc.parse_json_string()\n"
+    out += "            sc.expect_byte(UInt8(ord(\":\")))\n"
     var branch_kw = "            if"
     for ds in topo_order:
         var siblings = _sibling_relation_targets(ds.parsed.fields, plain_struct_fields)
@@ -1160,16 +1160,16 @@ def _emit_world_from_json(
         for target in siblings:
             call_args += ", world." + target
         if not ds.parsed.is_keepalive:
-            call_args += ", sqrrl__temp." + ds.parsed.name
-        call_args += ", sqrrl__sc"
-        out += branch_kw + " sqrrl__key == " + _quoted(ds.parsed.name) + ":\n"
+            call_args += ", temp." + ds.parsed.name
+        call_args += ", sc"
+        out += branch_kw + " key == " + _quoted(ds.parsed.name) + ":\n"
         out += "                sqrrl__" + ds.parsed.name + "_all_from_json(" + call_args + ")\n"
         branch_kw = "            elif"
     out += "            else:\n"
-    out += "                raise Error(\"InvalidJson: unknown struct \" + sqrrl__key + \" in dump\")\n"
-    out += "            if not sqrrl__sc.try_consume_byte(UInt8(ord(\",\"))):\n"
+    out += "                raise Error(\"InvalidJson: unknown struct \" + key + \" in dump\")\n"
+    out += "            if not sc.try_consume_byte(UInt8(ord(\",\"))):\n"
     out += "                break\n"
-    out += "        sqrrl__sc.expect_byte(UInt8(ord(\"}\")))\n"
+    out += "        sc.expect_byte(UInt8(ord(\"}\")))\n"
     return out^
 
 
@@ -1187,17 +1187,17 @@ def _emit_orchestration() -> String:
     out += "\ndef sqrrl__begin_init_from_json(mut world: sqrrl__World, json: String) raises -> sqrrl__TempKeepAlives:\n"
     out += "    world.sqrrl__check_no_leaks()\n"
     out += "    world = sqrrl__init()\n"
-    out += "    var sqrrl__sc = sqrrl__JsonScanner(json)\n"
-    out += "    var sqrrl__temp = sqrrl__TempKeepAlives()\n"
-    out += "    sqrrl__world_from_json(world, sqrrl__sc, sqrrl__temp)\n"
-    out += "    return sqrrl__temp^\n"
+    out += "    var sc = sqrrl__JsonScanner(json)\n"
+    out += "    var temp = sqrrl__TempKeepAlives()\n"
+    out += "    sqrrl__world_from_json(world, sc, temp)\n"
+    out += "    return temp^\n"
 
-    out += "\ndef sqrrl__end_init_from_json(var sqrrl__temp: sqrrl__TempKeepAlives):\n"
+    out += "\ndef sqrrl__end_init_from_json(var temp: sqrrl__TempKeepAlives):\n"
     out += "    pass\n"
 
     out += "\ndef sqrrl__init_from_json(mut world: sqrrl__World, json: String) raises:\n"
-    out += "    var sqrrl__temp = sqrrl__begin_init_from_json(world, json)\n"
-    out += "    sqrrl__end_init_from_json(sqrrl__temp^)\n"
+    out += "    var temp = sqrrl__begin_init_from_json(world, json)\n"
+    out += "    sqrrl__end_init_from_json(temp^)\n"
     return out^
 
 
@@ -1307,7 +1307,7 @@ def _emit_plain_struct_from_json(
     var params = String()
     for target in siblings:
         params += "sqrrl__tbl_" + target + ": " + sqrrl_prefixed(target) + "Table, "
-    params += "mut sqrrl__sc: sqrrl__JsonScanner"
+    params += "mut sc: sqrrl__JsonScanner"
 
     var type_param_decl = String()
     var type_param_names = String()
@@ -1330,16 +1330,16 @@ def _emit_plain_struct_from_json(
         "\ndef sqrrl__" + name + "_from_json" + type_param_decl + "(" + params + ") raises -> " + return_type + ":\n"
     )
     for f in fields:
-        out += "    var sqrrl__parsed_" + f.name + ": Optional[" + rewritten_field_type(f.type_str, plain_struct_names) + "] = None\n"
+        out += "    var parsed_" + f.name + ": Optional[" + rewritten_field_type(f.type_str, plain_struct_names) + "] = None\n"
 
-    out += "    sqrrl__sc.expect_byte(UInt8(ord(\"{\")))\n"
-    out += "    if not sqrrl__sc.try_consume_byte(UInt8(ord(\"}\"))):\n"
+    out += "    sc.expect_byte(UInt8(ord(\"{\")))\n"
+    out += "    if not sc.try_consume_byte(UInt8(ord(\"}\"))):\n"
     out += "        while True:\n"
-    out += "            var sqrrl__key = sqrrl__sc.parse_json_string()\n"
-    out += "            sqrrl__sc.expect_byte(UInt8(ord(\":\")))\n"
+    out += "            var key = sc.parse_json_string()\n"
+    out += "            sc.expect_byte(UInt8(ord(\":\")))\n"
     var branch_kw = "            if"
     for f in fields:
-        out += branch_kw + " sqrrl__key == " + _quoted(f.name) + ":\n"
+        out += branch_kw + " key == " + _quoted(f.name) + ":\n"
         branch_kw = "            elif"
         if _is_supported_container_field(f) and _type_involves_relation(
             parse_type_expr(f.type_str), plain_struct_fields, plain_struct_type_params
@@ -1352,15 +1352,15 @@ def _emit_plain_struct_from_json(
             # deliberately unsupported) must fall through to the
             # container rejection, not this single-bare-id dispatch.
             var target = _relation_target_name(f)
-            out += "                var sqrrl__rid_" + f.name + " = UInt32(sqrrl__sc.parse_json_int())\n"
+            out += "                var rid_" + f.name + " = UInt32(sc.parse_json_int())\n"
             out += (
-                "                sqrrl__parsed_"
+                "                parsed_"
                 + f.name
                 + " = "
                 + sqrrl_prefixed(target)
                 + "(sqrrl__tbl_"
                 + target
-                + ".storage[].handle_for(sqrrl__rid_"
+                + ".storage[].handle_for(rid_"
                 + f.name
                 + "))\n"
             )
@@ -1373,7 +1373,7 @@ def _emit_plain_struct_from_json(
             var plain_base = _plain_struct_value_base(f, plain_struct_names)
             if plain_base:
                 var call = _plain_struct_from_json_call(plain_base.value(), plain_struct_fields, plain_struct_names)
-                out += "                sqrrl__parsed_" + f.name + " = " + call + "\n"
+                out += "                parsed_" + f.name + " = " + call + "\n"
             elif _is_json_unsupported_container_field(f):
                 raise _unsupported_container_field_error(name, f.name, f.type_str)
             elif _is_supported_container_field(f) or f.type_str in type_param_name_set:
@@ -1391,11 +1391,11 @@ def _emit_plain_struct_from_json(
                 # collection pass registered, or falls through to the
                 # static default for a plain leaf).
                 out += (
-                    "                sqrrl__parsed_"
+                    "                parsed_"
                     + f.name
                     + " = sqrrl__from_json["
                     + rewritten_field_type(f.type_str, plain_struct_names)
-                    + "](sqrrl__sc)\n"
+                    + "](sc)\n"
                 )
             else:
                 # An ordinary leaf, or a genuinely undiscovered plain-
@@ -1403,20 +1403,20 @@ def _emit_plain_struct_from_json(
                 # hatch) -- `_leaf_from_json_expr` already handles both,
                 # unchanged.
                 out += (
-                    "                sqrrl__parsed_"
+                    "                parsed_"
                     + f.name
                     + " = "
                     + _leaf_from_json_expr(name, f.name, f.type_str, type_param_name_set)
                     + "\n"
                 )
     out += "            else:\n"
-    out += "                raise Error(\"InvalidJson: unknown field \" + sqrrl__key + \" for " + name + "\")\n"
-    out += "            if not sqrrl__sc.try_consume_byte(UInt8(ord(\",\"))):\n"
+    out += "                raise Error(\"InvalidJson: unknown field \" + key + \" for " + name + "\")\n"
+    out += "            if not sc.try_consume_byte(UInt8(ord(\",\"))):\n"
     out += "                break\n"
-    out += "        sqrrl__sc.expect_byte(UInt8(ord(\"}\")))\n"
+    out += "        sc.expect_byte(UInt8(ord(\"}\")))\n"
 
     for f in fields:
-        out += "    if not sqrrl__parsed_" + f.name + ":\n"
+        out += "    if not parsed_" + f.name + ":\n"
         out += "        raise Error(\"InvalidJson: missing field " + f.name + " for " + name + "\")\n"
 
     var ctor_args = String()
@@ -1424,7 +1424,7 @@ def _emit_plain_struct_from_json(
     for f in fields:
         if not first:
             ctor_args += ", "
-        ctor_args += f.name + "=sqrrl__parsed_" + f.name + ".take()"
+        ctor_args += f.name + "=parsed_" + f.name + ".take()"
         first = False
     out += "    return " + return_type + "(" + ctor_args + ")\n"
     return out^
@@ -1498,7 +1498,7 @@ def _emit_plain_struct_dispatch_branch(t: TypeExpr, mut from_json_out: String):
     `t` (`_collect_dispatch_types` already guarantees relation-free, so
     the call needs no sibling table -- `_emit_plain_struct_from_json`'s
     own generated function for a relation-free plain struct takes only
-    `sqrrl__sc`, nothing else). No dump-direction branch needed at all --
+    `sc`, nothing else). No dump-direction branch needed at all --
     `sqrrl__to_json_default`'s own `reflect[T]`-based fallback already
     handles *any* struct shape generically, plain-struct or not, matching
     rw_squirrel_2's own identical omission (confirmed by reading their
@@ -1645,7 +1645,7 @@ def emit_json_module(
     # reachable, with no separate top-level walk needed). This is what
     # `_emit_to_json`/`_emit_from_json_with_id`/`_emit_plain_struct_from_
     # json`'s own field-level `sqrrl__to_json(value)`/`sqrrl__from_json[
-    # FieldType](sqrrl__sc)` calls resolve against -- including a generic
+    # FieldType](sc)` calls resolve against -- including a generic
     # plain struct's own bare-type-parameter field (`Box[T]`'s `value:
     # T`), which is what actually closes that gap: `T` stays bare inside
     # `Box`'s own still-generic `from_json`, resolved only once some real
