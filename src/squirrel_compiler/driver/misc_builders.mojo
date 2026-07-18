@@ -129,3 +129,32 @@ def uses_json_entry_point(generated: String) -> Bool:
         or "sqrrl__end_init_from_json(" in generated
         or "sqrrl__world_to_json(" in generated
     )
+
+
+def project_uses_json(sqrrl_files: List[String]) raises -> Bool:
+    """True if *any* file project-wide touches JSON at all -- scans each
+    file's own *raw* `.mojo.sqrrl` source (before any transformation) for
+    one of the three DSL-level markers (`@@@to_json`/`@@@begin_init_from_
+    json`/`@@@init_from_json` -- `@@@end_init_from_json` never appears
+    without a paired `@@@begin_init_from_json` in valid source, already
+    enforced elsewhere, so checking it separately would be redundant).
+
+    Deliberately a *different*, earlier check than `uses_json_entry_
+    point` (which looks at each file's own already-*rewritten* text) --
+    this one has to run *before* `emit_file`/`transform_source` do,
+    because its own result (whether `codegen/entity.mojo`'s `emit_entity`
+    adds `sqrrl__JsonSerializable` conformance to a struct it's *currently
+    emitting*) can't wait for `emit_file`'s own output to exist yet. A
+    plain substring scan over raw source risks a false match inside a
+    comment/string in principle, but the failure mode is only ever "the
+    trait gets included even though nothing needed it" -- conservative,
+    never a silent miscompile, matching the same reasoning `_collect_
+    dispatch_types`'s own doc comment in `driver/json_module.mojo` uses
+    for a different check."""
+    for path in sqrrl_files:
+        var f = open(path, "r")
+        var source = f.read()
+        f.close()
+        if "@@@to_json" in source or "@@@begin_init_from_json" in source or "@@@init_from_json" in source:
+            return True
+    return False

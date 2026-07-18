@@ -15,9 +15,17 @@ def transform_source(
     stats_fields: Dict[String, List[String]] = Dict[String, List[String]](),
     plain_struct_names: Dict[String, Bool] = Dict[String, Bool](),
     plain_value_fields: Dict[String, Dict[String, String]] = Dict[String, Dict[String, String]](),
+    json_used: Bool = False,
 ) raises -> String:
     """Entry point for converting one whole `.mojo.sqrrl` file: builds a
-    fresh `RewriteContext` and hands off to `rewrite_markers`."""
+    fresh `RewriteContext` and hands off to `rewrite_markers`. `json_used`
+    (whether the whole project touches JSON at all -- `driver/misc_
+    builders.mojo`'s `project_uses_json`, computed *before* any file gets
+    transformed, unlike `uses_json_entry_point`) gates `codegen/entity.
+    mojo`'s own `sqrrl__JsonSerializable` conformance -- consumed only by
+    JSON codegen (`driver/json_module.mojo`'s own module doc comment), so
+    a project that never touches JSON at all shouldn't carry it on every
+    entity unconditionally."""
     var ctx = RewriteContext(
         relation_schema=relation_schema.copy(),
         struct_names=struct_names.copy(),
@@ -33,5 +41,6 @@ def transform_source(
         entity_to_type=Dict[String, String](),
         world_declared=False,
         temp_keep_alives_declared=False,
+        json_used=json_used,
     )
     return rewrite_markers(source, ctx)

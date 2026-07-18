@@ -699,8 +699,7 @@ def test_transform_trait_list_appears_on_wrapper() raises:
         src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
     )
     assert_true(
-        "struct sqrrl__Person(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable,"
-        " sqrrl__JsonSerializable, HasId):" in out
+        "struct sqrrl__Person(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable, HasId):" in out
     )
     assert_true("def entity_id(self) -> UInt32:" in out)
     assert_true("return self.id()" in out)
@@ -1288,11 +1287,43 @@ def test_transform_entity_gets_json_serializable_conformance() raises:
         + "    name: String\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields, json_used=True
     )
     assert_true("sqrrl__JsonSerializable" in out)
     assert_true("def sqrrl__to_json(self) -> String:" in out)
     assert_true("return String(self.id())" in out)
+
+
+def test_transform_entity_omits_json_serializable_when_project_never_uses_json() raises:
+    """The reverse of the test above (and the new default, matching
+    `transform_source`'s own `json_used: Bool = False`): a project that
+    never touches JSON anywhere doesn't carry `sqrrl__JsonSerializable`
+    conformance or its `sqrrl__to_json` method on any entity at all --
+    the JSON-container-dispatch rearchitecture's own relation-dump special
+    -casing (calling `.id()` directly wherever the compiler already knows
+    a field is a relation) left the trait's only remaining consumer as
+    `sqrrl__to_json_default`'s `reflect[T]`-based fallback recursing into
+    a *plain struct's* own embedded relation field -- meaningless unless
+    the project generates that dispatcher at all."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Person"] = True
+    var function_returns = Dict[String, String]()
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+
+    var src = String(
+        "@@struct @@Person:\n"
+        + "    name: String\n"
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+    )
+    assert_true("sqrrl__JsonSerializable" not in out)
+    assert_true("sqrrl__to_json" not in out)
+    assert_true(
+        "struct sqrrl__Person(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable):" in out
+    )
 
 
 def test_transform_begin_and_end_init_from_json() raises:
@@ -1693,7 +1724,7 @@ def test_emit_json_module_wrapped_relation_list_round_trips() raises:
     # this field's own dump, so it's always "1").
     assert_true("ref sqrrl__fv_members = e._inner[].get_sqrrl__members()" in out)
     assert_true("for sqrrl__dv1 in sqrrl__fv_members:" in out)
-    assert_true("sqrrl__ds1 += sqrrl__to_json(sqrrl__dv1)" in out)
+    assert_true("sqrrl__ds1 += String(sqrrl__dv1.id())" in out)
     # Reload: builds a real List via .append(...), not Set/.add(...) --
     # the id-parse is inlined directly into the call (no separate local),
     # since `_parse_value_expr` returns a plain expression for a relation
@@ -1734,7 +1765,7 @@ def test_emit_json_module_wrapped_relation_optional_round_trips() raises:
     # Dump: null-or-value, not an array.
     assert_true("ref sqrrl__fv_members = e._inner[].get_sqrrl__members()" in out)
     assert_true("if sqrrl__fv_members:" in out)
-    assert_true("sqrrl__ds1 = sqrrl__to_json(sqrrl__fv_members.value())" in out)
+    assert_true("sqrrl__ds1 = String(sqrrl__fv_members.value().id())" in out)
     assert_true('sqrrl__ds1 = "null"' in out)
     # Reload: null -> empty Optional, else the parsed element wrapped in one.
     assert_true('if sqrrl__sc.try_consume_literal("null"):' in out)
@@ -1747,19 +1778,34 @@ def test_emit_json_module_wrapped_relation_optional_round_trips() raises:
 
 
 def test_emit_json_module_plain_leaf_container_round_trips() raises:
-    """Parity with rw_squirrel_1/2: a plain (non-relation) container field --
-    `tags: List[String]`, no `@@` anywhere -- round-trips too, via the
-    exact same machinery, just with `_parse_value_expr`'s leaf branch
-    instead of its relation branch (no sibling table needed at all)."""
+    """A plain (non-relation) container field -- `tags: List[String]`, no
+    `@@` anywhere -- routes through the shared, generic `sqrrl__to_json`/
+    `sqrrl__from_json[T]` dispatcher rather than per-field inline codegen
+    (the JSON-container-dispatch rearchitecture): the field itself is just
+    a uniform dispatcher call, and the dispatch table gets its own `List[
+    String]` branch built from the built-in `sqrrl__List_json_to_list`/
+    `_from_list` adapters plus the shared `list_to_json`/`list_from_json`
+    helpers -- no per-project hand-rolled parse loop any more."""
     var employee_fields = List[Field]()
     employee_fields.append(Field(name="name", type_str="String", modifier=FieldModifier.UNIQUE, is_stats=False))
     employee_fields.append(Field(name="tags", type_str="List[String]", modifier=FieldModifier.NONE, is_stats=False))
     var structs = List[DiscoveredStruct]()
     structs.append(DiscoveredStruct(module_path="main", parsed=ParsedStruct(name="Employee", fields=employee_fields^)))
     var out = emit_json_module(structs, structs)
-    assert_true("var sqrrl__nc1 = List[String]()" in out)
-    assert_true("sqrrl__nc1.append(sqrrl__sc.parse_json_string())" in out)
-    assert_true("sqrrl__parsed_tags = sqrrl__nc1^" in out)
+    # Field-level: both directions are a single uniform dispatcher call.
+    assert_true("sqrrl__out += sqrrl__to_json(e._inner[].get_tags())" in out)
+    assert_true("sqrrl__parsed_tags = sqrrl__from_json[List[String]](sqrrl__sc)" in out)
+    # The dispatch table itself has a branch built from the built-in List
+    # adapters and the shared list_to_json/list_from_json helpers.
+    assert_true(
+        "elif T == List[String]:\n        return list_to_json(sqrrl__List_json_to_list(rebind[List[String]](value)))"
+        in out
+    )
+    assert_true(
+        "elif T == List[String]:\n        return sqrrl__movable_rebind[List[String], T](sqrrl__List_json_from_list"
+        "(list_from_json[String](sqrrl__sc)))"
+        in out
+    )
 
 
 def test_emit_json_module_dict_field_round_trips() raises:
@@ -1782,7 +1828,7 @@ def test_emit_json_module_dict_field_round_trips() raises:
     assert_true("ref sqrrl__fv_scores = e._inner[].get_sqrrl__scores()" in out)
     assert_true("for sqrrl__de1 in sqrrl__fv_scores.items():" in out)
     assert_true(
-        'sqrrl__ds1 += "[" + sqrrl__to_json(sqrrl__de1.key) + "," + sqrrl__to_json(sqrrl__de1.value) + "]"'
+        'sqrrl__ds1 += "[" + String(sqrrl__de1.key.id()) + "," + sqrrl__to_json(sqrrl__de1.value) + "]"'
         in out
     )
     # Reload: builds a real Dict, parsing the relation key and leaf value
@@ -1798,12 +1844,16 @@ def test_emit_json_module_dict_field_round_trips() raises:
 
 def test_emit_json_module_nested_container_round_trips() raises:
     """A further-nested container as an element (`List[List[String]]`) is
-    now fully supported, at arbitrary depth -- `_parse_value_expr`'s own
-    recursion, verified two levels deep: the outer `List` builds via a
-    nested parse loop whose own element expression is itself a *second*
-    complete inner `List` parse loop, each with independently-numbered
-    temp locals (`sqrrl__nc1` outer, `sqrrl__nc2` inner) so they can't
-    collide despite being emitted into the very same function body."""
+    fully supported at arbitrary depth via the shared dispatcher (the
+    JSON-container-dispatch rearchitecture): the field itself is a single
+    uniform dispatcher call for the *outer* `List[List[String]]`, whose
+    own dispatch-table branch converts to/from a generic `List[List[
+    String]]` via `list_to_json`/`list_from_json` -- the *inner* `List[
+    String]` element then recurses back into `sqrrl__to_json`/`sqrrl__
+    from_json[T]` uniformly too, needing its own separate dispatch-table
+    branch (registered independently by the same collection walk that
+    found the outer one, since `_collect_dispatch_types` recurses into a
+    container's own element types)."""
     var employee_fields = List[Field]()
     employee_fields.append(Field(name="name", type_str="String", modifier=FieldModifier.UNIQUE, is_stats=False))
     employee_fields.append(
@@ -1812,27 +1862,38 @@ def test_emit_json_module_nested_container_round_trips() raises:
     var structs = List[DiscoveredStruct]()
     structs.append(DiscoveredStruct(module_path="main", parsed=ParsedStruct(name="Employee", fields=employee_fields^)))
     var out = emit_json_module(structs, structs)
-    assert_true("var sqrrl__nc1 = List[List[String]]()" in out)
-    assert_true("var sqrrl__nc2 = List[String]()" in out)
-    assert_true("sqrrl__nc2.append(sqrrl__sc.parse_json_string())" in out)
-    assert_true("sqrrl__nc1.append(sqrrl__nc2^)" in out)
-    assert_true("sqrrl__parsed_groups = sqrrl__nc1^" in out)
+    assert_true("sqrrl__out += sqrrl__to_json(e._inner[].get_groups())" in out)
+    assert_true("sqrrl__parsed_groups = sqrrl__from_json[List[List[String]]](sqrrl__sc)" in out)
+    # Both the outer and the inner List each get their own dispatch-table
+    # branch -- confirms the collection walk recurses into elements.
+    assert_true(
+        "elif T == List[List[String]]:\n        return list_to_json(sqrrl__List_json_to_list(rebind[List[List[String]]]"
+        "(value)))"
+        in out
+    )
+    assert_true(
+        "elif T == List[String]:\n        return list_to_json(sqrrl__List_json_to_list(rebind[List[String]](value)))"
+        in out
+    )
 
 
 def test_emit_json_module_custom_container_wrapper_uses_escape_hatch() raises:
     """A custom, single-type-argument wrapper (anything other than
-    `List`/`Set`/`Optional`) has neither a guaranteed no-arg constructor
-    (a `@fieldwise_init` struct's own synthesized `__init__` takes every
-    field, confirmed via a real compile) nor a known build-up method or
-    `__iter__` -- reload parses into an ordinary `List` (something this
-    codegen already knows how to build) and hands the *whole list* to a
-    hand-written `sqrrl__<Wrapper>_json_from_list` companion; dump does
-    the mirror image via `sqrrl__<Wrapper>_json_to_list`, converting to a
-    `List` before iterating rather than assuming `__iter__` exists on the
-    wrapper itself. Also confirms the corresponding import line for both
-    companions (plus the wrapper type itself) is emitted, sourced from
-    whichever struct's own module first referenced the wrapper -- the one
-    piece of this escape hatch with no other way to be discovered."""
+    `List`/`Set`/`Optional`/`Dict`) has neither a guaranteed no-arg
+    constructor (a `@fieldwise_init` struct's own synthesized `__init__`
+    takes every field, confirmed via a real compile) nor a known build-up
+    method or `__iter__` -- the field itself is a single uniform
+    dispatcher call, same as any other container; the dispatch table's
+    own branch for it converts to/from a generic `List` via the exact
+    same hand-written `sqrrl__<Wrapper>_json_to_list`/`_json_from_list`
+    escape-hatch companions this project has always required (unchanged
+    contract, just called from a dispatch-table branch now instead of
+    inline per-field code), feeding into the shared `list_to_json`/`list_
+    from_json` helpers. Also confirms the corresponding import line for
+    both companions (plus the wrapper type itself) is still emitted,
+    sourced from whichever struct's own module first referenced the
+    wrapper -- the one piece of this escape hatch with no other way to be
+    discovered."""
     var employee_fields = List[Field]()
     employee_fields.append(Field(name="name", type_str="String", modifier=FieldModifier.UNIQUE, is_stats=False))
     employee_fields.append(Field(name="tags", type_str="Ring[String]", modifier=FieldModifier.NONE, is_stats=False))
@@ -1840,15 +1901,17 @@ def test_emit_json_module_custom_container_wrapper_uses_escape_hatch() raises:
     structs.append(DiscoveredStruct(module_path="main", parsed=ParsedStruct(name="Employee", fields=employee_fields^)))
     var out = emit_json_module(structs, structs)
     assert_true("from main import Ring, sqrrl__Ring_json_to_list, sqrrl__Ring_json_from_list" in out)
-    # Dump: converts to a List before iterating (Ring isn't guaranteed
-    # `__iter__`).
-    assert_true("ref sqrrl__fv_tags = e._inner[].get_tags()" in out)
-    assert_true("for sqrrl__dv1 in sqrrl__Ring_json_to_list(sqrrl__fv_tags):" in out)
-    # Reload: parses into an ordinary List, then hands the whole thing to
-    # the wrapper's own from_list companion.
-    assert_true("var sqrrl__nc1 = List[String]()" in out)
-    assert_true("sqrrl__nc1.append(sqrrl__sc.parse_json_string())" in out)
-    assert_true("sqrrl__parsed_tags = sqrrl__Ring_json_from_list(sqrrl__nc1^)" in out)
+    assert_true("sqrrl__out += sqrrl__to_json(e._inner[].get_tags())" in out)
+    assert_true("sqrrl__parsed_tags = sqrrl__from_json[Ring[String]](sqrrl__sc)" in out)
+    assert_true(
+        "elif T == Ring[String]:\n        return list_to_json(sqrrl__Ring_json_to_list(rebind[Ring[String]](value)))"
+        in out
+    )
+    assert_true(
+        "elif T == Ring[String]:\n        return sqrrl__movable_rebind[Ring[String], T](sqrrl__Ring_json_from_list"
+        "(list_from_json[String](sqrrl__sc)))"
+        in out
+    )
 
 
 def test_emit_json_module_two_argument_non_dict_wrapper_rejected() raises:

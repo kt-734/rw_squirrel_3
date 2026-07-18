@@ -1,6 +1,5 @@
 from squirrel_runtime.entity_storage import EntityStorage
 from squirrel_runtime.index import PlainIndex, UniqueIndex, MultiIndex, OrderedIndex
-from squirrel_runtime.json import sqrrl__JsonSerializable, sqrrl__to_json
 from std.memory import ArcPointer
 from std.hashlib import Hasher
 from std.collections import Set
@@ -38,7 +37,7 @@ struct sqrrl__EmployeeInner(Movable, ImplicitlyDeletable):
         return self._sqrrl__dept
 
 
-struct sqrrl__Employee(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable, sqrrl__JsonSerializable):
+struct sqrrl__Employee(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable):
     var _inner: ArcPointer[sqrrl__EmployeeInner]
 
     def __init__(out self, var inner: sqrrl__EmployeeInner):
@@ -62,8 +61,6 @@ struct sqrrl__Employee(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeleta
     def __ne__(self, other: Self) -> Bool:
         return self.id() != other.id()
 
-    def sqrrl__to_json(self) -> String:
-        return String(self.id())
 
 
 struct sqrrl__EmployeeIndexes(Movable, ImplicitlyDeletable):

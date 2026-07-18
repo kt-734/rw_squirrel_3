@@ -5,7 +5,7 @@ from squirrel_runtime.json import (
     sqrrl__escape_json_string,
     sqrrl__json_string_literal,
     sqrrl__json_bool_literal,
-    sqrrl__to_json,
+    sqrrl__to_json_default,
     sqrrl__JsonSerializable,
 )
 
@@ -131,12 +131,12 @@ def test_round_trip_through_literal_helpers_and_scanner() raises:
 
 
 def test_sqrrl_to_json_leaf_types() raises:
-    assert_equal(sqrrl__to_json(String("hi")), '"hi"')
-    assert_equal(sqrrl__to_json(Bool(True)), "true")
-    assert_equal(sqrrl__to_json(Bool(False)), "false")
-    assert_equal(sqrrl__to_json(Int(42)), "42")
-    assert_equal(sqrrl__to_json(UInt32(7)), "7")
-    assert_equal(sqrrl__to_json(Float64(2.0)), "2.0")
+    assert_equal(sqrrl__to_json_default(String("hi")), '"hi"')
+    assert_equal(sqrrl__to_json_default(Bool(True)), "true")
+    assert_equal(sqrrl__to_json_default(Bool(False)), "false")
+    assert_equal(sqrrl__to_json_default(Int(42)), "42")
+    assert_equal(sqrrl__to_json_default(UInt32(7)), "7")
+    assert_equal(sqrrl__to_json_default(Float64(2.0)), "2.0")
 
 
 def test_sqrrl_to_json_dispatches_json_serializable_conformance_to_bare_id() raises:
@@ -146,7 +146,7 @@ def test_sqrrl_to_json_dispatches_json_serializable_conformance_to_bare_id() rai
     sqrrl__JsonSerializable)`, never the `reflect[T]` fallback, for
     anything that conforms."""
     var e = _FakeEntity(row_id=9)
-    assert_equal(sqrrl__to_json(e), "9")
+    assert_equal(sqrrl__to_json_default(e), "9")
 
 
 def test_sqrrl_to_json_reflects_nested_plain_struct_at_any_depth() raises:
@@ -156,7 +156,7 @@ def test_sqrrl_to_json_reflects_nested_plain_struct_at_any_depth() raises:
     needs no generated code and no DSL-side declaration at all (plan's
     §7), including through a struct nested inside another one."""
     var o = _Outer(name="alice", inner=_Inner(label="x", count=3))
-    assert_equal(sqrrl__to_json(o), '{"name":"alice","inner":{"label":"x","count":3}}')
+    assert_equal(sqrrl__to_json_default(o), '{"name":"alice","inner":{"label":"x","count":3}}')
 
 
 def main() raises:

@@ -18,7 +18,7 @@ from squirrel_compiler.driver.discovery import (
     check_plain_struct_names_disjoint,
 )
 from squirrel_compiler.driver.cycles import check_no_relation_cycles
-from squirrel_compiler.driver.misc_builders import build_function_returns, check_single_world_scope_call, uses_json_entry_point
+from squirrel_compiler.driver.misc_builders import build_function_returns, check_single_world_scope_call, project_uses_json
 from squirrel_compiler.driver.world_module import emit_world_module
 from squirrel_compiler.driver.topo_order import topo_sort_structs
 from squirrel_compiler.driver.json_module import emit_json_module
@@ -75,27 +75,29 @@ def convert_directory(target_root: String) raises:
 
     # Per-file output is computed *before* deciding whether to generate
     # `sqrrl__json.mojo` -- a project that never calls a whole-world JSON
-    # entry point anywhere (`uses_json_entry_point`, checked against each
-    # file's own already-rewritten output) shouldn't be forced to make
-    # every field JSON-parseable just because the file always got
-    # generated unconditionally (real gap: any struct with a container
-    # field JSON doesn't support -- `Dict[@@X,V]`, a custom container type
-    # -- used to fail the *entire project's* conversion even when the
-    # script never touched JSON at all). If genuinely unused project-wide,
-    # skip generating the file entirely rather than half-supporting it.
+    # entry point anywhere (`project_uses_json`, scanning every file's own
+    # *raw* source up front -- has to run before `emit_file` does, since
+    # its result now also gates `codegen/entity.mojo`'s own `sqrrl__
+    # JsonSerializable` conformance while a struct is *being* emitted, not
+    # just whether `sqrrl__json.mojo` gets written afterward) shouldn't be
+    # forced to make every field JSON-parseable, or carry JSON-only
+    # conformance on every entity, just because generation used to be
+    # unconditional (real gap: any struct with a container field JSON
+    # doesn't support -- `Dict[@@X,V]`, a custom container type -- used to
+    # fail the *entire project's* conversion even when the script never
+    # touched JSON at all). If genuinely unused project-wide, skip both
+    # rather than half-supporting them.
+    var json_used = project_uses_json(sqrrl_files)
     var out_paths = List[String]()
     var generated_files = List[String]()
-    var json_used = False
     for path in sqrrl_files:
         var out_path = mojo_output_path(path)
         var own_module_path = module_path_for(path, target_root)
         var generated = emit_file(
             path, own_module_path, relation_schema, struct_names, function_returns, unique_fields,
             indexed_fields, multi_fields, ordered_fields, world_methods, stats_fields, entity_symbols,
-            plain_struct_names, plain_value_fields
+            plain_struct_names, plain_value_fields, json_used
         )
-        if uses_json_entry_point(generated):
-            json_used = True
         out_paths.append(out_path)
         generated_files.append(generated^)
 

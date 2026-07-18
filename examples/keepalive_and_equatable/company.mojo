@@ -1,6 +1,5 @@
 from squirrel_runtime.entity_storage import EntityStorage
 from squirrel_runtime.index import PlainIndex, UniqueIndex, MultiIndex, OrderedIndex
-from squirrel_runtime.json import sqrrl__JsonSerializable, sqrrl__to_json
 from std.memory import ArcPointer
 from std.hashlib import Hasher
 from std.collections import Set
@@ -29,7 +28,7 @@ struct sqrrl__ProjectInner(Movable, ImplicitlyDeletable):
         return self._name
 
 
-struct sqrrl__Project(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable, sqrrl__JsonSerializable):
+struct sqrrl__Project(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable):
     var _inner: ArcPointer[sqrrl__ProjectInner]
 
     def __init__(out self, var inner: sqrrl__ProjectInner):
@@ -53,8 +52,6 @@ struct sqrrl__Project(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletab
     def __ne__(self, other: Self) -> Bool:
         return self.id() != other.id()
 
-    def sqrrl__to_json(self) -> String:
-        return String(self.id())
 
     def dont_keepalive(mut self) -> Bool:
         return self._inner[]._table[].keepalive_remove(self.id())
@@ -139,7 +136,7 @@ struct sqrrl__PersonInner(Movable, ImplicitlyDeletable):
         return self._age
 
 
-struct sqrrl__Person(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable, sqrrl__JsonSerializable):
+struct sqrrl__Person(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable):
     var _inner: ArcPointer[sqrrl__PersonInner]
 
     def __init__(out self, var inner: sqrrl__PersonInner):
@@ -163,8 +160,6 @@ struct sqrrl__Person(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletabl
     def __ne__(self, other: Self) -> Bool:
         return self.id() != other.id()
 
-    def sqrrl__to_json(self) -> String:
-        return String(self.id())
 
     def value_eq(self, other: Self) -> Bool:
         if self._inner[].get_name() != other._inner[].get_name():

@@ -160,7 +160,7 @@ def emit_entity_inner(parsed: ParsedStruct, plain_struct_names: Dict[String, Boo
     return out^
 
 
-def emit_entity(parsed: ParsedStruct, rewritten_method_body: String) -> String:
+def emit_entity(parsed: ParsedStruct, rewritten_method_body: String, json_used: Bool = False) -> String:
     """Emits `sqrrl__<Name>` -- the thin wrapper a script actually holds
     and passes around (Architecture: "Where user-declared `@@`-marked
     methods/traits splice in" -- onto this type, not `Inner`, since it's
@@ -168,10 +168,26 @@ def emit_entity(parsed: ParsedStruct, rewritten_method_body: String) -> String:
     has to attach to). Method/trait splicing itself lands in M3;
     `rewritten_method_body` is accepted now so the call site doesn't need
     to change shape when that happens, but M1 never passes anything
-    non-empty."""
+    non-empty.
+
+    `sqrrl__JsonSerializable` conformance (and the `sqrrl__to_json`
+    method satisfying it) is now conditional on `json_used` -- the
+    JSON-container-dispatch rearchitecture special-cased a *relation*
+    field's own dump to call `.id()` directly everywhere the compiler
+    already knows a field is a relation, so the trait's only remaining
+    consumer is `sqrrl__to_json_default`'s own `reflect[T]`-based
+    fallback recursing into a *plain struct's* own embedded relation
+    field generically (reflection has no other way to tell "this nested
+    field is an entity handle, dump its id" without it) -- needed only
+    when the project touches JSON at all (`driver/misc_builders.mojo`'s
+    `project_uses_json`, computed early enough in `driver/convert_
+    directory.mojo` to reach here, unlike the per-file `uses_json_entry_
+    point` check)."""
     var entity_name = sqrrl_prefixed(parsed.name)
     var inner_name = _inner_name(parsed.name)
-    var traits = String("Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable, sqrrl__JsonSerializable")
+    var traits = String("Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable")
+    if json_used:
+        traits += ", sqrrl__JsonSerializable"
     for t in parsed.trait_list:
         traits += ", " + t
 
@@ -206,13 +222,14 @@ def emit_entity(parsed: ParsedStruct, rewritten_method_body: String) -> String:
     out += "    def __ne__(self, other: Self) -> Bool:\n"
     out += "        return self.id() != other.id()\n"
     out += "\n"
-    # sqrrl__JsonSerializable conformance (M5): a relation field's own
-    # to_json is always just its target's bare id -- the target row itself
-    # is serialized separately, once, as part of its own table's dump
-    # (driver/json_module.mojo's emit_json_module), never inline at every
-    # place it's referenced from.
-    out += "    def sqrrl__to_json(self) -> String:\n"
-    out += "        return String(self.id())\n"
+    if json_used:
+        # sqrrl__JsonSerializable conformance (M5): a relation field's own
+        # to_json is always just its target's bare id -- the target row
+        # itself is serialized separately, once, as part of its own
+        # table's dump (driver/json_module.mojo's emit_json_module),
+        # never inline at every place it's referenced from.
+        out += "    def sqrrl__to_json(self) -> String:\n"
+        out += "        return String(self.id())\n"
     if parsed.is_equatable:
         # Instance method, not table-level (M4 correction): field-by-field
         # comparison never needs `sqrrl__world` or any table/index access

@@ -57,12 +57,16 @@ struct RewriteContext(Copyable, Movable):
     var entity_to_type: Dict[String, String]
     var world_declared: Bool
     var temp_keep_alives_declared: Bool
+    var json_used: Bool
 
     def fresh_function_scope(self) -> Self:
         """A copy of this context with `entity_to_type`/`world_declared`/
         `temp_keep_alives_declared` reset -- what a new top-level `def`
         resets to, and what rewriting a `@@struct`'s own spliced method body
-        needs too (M3)."""
+        needs too (M3). `json_used` (whether the whole project touches JSON
+        at all -- `driver/misc_builders.mojo`'s `project_uses_json`) is a
+        project-wide fact, not per-scope state, so it always carries over
+        unchanged, same as every other read-only analysis input above it."""
         return Self(
             relation_schema=self.relation_schema.copy(),
             struct_names=self.struct_names.copy(),
@@ -78,4 +82,5 @@ struct RewriteContext(Copyable, Movable):
             entity_to_type=Dict[String, String](),
             world_declared=False,
             temp_keep_alives_declared=False,
+            json_used=self.json_used,
         )

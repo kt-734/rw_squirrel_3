@@ -19,6 +19,7 @@ from squirrel_compiler.codegen.helpers import (
 )
 from squirrel_compiler.analysis import collect_relation_targets, collect_plain_struct_targets
 from squirrel_compiler.driver.discovery import DiscoveredStruct, PlainStructDiscovery
+from std.memory import ArcPointer
 
 # Generates `sqrrl__json.mojo` -- every JSON-related symbol for the whole
 # project, in one file, per the user's own non-negotiable constraint (see
@@ -107,6 +108,182 @@ def _is_supported_container_field(f: Field) -> Bool:
     if f.modifier == FieldModifier.MULTI or not is_container_type(f.type_str):
         return False
     return _container_wrapper_kind(parse_type_expr(f.type_str)) != ""
+
+
+def _substitute_type_params_expr(
+    t: TypeExpr, type_params: List[TypeParam], type_args: List[TypeExpr]
+) -> TypeExpr:
+    """Walks `t` (a parsed field type), replacing every `LEAF` node whose
+    name matches one of `type_params`'s own names with the correspondingly
+    -positioned entry in `type_args` -- e.g. substituting `T -> String`
+    turns `List[T]` into `List[String]`. Leaves a `RELATION` node alone
+    (never a type parameter's own name, since `@@T` isn't grammar this DSL
+    accepts) and a `PARAMETERIZED` node's own wrapper name alone too
+    (`List`, `Dict`, a plain struct's own name), recursing only into
+    `args`. Falls back to leaving a parameter's own name bare if `type_
+    args` doesn't have a correspondingly-positioned entry (a malformed
+    instantiation with too few type arguments) -- this function's job is
+    to emit useful Mojo, not validate arity; a genuinely wrong arity
+    surfaces as an ordinary Mojo compile error downstream instead.
+
+    Ported from rw_squirrel_2's own identical `substitute_type_params_
+    expr` (confirmed by reading their real source) -- needed here for
+    `_type_involves_relation`'s own walk into a generic plain struct's
+    fields at a concrete instantiation: e.g. `Box[@@Employee]`'s own
+    `value: T` field only reveals it reaches a relation once `T` is
+    actually substituted with `@@Employee`; `analysis.collect_relation_
+    targets`/`collect_plain_struct_targets` don't do this substitution at
+    all (confirmed by reading them) since they've never needed to before
+    -- a bare type parameter's own field previously only ever raised a
+    dedicated error, never reached generated-code-shape decisions like
+    this one."""
+    if t.kind == TypeExpr.LEAF:
+        for idx in range(len(type_params)):
+            if type_params[idx].name == t.name:
+                if idx < len(type_args):
+                    return type_args[idx].copy()
+                return t.copy()
+        return t.copy()
+    if t.kind == TypeExpr.PARAMETERIZED:
+        var new_args = List[ArcPointer[TypeExpr]]()
+        for i in range(t.arg_count()):
+            new_args.append(ArcPointer(_substitute_type_params_expr(t.arg(i), type_params, type_args)))
+        return TypeExpr(kind=TypeExpr.PARAMETERIZED, name=t.name, args=new_args^)
+    return t.copy()
+
+
+def _type_involves_relation(
+    t: TypeExpr,
+    plain_struct_fields: Dict[String, List[Field]],
+    plain_struct_type_params: Dict[String, List[TypeParam]],
+) raises -> Bool:
+    """True if `t` reaches a relation anywhere in its own structure -- a
+    bare `@@Employee`, or one nested inside a container (`List[
+    @@Employee]`, at any depth) or inside a discovered plain struct's own
+    field graph (`Address`'s `@@owner: @@Employee`, or -- the case that
+    needs `_substitute_type_params_expr` -- a generic plain struct's own
+    bare-type-parameter field once actually substituted with a relation
+    type argument, `Box[@@Employee]`'s own `value: T`).
+
+    The single field-level gate deciding which of two entirely different
+    reload/dump mechanisms a container-shaped (or generic-plain-struct-
+    bare-type-param-shaped) field goes through: `True` keeps using the
+    existing, unchanged `_parse_value_expr`/`_dump_value_expr` recursive
+    codegen (the only mechanism that can thread a relation's own sibling
+    table through, at any nesting depth); `False` routes the *whole*
+    field through the shared, generic `sqrrl__to_json`/`sqrrl__from_json[
+    T]` dispatcher instead (`driver/json_module.mojo`'s own module doc
+    comment has the full rationale for why these two mechanisms can't
+    simply be unified into one)."""
+    if t.is_relation():
+        return True
+    if t.name in plain_struct_fields:
+        var type_params = (
+            plain_struct_type_params[t.name].copy() if t.name in plain_struct_type_params else List[TypeParam]()
+        )
+        var type_args = List[TypeExpr]()
+        for i in range(t.arg_count()):
+            type_args.append(t.arg(i).copy())
+        for f in plain_struct_fields[t.name]:
+            var raw = parse_type_expr(f.type_str)
+            var substituted = _substitute_type_params_expr(raw, type_params, type_args)
+            if _type_involves_relation(substituted, plain_struct_fields, plain_struct_type_params):
+                return True
+        return False
+    for i in range(t.arg_count()):
+        if _type_involves_relation(t.arg(i), plain_struct_fields, plain_struct_type_params):
+            return True
+    return False
+
+
+def _collect_dispatch_types_from_type(
+    t: TypeExpr,
+    plain_struct_fields: Dict[String, List[Field]],
+    plain_struct_type_params: Dict[String, List[TypeParam]],
+    plain_struct_names: Dict[String, Bool],
+    mut seen_container: Dict[String, Bool],
+    mut container_out: List[TypeExpr],
+    mut seen_plain: Dict[String, Bool],
+    mut plain_out: List[TypeExpr],
+) raises:
+    """Collects every distinct, relation-free concrete type reachable from
+    `t` that the generated `sqrrl__to_json[T]`/`sqrrl__from_json[T]`
+    dispatch table (`emit_json_module`) needs its own explicit `elif T ==
+    ...:` branch for -- a container (`List`/`Set`/`Optional`/`Dict`, or a
+    custom single/double-type-argument wrapper) into `container_out`, or a
+    discovered plain struct's own concrete instantiation (bare or generic)
+    into `plain_out`. Recurses into a *relation-free* match's own element/
+    field types too (a container's element might itself be another
+    container or a plain struct; a plain struct's own field might be
+    another container/plain struct, or -- the case this whole mechanism
+    exists for -- its *own* bare type parameter, substituted here to
+    whatever concrete type this particular instantiation actually uses).
+
+    A relation-*involving* subtree is skipped entirely, not partially
+    registered -- `_type_involves_relation` gates both branches below,
+    matching the same field-level gate `_emit_to_json`/`_emit_from_json_
+    with_id`/`_emit_plain_struct_from_json` use to decide whether a whole
+    field routes through this dispatch table or keeps using the existing
+    `_parse_value_expr`/`_dump_value_expr` codegen -- a relation nested
+    *inside* an otherwise-dispatched subtree could never actually occur
+    once that gate is applied consistently at the field level, but this
+    function checks it again anyway at every recursion step: it's also
+    reachable directly (a plain struct's own field graph can be walked
+    from more than one field, at different nesting depths, independently
+    of whichever top-level field first triggered the walk)."""
+    if t.name in plain_struct_names:
+        if _type_involves_relation(t, plain_struct_fields, plain_struct_type_params):
+            return
+        if t.render() not in seen_plain:
+            seen_plain[t.render()] = True
+            plain_out.append(t.copy())
+        var type_params = (
+            plain_struct_type_params[t.name].copy() if t.name in plain_struct_type_params else List[TypeParam]()
+        )
+        var type_args = List[TypeExpr]()
+        for i in range(t.arg_count()):
+            type_args.append(t.arg(i).copy())
+        for f in plain_struct_fields[t.name]:
+            var raw = parse_type_expr(f.type_str)
+            var substituted = _substitute_type_params_expr(raw, type_params, type_args)
+            _collect_dispatch_types_from_type(
+                substituted, plain_struct_fields, plain_struct_type_params, plain_struct_names,
+                seen_container, container_out, seen_plain, plain_out,
+            )
+        return
+    if not t.is_parameterized():
+        return
+    if _container_wrapper_kind(t) == "":
+        return
+    if _type_involves_relation(t, plain_struct_fields, plain_struct_type_params):
+        return
+    if t.render() not in seen_container:
+        seen_container[t.render()] = True
+        container_out.append(t.copy())
+    for i in range(t.arg_count()):
+        _collect_dispatch_types_from_type(
+            t.arg(i), plain_struct_fields, plain_struct_type_params, plain_struct_names,
+            seen_container, container_out, seen_plain, plain_out,
+        )
+
+
+def _collect_dispatch_types(
+    fields: List[Field],
+    plain_struct_fields: Dict[String, List[Field]],
+    plain_struct_type_params: Dict[String, List[TypeParam]],
+    plain_struct_names: Dict[String, Bool],
+    mut seen_container: Dict[String, Bool],
+    mut container_out: List[TypeExpr],
+    mut seen_plain: Dict[String, Bool],
+    mut plain_out: List[TypeExpr],
+) raises:
+    for f in fields:
+        if f.modifier == FieldModifier.MULTI:
+            continue
+        _collect_dispatch_types_from_type(
+            parse_type_expr(f.type_str), plain_struct_fields, plain_struct_type_params, plain_struct_names,
+            seen_container, container_out, seen_plain, plain_out,
+        )
 
 
 def _parse_value_expr(
@@ -493,6 +670,14 @@ def _dump_value_expr(
     `sqrrl__to_json` on every element unconditionally, which fails
     outright for an element that's itself a container, since reflection
     can't handle one either."""
+    if t.is_relation():
+        # Dumped directly as its own bare id -- no generic dispatch/trait-
+        # conformance detour needed at all (see this module's own doc
+        # comment for why `sqrrl__JsonSerializable` was removed): a
+        # relation's own JSON shape is always just its id, known
+        # unconditionally at this exact call site, not something that
+        # needs to be sorted out generically at runtime.
+        return "String(" + value_expr + ".id())"
     var kind = _container_wrapper_kind(t)
     if t.name in plain_struct_names or kind == "":
         return "sqrrl__to_json(" + value_expr + ")"
@@ -555,7 +740,12 @@ def _dump_value_expr(
     return out_var
 
 
-def _emit_to_json(parsed: ParsedStruct, plain_struct_names: Dict[String, Bool] = Dict[String, Bool]()) raises -> String:
+def _emit_to_json(
+    parsed: ParsedStruct,
+    plain_struct_names: Dict[String, Bool] = Dict[String, Bool](),
+    plain_struct_fields: Dict[String, List[Field]] = Dict[String, List[Field]](),
+    plain_struct_type_params: Dict[String, List[TypeParam]] = Dict[String, List[TypeParam]](),
+) raises -> String:
     """`sqrrl__<Name>_to_json(e) -> String` -- one field at a time, in
     declaration order, comma-joined inside `{...}`. Every field's value
     goes through the uniform, reflection-based `sqrrl__to_json(...)`
@@ -608,7 +798,7 @@ def _emit_to_json(parsed: ParsedStruct, plain_struct_names: Dict[String, Bool] =
             out += "    for sqrrl__m_" + f.name + " in sqrrl__mval_" + f.name + ":\n"
             out += "        if not sqrrl__mfirst_" + f.name + ":\n"
             out += "            sqrrl__out += \",\"\n"
-            out += "        sqrrl__out += sqrrl__to_json(sqrrl__m_" + f.name + ")\n"
+            out += "        sqrrl__out += String(sqrrl__m_" + f.name + ".id())\n"
             out += "        sqrrl__mfirst_" + f.name + " = False\n"
             out += "    sqrrl__out += \"]\"\n"
         elif is_plain_struct_field:
@@ -617,17 +807,30 @@ def _emit_to_json(parsed: ParsedStruct, plain_struct_names: Dict[String, Bool] =
             var t = parse_type_expr(f.type_str)
             if _container_wrapper_kind(t) == "":
                 raise _unsupported_container_field_error(parsed.name, f.name, f.type_str)
-            # Every field-level container dispatch goes through the same
-            # recursive `_dump_value_expr` `_parse_value_expr` already
-            # established for reload -- correctly handles List/Set/
-            # Optional/Dict/a custom wrapper, at arbitrary nesting depth,
-            # with no separate hand-rolled shape per wrapper kind needed
-            # here any more.
-            out += "    ref sqrrl__fv_" + f.name + " = e._inner[].get_" + param_name(f) + "()\n"
-            var dump_out = String()
-            var expr = _dump_value_expr("sqrrl__fv_" + f.name, t, plain_struct_names, "    ", tmp_id, dump_out)
-            out += dump_out
-            out += "    sqrrl__out += " + expr + "\n"
+            if _type_involves_relation(t, plain_struct_fields, plain_struct_type_params):
+                # Only a relation-involving container still needs the
+                # existing, unchanged recursive `_dump_value_expr` codegen
+                # -- it's the only mechanism that can thread a relation's
+                # own entity-wrapper conformance through at arbitrary
+                # nesting depth. A container with no relation anywhere
+                # (`tags: List[String]`) instead falls to the uniform
+                # `sqrrl__to_json(...)` call every other field kind
+                # already uses below -- `sqrrl__to_json[T]`'s own
+                # generated dispatch table (`emit_json_module`) has a
+                # branch for it.
+                out += "    ref sqrrl__fv_" + f.name + " = e._inner[].get_" + param_name(f) + "()\n"
+                var dump_out = String()
+                var expr = _dump_value_expr("sqrrl__fv_" + f.name, t, plain_struct_names, "    ", tmp_id, dump_out)
+                out += dump_out
+                out += "    sqrrl__out += " + expr + "\n"
+            else:
+                out += "    sqrrl__out += sqrrl__to_json(e._inner[].get_" + param_name(f) + "())\n"
+        elif is_relation_field(f) and not is_container_type(f.type_str):
+            # A bare relation's own JSON shape is always just its id --
+            # dumped directly, no `sqrrl__JsonSerializable`/generic-
+            # dispatch detour needed at all (this module's own doc
+            # comment has the full rationale for why that trait is gone).
+            out += "    sqrrl__out += String(e._inner[].get_" + param_name(f) + "().id())\n"
         else:
             out += "    sqrrl__out += sqrrl__to_json(e._inner[].get_" + param_name(f) + "())\n"
         first = False
@@ -640,6 +843,7 @@ def _emit_from_json_with_id(
     parsed: ParsedStruct,
     plain_struct_fields: Dict[String, List[Field]],
     plain_struct_names: Dict[String, Bool],
+    plain_struct_type_params: Dict[String, List[TypeParam]] = Dict[String, List[TypeParam]](),
 ) raises -> String:
     """`sqrrl__<Name>_from_json_with_id(table, <sibling tables>, id, mut sc)
     raises -> sqrrl__<Name>` -- parses the JSON object into one
@@ -692,7 +896,9 @@ def _emit_from_json_with_id(
             out += "                            break\n"
             out += "                    sqrrl__sc.expect_byte(UInt8(ord(\"]\")))\n"
             out += "                sqrrl__parsed_" + f.name + " = sqrrl__mset^\n"
-        elif _is_supported_container_field(f):
+        elif _is_supported_container_field(f) and _type_involves_relation(
+            parse_type_expr(f.type_str), plain_struct_fields, plain_struct_type_params
+        ):
             out += _emit_field_json_parse(f, parsed.name, plain_struct_fields, plain_struct_names)
         elif is_relation_field(f) and not is_container_type(f.type_str):
             # A *wrapped* relation (`List[@@Employee]`, `@@container`
@@ -733,7 +939,26 @@ def _emit_from_json_with_id(
                 out += "                sqrrl__parsed_" + f.name + " = " + call + "\n"
             elif _is_json_unsupported_container_field(f):
                 raise _unsupported_container_field_error(parsed.name, f.name, f.type_str)
+            elif _is_supported_container_field(f):
+                # A container that doesn't involve a relation anywhere
+                # (`tags: List[String]`) -- routes through the shared,
+                # generic `sqrrl__from_json[T]` dispatcher, whose own
+                # dispatch-table branch for this exact type `emit_json_
+                # module`'s collection pass already registered.
+                out += (
+                    "                sqrrl__parsed_"
+                    + f.name
+                    + " = sqrrl__from_json["
+                    + emit_field_type(f)
+                    + "](sqrrl__sc)\n"
+                )
             else:
+                # An ordinary leaf, or a genuinely undiscovered plain-
+                # value type (the `sqrrl__<TypeName>_from_json` escape
+                # hatch) -- `_leaf_from_json_expr` already handles both,
+                # unchanged; never reached for a bare, unbound type
+                # parameter here, since a real `@@struct` (unlike a plain
+                # struct) is never itself generic.
                 out += (
                     "                sqrrl__parsed_"
                     + f.name
@@ -1055,6 +1280,7 @@ def _emit_plain_struct_from_json(
     plain_struct_fields: Dict[String, List[Field]],
     plain_struct_names: Dict[String, Bool],
     type_params: List[TypeParam] = List[TypeParam](),
+    plain_struct_type_params: Dict[String, List[TypeParam]] = Dict[String, List[TypeParam]](),
 ) raises -> String:
     """`sqrrl__<Name>_from_json[<T: Bound, ...>](<sibling tables>, mut sc)
     raises -> <Name>[<T, ...>]` -- the auto-generated reconstruction
@@ -1115,7 +1341,9 @@ def _emit_plain_struct_from_json(
     for f in fields:
         out += branch_kw + " sqrrl__key == " + _quoted(f.name) + ":\n"
         branch_kw = "            elif"
-        if _is_supported_container_field(f):
+        if _is_supported_container_field(f) and _type_involves_relation(
+            parse_type_expr(f.type_str), plain_struct_fields, plain_struct_type_params
+        ):
             out += _emit_field_json_parse(f, name, plain_struct_fields, plain_struct_names, type_param_name_set)
         elif is_relation_field(f) and not is_container_type(f.type_str):
             # Same exclusion as `_emit_from_json_with_id` above -- a
@@ -1148,7 +1376,32 @@ def _emit_plain_struct_from_json(
                 out += "                sqrrl__parsed_" + f.name + " = " + call + "\n"
             elif _is_json_unsupported_container_field(f):
                 raise _unsupported_container_field_error(name, f.name, f.type_str)
+            elif _is_supported_container_field(f) or f.type_str in type_param_name_set:
+                # A container that doesn't involve a relation anywhere,
+                # or -- the case this whole mechanism exists for -- a bare
+                # reference to this struct's own type parameter (`Box[T]`'s
+                # `value: T`): both route through the shared, generic
+                # `sqrrl__from_json[T]` dispatcher, using the field's own
+                # type exactly as declared (`T` stays bare here -- this
+                # code lives inside `sqrrl__<Name>_from_json`'s own still-
+                # generic body, substituted only once some real caller
+                # instantiates it with a concrete type, at which point
+                # `sqrrl__from_json[T]` -- now concrete -- either matches
+                # a dispatch-table branch `emit_json_module`'s own
+                # collection pass registered, or falls through to the
+                # static default for a plain leaf).
+                out += (
+                    "                sqrrl__parsed_"
+                    + f.name
+                    + " = sqrrl__from_json["
+                    + rewritten_field_type(f.type_str, plain_struct_names)
+                    + "](sqrrl__sc)\n"
+                )
             else:
+                # An ordinary leaf, or a genuinely undiscovered plain-
+                # value type (the `sqrrl__<TypeName>_from_json` escape
+                # hatch) -- `_leaf_from_json_expr` already handles both,
+                # unchanged.
                 out += (
                     "                sqrrl__parsed_"
                     + f.name
@@ -1177,6 +1430,95 @@ def _emit_plain_struct_from_json(
     return out^
 
 
+def _emit_container_dispatch_branches(t: TypeExpr, mut to_json_out: String, mut from_json_out: String) raises:
+    """Appends one `elif T == <type>:` branch each to `sqrrl__to_json[T]`'s
+    own dump dispatch table and `sqrrl__from_json[T]`'s own reload one,
+    for the container-shaped `t` (`_collect_dispatch_types` already
+    guarantees relation-free, so no sibling table is ever needed here).
+    `List`/`Set`/`Optional`, or a custom single-argument wrapper, all
+    share the exact same `sqrrl__<Wrapper>_json_to_list`/`_from_list` +
+    `list_to_json`/`list_from_json` convention; `Dict`, or a custom
+    two-argument wrapper, share `_to_pairs`/`_from_pairs` + `pairs_to_
+    json`/`pairs_from_json` instead -- for a *built-in* wrapper (`List`/
+    `Set`/`Optional`/`Dict`) the four adapters are pre-written, always-
+    available static functions (`squirrel_runtime/json.mojo`); for a
+    custom wrapper they're the exact same hand-written escape-hatch
+    companions this project already required before this rearchitecture
+    -- the only thing that changed is *where* they get called from (a
+    dispatch-table branch here, not inline per-field code), never the
+    naming convention/contract itself, so no existing custom-wrapper
+    author's own code needs to change."""
+    var type_str = t.render()
+    var wrapper = t.name
+    var kind = _container_wrapper_kind(t)
+    if kind == "dict":
+        var key_str = t.arg(0).render()
+        var val_str = t.arg(1).render()
+        to_json_out += "    elif T == " + type_str + ":\n"
+        to_json_out += (
+            "        return pairs_to_json(sqrrl__" + wrapper + "_json_to_pairs(rebind[" + type_str + "](value)))\n"
+        )
+        from_json_out += "    elif T == " + type_str + ":\n"
+        from_json_out += (
+            "        return sqrrl__movable_rebind["
+            + type_str
+            + ", T](sqrrl__"
+            + wrapper
+            + "_json_from_pairs(pairs_from_json["
+            + key_str
+            + ", "
+            + val_str
+            + "](sqrrl__sc)))\n"
+        )
+        return
+    # "array" or "optional" -- both share the single-type-argument list
+    # convention; `Optional` is just a 0-or-1-element list in this scheme
+    # (see `sqrrl__Optional_json_to_list`/`_from_list`'s own doc comment),
+    # not a distinct `null`-or-value shape any more.
+    var elem_str = t.arg(0).render()
+    to_json_out += "    elif T == " + type_str + ":\n"
+    to_json_out += (
+        "        return list_to_json(sqrrl__" + wrapper + "_json_to_list(rebind[" + type_str + "](value)))\n"
+    )
+    from_json_out += "    elif T == " + type_str + ":\n"
+    from_json_out += (
+        "        return sqrrl__movable_rebind["
+        + type_str
+        + ", T](sqrrl__"
+        + wrapper
+        + "_json_from_list(list_from_json["
+        + elem_str
+        + "](sqrrl__sc)))\n"
+    )
+
+
+def _emit_plain_struct_dispatch_branch(t: TypeExpr, mut from_json_out: String):
+    """Appends one `elif T == <type>:` branch to `sqrrl__from_json[T]`'s
+    own reload dispatch table, for the discovered-plain-struct instantiation
+    `t` (`_collect_dispatch_types` already guarantees relation-free, so
+    the call needs no sibling table -- `_emit_plain_struct_from_json`'s
+    own generated function for a relation-free plain struct takes only
+    `sqrrl__sc`, nothing else). No dump-direction branch needed at all --
+    `sqrrl__to_json_default`'s own `reflect[T]`-based fallback already
+    handles *any* struct shape generically, plain-struct or not, matching
+    rw_squirrel_2's own identical omission (confirmed by reading their
+    real source)."""
+    var type_str = t.render()
+    var base = t.name
+    var args_str = String()
+    if t.arg_count() > 0:
+        args_str += "["
+        for i in range(t.arg_count()):
+            if i > 0:
+                args_str += ", "
+            args_str += t.arg(i).render()
+        args_str += "]"
+    from_json_out += "    elif T == " + type_str + ":\n"
+    from_json_out += (
+        "        return sqrrl__movable_rebind[" + type_str + ", T](sqrrl__" + base + "_from_json" + args_str + "(sqrrl__sc))\n"
+    )
+
+
 def emit_json_module(
     discovery_structs: List[DiscoveredStruct],
     topo_order: List[DiscoveredStruct],
@@ -1203,7 +1545,10 @@ def emit_json_module(
         "from std.memory import ArcPointer\n"
         "from std.collections import Set\n"
         "from squirrel_runtime.json import sqrrl__JsonScanner, sqrrl__json_string_literal,"
-        " sqrrl__json_bool_literal, sqrrl__to_json\n"
+        " sqrrl__json_bool_literal, sqrrl__to_json_default, sqrrl__from_json_default,"
+        " sqrrl__List_json_to_list, sqrrl__List_json_from_list, sqrrl__Set_json_to_list,"
+        " sqrrl__Set_json_from_list, sqrrl__Optional_json_to_list, sqrrl__Optional_json_from_list,"
+        " sqrrl__Dict_json_to_pairs, sqrrl__Dict_json_from_pairs, sqrrl__movable_rebind\n"
         "from sqrrl__world import sqrrl__World, sqrrl__init\n"
     )
     for ds in discovery_structs:
@@ -1289,9 +1634,106 @@ def emit_json_module(
     for leaf_type in custom_leaf_list:
         out += "from " + custom_leaf_module[leaf_type] + " import " + leaf_type + ", sqrrl__" + leaf_type + "_from_json\n"
 
+    # The shared, generic `sqrrl__to_json[T]`/`sqrrl__from_json[T]`
+    # dispatch table -- one `elif T == <ConcreteType>:` branch per
+    # distinct, relation-free container (List/Set/Optional/Dict/a custom
+    # wrapper) or discovered-plain-struct instantiation actually reachable
+    # project-wide, collected by walking every real @@struct's own field
+    # graph (`_collect_dispatch_types` recurses through container
+    # elements and, for a plain struct, its own -- substituted -- fields,
+    # so a nested/generic case is found from wherever it's first
+    # reachable, with no separate top-level walk needed). This is what
+    # `_emit_to_json`/`_emit_from_json_with_id`/`_emit_plain_struct_from_
+    # json`'s own field-level `sqrrl__to_json(value)`/`sqrrl__from_json[
+    # FieldType](sqrrl__sc)` calls resolve against -- including a generic
+    # plain struct's own bare-type-parameter field (`Box[T]`'s `value:
+    # T`), which is what actually closes that gap: `T` stays bare inside
+    # `Box`'s own still-generic `from_json`, resolved only once some real
+    # caller instantiates it with a type this table has a branch for (or
+    # the static default handles, for a plain leaf).
+    var seen_container = Dict[String, Bool]()
+    var container_dispatch_types = List[TypeExpr]()
+    var seen_plain = Dict[String, Bool]()
+    var plain_dispatch_types = List[TypeExpr]()
     for ds in discovery_structs:
-        out += _emit_to_json(ds.parsed, plain_struct_names)
-        out += _emit_from_json_with_id(ds.parsed, plain_struct_fields, plain_struct_names)
+        _collect_dispatch_types(
+            ds.parsed.fields, plain_struct_fields, plain_struct_discovery.type_params, plain_struct_names,
+            seen_container, container_dispatch_types, seen_plain, plain_dispatch_types,
+        )
+
+    var to_json_table = String("def sqrrl__to_json[T: AnyType](value: T) -> String:\n    comptime if False:\n        pass\n")
+    var from_json_table = String(
+        "def sqrrl__from_json[T: Movable & ImplicitlyDeletable](mut sqrrl__sc: sqrrl__JsonScanner) raises -> T:\n"
+        "    comptime if False:\n        pass\n"
+    )
+    for t in container_dispatch_types:
+        _emit_container_dispatch_branches(t, to_json_table, from_json_table)
+    for t in plain_dispatch_types:
+        _emit_plain_struct_dispatch_branch(t, from_json_table)
+    to_json_table += "    else:\n        return sqrrl__to_json_default(value)\n"
+    from_json_table += "    else:\n        return sqrrl__from_json_default[T](sqrrl__sc)\n"
+
+    out += "\n\n"
+    out += "def list_to_json[T: Movable](lst: List[T]) -> String:\n"
+    out += "    var sqrrl__out = String(\"[\")\n"
+    out += "    for sqrrl__i in range(len(lst)):\n"
+    out += "        if sqrrl__i > 0:\n"
+    out += "            sqrrl__out += \",\"\n"
+    out += "        sqrrl__out += sqrrl__to_json(lst[sqrrl__i])\n"
+    out += "    sqrrl__out += \"]\"\n"
+    out += "    return sqrrl__out^\n"
+    out += "\n\n"
+    out += "def list_from_json[T: Movable & ImplicitlyDeletable](mut sqrrl__sc: sqrrl__JsonScanner) raises -> List[T]:\n"
+    out += "    var sqrrl__lst = List[T]()\n"
+    out += "    sqrrl__sc.expect_byte(UInt8(ord(\"[\")))\n"
+    out += "    if not sqrrl__sc.try_consume_byte(UInt8(ord(\"]\"))):\n"
+    out += "        while True:\n"
+    out += "            sqrrl__lst.append(sqrrl__from_json[T](sqrrl__sc))\n"
+    out += "            if sqrrl__sc.try_consume_byte(UInt8(ord(\",\"))):\n"
+    out += "                continue\n"
+    out += "            sqrrl__sc.expect_byte(UInt8(ord(\"]\")))\n"
+    out += "            break\n"
+    out += "    return sqrrl__lst^\n"
+    out += "\n\n"
+    out += "def pairs_to_json[K: Movable, V: Movable](pairs: List[Tuple[K, V]]) -> String:\n"
+    out += "    var sqrrl__out = String(\"[\")\n"
+    out += "    for sqrrl__i in range(len(pairs)):\n"
+    out += "        if sqrrl__i > 0:\n"
+    out += "            sqrrl__out += \",\"\n"
+    out += (
+        "        sqrrl__out += \"[\" + sqrrl__to_json(pairs[sqrrl__i][0]) + \",\" + sqrrl__to_json(pairs[sqrrl__i][1])"
+        " + \"]\"\n"
+    )
+    out += "    sqrrl__out += \"]\"\n"
+    out += "    return sqrrl__out^\n"
+    out += "\n\n"
+    out += (
+        "def pairs_from_json[K: Copyable & ImplicitlyDeletable, V: Copyable & ImplicitlyDeletable](mut sqrrl__sc:"
+        " sqrrl__JsonScanner) raises -> List[Tuple[K, V]]:\n"
+    )
+    out += "    var sqrrl__pairs = List[Tuple[K, V]]()\n"
+    out += "    sqrrl__sc.expect_byte(UInt8(ord(\"[\")))\n"
+    out += "    if not sqrrl__sc.try_consume_byte(UInt8(ord(\"]\"))):\n"
+    out += "        while True:\n"
+    out += "            sqrrl__sc.expect_byte(UInt8(ord(\"[\")))\n"
+    out += "            var sqrrl__k = sqrrl__from_json[K](sqrrl__sc)\n"
+    out += "            sqrrl__sc.expect_byte(UInt8(ord(\",\")))\n"
+    out += "            var sqrrl__v = sqrrl__from_json[V](sqrrl__sc)\n"
+    out += "            sqrrl__sc.expect_byte(UInt8(ord(\"]\")))\n"
+    out += "            sqrrl__pairs.append((sqrrl__k.copy(), sqrrl__v.copy()))\n"
+    out += "            if sqrrl__sc.try_consume_byte(UInt8(ord(\",\"))):\n"
+    out += "                continue\n"
+    out += "            sqrrl__sc.expect_byte(UInt8(ord(\"]\")))\n"
+    out += "            break\n"
+    out += "    return sqrrl__pairs^\n"
+    out += "\n\n"
+    out += to_json_table
+    out += "\n\n"
+    out += from_json_table
+
+    for ds in discovery_structs:
+        out += _emit_to_json(ds.parsed, plain_struct_names, plain_struct_fields, plain_struct_discovery.type_params)
+        out += _emit_from_json_with_id(ds.parsed, plain_struct_fields, plain_struct_names, plain_struct_discovery.type_params)
         out += _emit_all_to_json(ds.parsed)
         out += _emit_all_from_json(ds.parsed, plain_struct_fields)
 
@@ -1315,7 +1757,8 @@ def emit_json_module(
             else List[TypeParam]()
         )
         out += _emit_plain_struct_from_json(
-            plain_name, this_fields, plain_struct_fields, plain_struct_names, this_type_params
+            plain_name, this_fields, plain_struct_fields, plain_struct_names, this_type_params,
+            plain_struct_discovery.type_params,
         )
 
     out += _emit_temp_keep_alives_struct(discovery_structs)

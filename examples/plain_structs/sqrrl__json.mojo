@@ -1,6 +1,6 @@
 from std.memory import ArcPointer
 from std.collections import Set
-from squirrel_runtime.json import sqrrl__JsonScanner, sqrrl__json_string_literal, sqrrl__json_bool_literal, sqrrl__to_json
+from squirrel_runtime.json import sqrrl__JsonScanner, sqrrl__json_string_literal, sqrrl__json_bool_literal, sqrrl__to_json_default, sqrrl__from_json_default, sqrrl__List_json_to_list, sqrrl__List_json_from_list, sqrrl__Set_json_to_list, sqrrl__Set_json_from_list, sqrrl__Optional_json_to_list, sqrrl__Optional_json_from_list, sqrrl__Dict_json_to_pairs, sqrrl__Dict_json_from_pairs, sqrrl__movable_rebind
 from sqrrl__world import sqrrl__World, sqrrl__init
 from company import sqrrl__Employee, sqrrl__EmployeeInner, sqrrl__EmployeeTable
 from company import sqrrl__Person, sqrrl__PersonInner, sqrrl__PersonTable
@@ -8,6 +8,73 @@ from company import Address
 from company import Box
 from company import Tagged
 from company import ExternalCity, sqrrl__ExternalCity_from_json
+
+
+def list_to_json[T: Movable](lst: List[T]) -> String:
+    var sqrrl__out = String("[")
+    for sqrrl__i in range(len(lst)):
+        if sqrrl__i > 0:
+            sqrrl__out += ","
+        sqrrl__out += sqrrl__to_json(lst[sqrrl__i])
+    sqrrl__out += "]"
+    return sqrrl__out^
+
+
+def list_from_json[T: Movable & ImplicitlyDeletable](mut sqrrl__sc: sqrrl__JsonScanner) raises -> List[T]:
+    var sqrrl__lst = List[T]()
+    sqrrl__sc.expect_byte(UInt8(ord("[")))
+    if not sqrrl__sc.try_consume_byte(UInt8(ord("]"))):
+        while True:
+            sqrrl__lst.append(sqrrl__from_json[T](sqrrl__sc))
+            if sqrrl__sc.try_consume_byte(UInt8(ord(","))):
+                continue
+            sqrrl__sc.expect_byte(UInt8(ord("]")))
+            break
+    return sqrrl__lst^
+
+
+def pairs_to_json[K: Movable, V: Movable](pairs: List[Tuple[K, V]]) -> String:
+    var sqrrl__out = String("[")
+    for sqrrl__i in range(len(pairs)):
+        if sqrrl__i > 0:
+            sqrrl__out += ","
+        sqrrl__out += "[" + sqrrl__to_json(pairs[sqrrl__i][0]) + "," + sqrrl__to_json(pairs[sqrrl__i][1]) + "]"
+    sqrrl__out += "]"
+    return sqrrl__out^
+
+
+def pairs_from_json[K: Copyable & ImplicitlyDeletable, V: Copyable & ImplicitlyDeletable](mut sqrrl__sc: sqrrl__JsonScanner) raises -> List[Tuple[K, V]]:
+    var sqrrl__pairs = List[Tuple[K, V]]()
+    sqrrl__sc.expect_byte(UInt8(ord("[")))
+    if not sqrrl__sc.try_consume_byte(UInt8(ord("]"))):
+        while True:
+            sqrrl__sc.expect_byte(UInt8(ord("[")))
+            var sqrrl__k = sqrrl__from_json[K](sqrrl__sc)
+            sqrrl__sc.expect_byte(UInt8(ord(",")))
+            var sqrrl__v = sqrrl__from_json[V](sqrrl__sc)
+            sqrrl__sc.expect_byte(UInt8(ord("]")))
+            sqrrl__pairs.append((sqrrl__k.copy(), sqrrl__v.copy()))
+            if sqrrl__sc.try_consume_byte(UInt8(ord(","))):
+                continue
+            sqrrl__sc.expect_byte(UInt8(ord("]")))
+            break
+    return sqrrl__pairs^
+
+
+def sqrrl__to_json[T: AnyType](value: T) -> String:
+    comptime if False:
+        pass
+    else:
+        return sqrrl__to_json_default(value)
+
+
+def sqrrl__from_json[T: Movable & ImplicitlyDeletable](mut sqrrl__sc: sqrrl__JsonScanner) raises -> T:
+    comptime if False:
+        pass
+    elif T == Tagged[String]:
+        return sqrrl__movable_rebind[Tagged[String], T](sqrrl__Tagged_from_json[String](sqrrl__sc))
+    else:
+        return sqrrl__from_json_default[T](sqrrl__sc)
 
 def sqrrl__Employee_to_json(e: sqrrl__Employee) -> String:
     var sqrrl__out = String("{")

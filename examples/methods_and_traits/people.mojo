@@ -1,6 +1,5 @@
 from squirrel_runtime.entity_storage import EntityStorage
 from squirrel_runtime.index import PlainIndex, UniqueIndex, MultiIndex, OrderedIndex
-from squirrel_runtime.json import sqrrl__JsonSerializable, sqrrl__to_json
 from std.memory import ArcPointer
 from std.hashlib import Hasher
 from std.collections import Set
@@ -42,7 +41,7 @@ struct sqrrl__PersonInner(Movable, ImplicitlyDeletable):
         return self._name
 
 
-struct sqrrl__Person(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable, sqrrl__JsonSerializable, HasId):
+struct sqrrl__Person(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable, HasId):
     var _inner: ArcPointer[sqrrl__PersonInner]
 
     def __init__(out self, var inner: sqrrl__PersonInner):
@@ -66,8 +65,6 @@ struct sqrrl__Person(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletabl
     def __ne__(self, other: Self) -> Bool:
         return self.id() != other.id()
 
-    def sqrrl__to_json(self) -> String:
-        return String(self.id())
 
     def entity_id(self) -> UInt32:
         return self.id()

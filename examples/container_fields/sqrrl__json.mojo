@@ -1,10 +1,87 @@
 from std.memory import ArcPointer
 from std.collections import Set
-from squirrel_runtime.json import sqrrl__JsonScanner, sqrrl__json_string_literal, sqrrl__json_bool_literal, sqrrl__to_json
+from squirrel_runtime.json import sqrrl__JsonScanner, sqrrl__json_string_literal, sqrrl__json_bool_literal, sqrrl__to_json_default, sqrrl__from_json_default, sqrrl__List_json_to_list, sqrrl__List_json_from_list, sqrrl__Set_json_to_list, sqrrl__Set_json_from_list, sqrrl__Optional_json_to_list, sqrrl__Optional_json_from_list, sqrrl__Dict_json_to_pairs, sqrrl__Dict_json_from_pairs, sqrrl__movable_rebind
 from sqrrl__world import sqrrl__World, sqrrl__init
 from company import sqrrl__Employee, sqrrl__EmployeeInner, sqrrl__EmployeeTable
 from company import sqrrl__Department, sqrrl__DepartmentInner, sqrrl__DepartmentTable
 from company import Ring, sqrrl__Ring_json_to_list, sqrrl__Ring_json_from_list
+
+
+def list_to_json[T: Movable](lst: List[T]) -> String:
+    var sqrrl__out = String("[")
+    for sqrrl__i in range(len(lst)):
+        if sqrrl__i > 0:
+            sqrrl__out += ","
+        sqrrl__out += sqrrl__to_json(lst[sqrrl__i])
+    sqrrl__out += "]"
+    return sqrrl__out^
+
+
+def list_from_json[T: Movable & ImplicitlyDeletable](mut sqrrl__sc: sqrrl__JsonScanner) raises -> List[T]:
+    var sqrrl__lst = List[T]()
+    sqrrl__sc.expect_byte(UInt8(ord("[")))
+    if not sqrrl__sc.try_consume_byte(UInt8(ord("]"))):
+        while True:
+            sqrrl__lst.append(sqrrl__from_json[T](sqrrl__sc))
+            if sqrrl__sc.try_consume_byte(UInt8(ord(","))):
+                continue
+            sqrrl__sc.expect_byte(UInt8(ord("]")))
+            break
+    return sqrrl__lst^
+
+
+def pairs_to_json[K: Movable, V: Movable](pairs: List[Tuple[K, V]]) -> String:
+    var sqrrl__out = String("[")
+    for sqrrl__i in range(len(pairs)):
+        if sqrrl__i > 0:
+            sqrrl__out += ","
+        sqrrl__out += "[" + sqrrl__to_json(pairs[sqrrl__i][0]) + "," + sqrrl__to_json(pairs[sqrrl__i][1]) + "]"
+    sqrrl__out += "]"
+    return sqrrl__out^
+
+
+def pairs_from_json[K: Copyable & ImplicitlyDeletable, V: Copyable & ImplicitlyDeletable](mut sqrrl__sc: sqrrl__JsonScanner) raises -> List[Tuple[K, V]]:
+    var sqrrl__pairs = List[Tuple[K, V]]()
+    sqrrl__sc.expect_byte(UInt8(ord("[")))
+    if not sqrrl__sc.try_consume_byte(UInt8(ord("]"))):
+        while True:
+            sqrrl__sc.expect_byte(UInt8(ord("[")))
+            var sqrrl__k = sqrrl__from_json[K](sqrrl__sc)
+            sqrrl__sc.expect_byte(UInt8(ord(",")))
+            var sqrrl__v = sqrrl__from_json[V](sqrrl__sc)
+            sqrrl__sc.expect_byte(UInt8(ord("]")))
+            sqrrl__pairs.append((sqrrl__k.copy(), sqrrl__v.copy()))
+            if sqrrl__sc.try_consume_byte(UInt8(ord(","))):
+                continue
+            sqrrl__sc.expect_byte(UInt8(ord("]")))
+            break
+    return sqrrl__pairs^
+
+
+def sqrrl__to_json[T: AnyType](value: T) -> String:
+    comptime if False:
+        pass
+    elif T == List[String]:
+        return list_to_json(sqrrl__List_json_to_list(rebind[List[String]](value)))
+    elif T == List[List[String]]:
+        return list_to_json(sqrrl__List_json_to_list(rebind[List[List[String]]](value)))
+    elif T == Ring[String]:
+        return list_to_json(sqrrl__Ring_json_to_list(rebind[Ring[String]](value)))
+    else:
+        return sqrrl__to_json_default(value)
+
+
+def sqrrl__from_json[T: Movable & ImplicitlyDeletable](mut sqrrl__sc: sqrrl__JsonScanner) raises -> T:
+    comptime if False:
+        pass
+    elif T == List[String]:
+        return sqrrl__movable_rebind[List[String], T](sqrrl__List_json_from_list(list_from_json[String](sqrrl__sc)))
+    elif T == List[List[String]]:
+        return sqrrl__movable_rebind[List[List[String]], T](sqrrl__List_json_from_list(list_from_json[List[String]](sqrrl__sc)))
+    elif T == Ring[String]:
+        return sqrrl__movable_rebind[Ring[String], T](sqrrl__Ring_json_from_list(list_from_json[String](sqrrl__sc)))
+    else:
+        return sqrrl__from_json_default[T](sqrrl__sc)
 
 def sqrrl__Employee_to_json(e: sqrrl__Employee) -> String:
     var sqrrl__out = String("{")
@@ -74,7 +151,7 @@ def sqrrl__Department_to_json(e: sqrrl__Department) -> String:
     for sqrrl__dv1 in sqrrl__fv_members:
         if not sqrrl__dfirst1:
             sqrrl__ds1 += ","
-        sqrrl__ds1 += sqrrl__to_json(sqrrl__dv1)
+        sqrrl__ds1 += String(sqrrl__dv1.id())
         sqrrl__dfirst1 = False
     sqrrl__ds1 += "]"
     sqrrl__out += sqrrl__ds1
@@ -86,7 +163,7 @@ def sqrrl__Department_to_json(e: sqrrl__Department) -> String:
     for sqrrl__dv2 in sqrrl__fv_backup:
         if not sqrrl__dfirst2:
             sqrrl__ds2 += ","
-        sqrrl__ds2 += sqrrl__to_json(sqrrl__dv2)
+        sqrrl__ds2 += String(sqrrl__dv2.id())
         sqrrl__dfirst2 = False
     sqrrl__ds2 += "]"
     sqrrl__out += sqrrl__ds2
@@ -95,66 +172,31 @@ def sqrrl__Department_to_json(e: sqrrl__Department) -> String:
     ref sqrrl__fv_lead = e._inner[].get_sqrrl__lead()
     var sqrrl__ds3: String
     if sqrrl__fv_lead:
-        sqrrl__ds3 = sqrrl__to_json(sqrrl__fv_lead.value())
+        sqrrl__ds3 = String(sqrrl__fv_lead.value().id())
     else:
         sqrrl__ds3 = "null"
     sqrrl__out += sqrrl__ds3
     sqrrl__out += ","
     sqrrl__out += '"tags":'
-    ref sqrrl__fv_tags = e._inner[].get_tags()
+    sqrrl__out += sqrrl__to_json(e._inner[].get_tags())
+    sqrrl__out += ","
+    sqrrl__out += '"scores":'
+    ref sqrrl__fv_scores = e._inner[].get_sqrrl__scores()
     var sqrrl__ds4 = String("[")
     var sqrrl__dfirst4 = True
-    for sqrrl__dv4 in sqrrl__fv_tags:
+    for sqrrl__de4 in sqrrl__fv_scores.items():
         if not sqrrl__dfirst4:
             sqrrl__ds4 += ","
-        sqrrl__ds4 += sqrrl__to_json(sqrrl__dv4)
+        sqrrl__ds4 += "[" + String(sqrrl__de4.key.id()) + "," + sqrrl__to_json(sqrrl__de4.value) + "]"
         sqrrl__dfirst4 = False
     sqrrl__ds4 += "]"
     sqrrl__out += sqrrl__ds4
     sqrrl__out += ","
-    sqrrl__out += '"scores":'
-    ref sqrrl__fv_scores = e._inner[].get_sqrrl__scores()
-    var sqrrl__ds5 = String("[")
-    var sqrrl__dfirst5 = True
-    for sqrrl__de5 in sqrrl__fv_scores.items():
-        if not sqrrl__dfirst5:
-            sqrrl__ds5 += ","
-        sqrrl__ds5 += "[" + sqrrl__to_json(sqrrl__de5.key) + "," + sqrrl__to_json(sqrrl__de5.value) + "]"
-        sqrrl__dfirst5 = False
-    sqrrl__ds5 += "]"
-    sqrrl__out += sqrrl__ds5
-    sqrrl__out += ","
     sqrrl__out += '"groups":'
-    ref sqrrl__fv_groups = e._inner[].get_groups()
-    var sqrrl__ds6 = String("[")
-    var sqrrl__dfirst6 = True
-    for sqrrl__dv6 in sqrrl__fv_groups:
-        if not sqrrl__dfirst6:
-            sqrrl__ds6 += ","
-        var sqrrl__ds7 = String("[")
-        var sqrrl__dfirst7 = True
-        for sqrrl__dv7 in sqrrl__dv6:
-            if not sqrrl__dfirst7:
-                sqrrl__ds7 += ","
-            sqrrl__ds7 += sqrrl__to_json(sqrrl__dv7)
-            sqrrl__dfirst7 = False
-        sqrrl__ds7 += "]"
-        sqrrl__ds6 += sqrrl__ds7
-        sqrrl__dfirst6 = False
-    sqrrl__ds6 += "]"
-    sqrrl__out += sqrrl__ds6
+    sqrrl__out += sqrrl__to_json(e._inner[].get_groups())
     sqrrl__out += ","
     sqrrl__out += '"ring":'
-    ref sqrrl__fv_ring = e._inner[].get_ring()
-    var sqrrl__ds8 = String("[")
-    var sqrrl__dfirst8 = True
-    for sqrrl__dv8 in sqrrl__Ring_json_to_list(sqrrl__fv_ring):
-        if not sqrrl__dfirst8:
-            sqrrl__ds8 += ","
-        sqrrl__ds8 += sqrrl__to_json(sqrrl__dv8)
-        sqrrl__dfirst8 = False
-    sqrrl__ds8 += "]"
-    sqrrl__out += sqrrl__ds8
+    sqrrl__out += sqrrl__to_json(e._inner[].get_ring())
     sqrrl__out += "}"
     return sqrrl__out^
 
@@ -202,15 +244,7 @@ def sqrrl__Department_from_json_with_id(table: sqrrl__DepartmentTable, sqrrl__tb
                     sqrrl__nc1 = Optional[sqrrl__Employee](sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sqrrl__sc.parse_json_int()))))
                 sqrrl__parsed_lead = sqrrl__nc1^
             elif sqrrl__key == "tags":
-                var sqrrl__nc1 = List[String]()
-                sqrrl__sc.expect_byte(UInt8(ord("[")))
-                if not sqrrl__sc.try_consume_byte(UInt8(ord("]"))):
-                    while True:
-                        sqrrl__nc1.append(sqrrl__sc.parse_json_string())
-                        if not sqrrl__sc.try_consume_byte(UInt8(ord(","))):
-                            break
-                    sqrrl__sc.expect_byte(UInt8(ord("]")))
-                sqrrl__parsed_tags = sqrrl__nc1^
+                sqrrl__parsed_tags = sqrrl__from_json[List[String]](sqrrl__sc)
             elif sqrrl__key == "scores":
                 var sqrrl__nc1 = Dict[sqrrl__Employee, String]()
                 sqrrl__sc.expect_byte(UInt8(ord("[")))
@@ -226,33 +260,9 @@ def sqrrl__Department_from_json_with_id(table: sqrrl__DepartmentTable, sqrrl__tb
                     sqrrl__sc.expect_byte(UInt8(ord("]")))
                 sqrrl__parsed_scores = sqrrl__nc1^
             elif sqrrl__key == "groups":
-                var sqrrl__nc1 = List[List[String]]()
-                sqrrl__sc.expect_byte(UInt8(ord("[")))
-                if not sqrrl__sc.try_consume_byte(UInt8(ord("]"))):
-                    while True:
-                        var sqrrl__nc2 = List[String]()
-                        sqrrl__sc.expect_byte(UInt8(ord("[")))
-                        if not sqrrl__sc.try_consume_byte(UInt8(ord("]"))):
-                            while True:
-                                sqrrl__nc2.append(sqrrl__sc.parse_json_string())
-                                if not sqrrl__sc.try_consume_byte(UInt8(ord(","))):
-                                    break
-                            sqrrl__sc.expect_byte(UInt8(ord("]")))
-                        sqrrl__nc1.append(sqrrl__nc2^)
-                        if not sqrrl__sc.try_consume_byte(UInt8(ord(","))):
-                            break
-                    sqrrl__sc.expect_byte(UInt8(ord("]")))
-                sqrrl__parsed_groups = sqrrl__nc1^
+                sqrrl__parsed_groups = sqrrl__from_json[List[List[String]]](sqrrl__sc)
             elif sqrrl__key == "ring":
-                var sqrrl__nc1 = List[String]()
-                sqrrl__sc.expect_byte(UInt8(ord("[")))
-                if not sqrrl__sc.try_consume_byte(UInt8(ord("]"))):
-                    while True:
-                        sqrrl__nc1.append(sqrrl__sc.parse_json_string())
-                        if not sqrrl__sc.try_consume_byte(UInt8(ord(","))):
-                            break
-                    sqrrl__sc.expect_byte(UInt8(ord("]")))
-                sqrrl__parsed_ring = sqrrl__Ring_json_from_list(sqrrl__nc1^)
+                sqrrl__parsed_ring = sqrrl__from_json[Ring[String]](sqrrl__sc)
             else:
                 raise Error("InvalidJson: unknown field " + sqrrl__key + " for Department")
             if not sqrrl__sc.try_consume_byte(UInt8(ord(","))):

@@ -1,4 +1,43 @@
 from std.memory import UnsafePointer
+from std.collections import Set
+
+
+def sqrrl__movable_rebind[Src: Movable & ImplicitlyDeletable, Dst: Movable & ImplicitlyDeletable](var src: Src) -> Dst:
+    """Moves `src` out as `Dst`, for exactly one situation: a generic
+    function bound only by `Movable` (not `Copyable`) needs to return a
+    value it just built at a *concrete* type (inside a `comptime if T ==
+    ConcreteType:` branch) as its own abstract `T`. `rebind[T](src)`
+    alone can't do this -- confirmed via two separate real-compiler
+    spikes: `rebind[T](src)` (no `^`) demands `T: ImplicitlyCopyable`
+    (never guaranteed generically); appending `^` directly to `rebind`'s
+    own call expression fails outright ("expression does not designate a
+    value with an origin"); and `.copy()` after `rebind[T](src)` -- the
+    one combination confirmed to work elsewhere in this file -- requires
+    `T: Copyable`, which a custom, Movable-only container wrapper (no
+    guaranteed copy constructor at all) doesn't have.
+
+    Goes through a real, tracked move instead of a raw pointer trick:
+    `List[Dst](unsafe_uninit_length=1)` reserves one *uninitialized* slot
+    (Mojo's own list-growth primitive, not a hand-rolled allocation),
+    `init_pointee_move` placement-constructs `src` into it bitcast as
+    `Src` (same underlying representation as `Dst` -- guaranteed by the
+    caller's own `T == ConcreteType` check, never asserted here), and
+    `.pop()` moves the now-valid `Dst` back out, decrementing the list's
+    own tracked length to zero so nothing double-destroys it. Confirmed
+    via a direct spike this is actually necessary, not just cautious:
+    reinterpreting a *stack* local's own address via `UnsafePointer(to=
+    src).bitcast[Dst]().take_pointee()` compiles fine but crashes at
+    runtime the moment `Src` owns a heap allocation (a double-free) --
+    `src`'s own scope-exit destructor still runs, because nothing told
+    Mojo's move-tracking `src`'s bytes were already stolen. Going through
+    `List`'s own tracked length instead avoids that: the list -- not a
+    bare stack slot with its own independent destructor -- is what owns
+    the slot's lifetime, and popping it updates that tracked length
+    directly."""
+    var buf = List[Dst](unsafe_uninit_length=1)
+    var raw = buf.unsafe_ptr().bitcast[UInt8]()
+    raw.bitcast[Src]().init_pointee_move(src^)
+    return buf.pop()
 
 
 trait sqrrl__JsonSerializable:
@@ -230,7 +269,7 @@ struct sqrrl__JsonScanner(Movable):
         raise Error("InvalidJson: expected 'true'/'false' at byte " + String(self.pos))
 
 
-def sqrrl__to_json[T: AnyType](value: T) -> String:
+def sqrrl__to_json_default[T: AnyType](value: T) -> String:
     """Generic, reflection-based JSON serializer for *any* value -- a leaf
     scalar, a real entity wrapper (`conforms_to(T, sqrrl__JsonSerializable)`
     -- always just its own bare id, the row itself dumped once, separately,
@@ -239,16 +278,29 @@ def sqrrl__to_json[T: AnyType](value: T) -> String:
     field names/types/byte offsets at comptime, recursing back into this
     same function per field. Matches rw_squirrel_1/2's own promise that a
     plain struct's `to_json` needs no generated code and no DSL-side
-    declaration at all -- unlike rw_squirrel_2's own version of this
-    dispatcher, this one needs no per-project generation either (no way to
-    ask "is T a container of anything" generically is fine here, since
-    rw_squirrel_3 doesn't route a wrapped/container relation field through
-    this function at all -- `driver/json_module.mojo` handles `multi`'s own
-    `Set[@@Target]` iteration separately, calling this function once per
-    *element*, never on the container itself).
+    declaration at all.
 
-    Live-spiked and confirmed compiling against this project's pinned
-    nightly before being wired in here."""
+    This is *not* the function generated/spliced code calls directly any
+    more (that's the per-project-generated `sqrrl__to_json[T]` in `sqrrl__
+    json.mojo`, one dispatch-table branch per concrete container type the
+    schema actually uses, falling through to this exact function for
+    everything else) -- split out under this name (rather than staying
+    `sqrrl__to_json` and living with a naming collision against the
+    generated function) so the leaf/`JsonSerializable`/reflect-fallback
+    core stays a static, directly unit-testable function on its own,
+    matching rw_squirrel_2's own equivalent split (`container_types`-driven
+    generation layered in front of a fixed core) -- confirmed by reading
+    their real source, not assumed. `reflect[T]` genuinely can't walk a
+    `List`/`Set`/`Dict`/`Optional`'s own internal representation (no named
+    fields to introspect), which is why a container reaching *this*
+    function's own final `else` would fail outright -- the per-project
+    dispatcher's whole job is to intercept exactly that case first, via an
+    exact `T == ConcreteContainerType` comptime match (the only kind of
+    check available: there's no way to ask Mojo's own type system "is `T`
+    a container of anything" generically, confirmed via a direct spike
+    that `List`/`Set`/`Optional`/`Dict` can't be given a new trait
+    conformance from outside their own stdlib declaration either -- no
+    `extension`-style mechanism exists in this Mojo build)."""
     comptime if T == String:
         return sqrrl__json_string_literal(rebind[String](value))
     elif T == Bool:
@@ -289,6 +341,159 @@ def sqrrl__to_json[T: AnyType](value: T) -> String:
             var field_ptr = (p + off).bitcast[Ti]()
             if i > 0:
                 out += ","
-            out += '"' + String(names[i]) + '":' + sqrrl__to_json(field_ptr[])
+            out += '"' + String(names[i]) + '":' + sqrrl__to_json_default(field_ptr[])
         out += "}"
         return out^
+
+
+def sqrrl__from_json_default[T: Movable & ImplicitlyDeletable](mut sc: sqrrl__JsonScanner) raises -> T:
+    """The reload-direction counterpart to `sqrrl__to_json_default` -- but
+    with no reflect-based fallback at all: writing a value back into a
+    reflected field requires `Ti` to prove `Movable` as an explicit type
+    argument to `UnsafePointer.init_pointee_move`, and `reflect[T].field_
+    types()` only ever hands back `AnyType`-bounded types, with no way to
+    widen that to satisfy a trait bound generically -- confirmed via two
+    independent real-compiler spikes (a direct call, and one gated behind
+    `conforms_to(Ti, Movable)`, which still fails to unify two separately-
+    computed "Movable-narrowed" views of the same `Ti`). So every leaf
+    branch here is the only thing this function can offer; anything else
+    (a container, a plain struct, a genuinely undiscovered type) needs the
+    per-project-generated `sqrrl__from_json[T]` (`sqrrl__json.mojo`) to
+    recognize it via an exact `T == ConcreteType` match and route to
+    generated/hand-written reconstruction code instead -- this function is
+    that dispatcher's own final fallback, for the plain leaf case.
+
+    Bound by `Movable`, not `Copyable` -- widened once a custom, Movable-
+    only container wrapper (no guaranteed copy constructor at all) turned
+    out to reach this same dispatch mechanism too (`driver/json_module.
+    mojo`'s own doc comment has the full story) -- so every branch here
+    goes through `sqrrl__movable_rebind` (this file's own doc comment on
+    it explains exactly why `rebind[T](v).copy()` alone doesn't work
+    generically) instead of `rebind[T](v).copy()`."""
+    comptime if T == String:
+        var v = sc.parse_json_string()
+        return sqrrl__movable_rebind[String, T](v^)
+    elif T == Bool:
+        var v = sc.parse_json_bool()
+        return sqrrl__movable_rebind[Bool, T](v)
+    elif T == Int:
+        var v = sc.parse_json_int()
+        return sqrrl__movable_rebind[Int, T](v)
+    elif T == Int8:
+        var v = Int8(sc.parse_json_int())
+        return sqrrl__movable_rebind[Int8, T](v)
+    elif T == Int16:
+        var v = Int16(sc.parse_json_int())
+        return sqrrl__movable_rebind[Int16, T](v)
+    elif T == Int32:
+        var v = Int32(sc.parse_json_int())
+        return sqrrl__movable_rebind[Int32, T](v)
+    elif T == Int64:
+        var v = Int64(sc.parse_json_int())
+        return sqrrl__movable_rebind[Int64, T](v)
+    elif T == UInt8:
+        var v = UInt8(sc.parse_json_int())
+        return sqrrl__movable_rebind[UInt8, T](v)
+    elif T == UInt16:
+        var v = UInt16(sc.parse_json_int())
+        return sqrrl__movable_rebind[UInt16, T](v)
+    elif T == UInt32:
+        var v = UInt32(sc.parse_json_int())
+        return sqrrl__movable_rebind[UInt32, T](v)
+    elif T == UInt64:
+        var v = UInt64(sc.parse_json_int())
+        return sqrrl__movable_rebind[UInt64, T](v)
+    elif T == Float64:
+        var v = sc.parse_json_float()
+        return sqrrl__movable_rebind[Float64, T](v)
+    elif T == Float32:
+        var v = Float32(sc.parse_json_float())
+        return sqrrl__movable_rebind[Float32, T](v)
+    else:
+        raise Error("sqrrl__from_json: unsupported type -- structs/containers use their own generated from_json")
+
+
+# `list_to_json`/`list_from_json`/`pairs_to_json`/`pairs_from_json` -- the
+# shared "dump/parse a List[T]/List[Tuple[K, V]] as a JSON array" helpers
+# every 1-/2-type-argument wrapper's own adapter (below) feeds into -- are
+# deliberately generated per-project into `sqrrl__json.mojo` instead of
+# living here as static code (unlike rw_squirrel_2's own identical
+# helpers, confirmed by reading their real source): they recurse via
+# `sqrrl__to_json`/`sqrrl__from_json`, which are themselves per-project
+# generated (one dispatch-table branch per concrete container/plain-
+# struct-instantiation type the schema actually needs) -- and `sqrrl__
+# json.mojo` is only generated *at all* when some file in the project
+# actually touches JSON (`driver/convert_directory.mojo`'s lazy-generation
+# fix), while this file (`squirrel_runtime/json.mojo`) is copied into
+# *every* project unconditionally, JSON-using or not (`sqrrl__
+# JsonSerializable`'s conformance is added to every entity regardless).
+# A static top-level `from sqrrl__json import sqrrl__to_json, sqrrl__
+# from_json` here would make this file fail to parse for any project that
+# doesn't generate one -- confirmed this constraint doesn't apply to
+# rw_squirrel_2 the same way (no lazy-generation feature there, `sqrrl__
+# json.mojo` always exists), so their exact file-layout choice doesn't
+# carry over unmodified.
+
+
+def sqrrl__List_json_to_list[T: Copyable](container: List[T]) -> List[T]:
+    """Built-in-wrapper adapter for `List` itself -- the identity, since
+    `List` already *is* the generic shape every 1-argument wrapper's own
+    JSON dump converts to first. Exists (rather than special-casing `List`
+    out of the dispatch table entirely) so `List`/`Set`/`Optional`/a custom
+    wrapper all go through the exact same generated dispatch-table shape,
+    with zero special cases for the three built-in ones -- see `driver/
+    json_module.mojo`'s own doc comment for why this matters."""
+    return container.copy()
+
+
+def sqrrl__List_json_from_list[T: Movable & ImplicitlyDeletable](var items: List[T]) -> List[T]:
+    return items^
+
+
+def sqrrl__Set_json_to_list[T: Copyable & ImplicitlyDeletable & Hashable & Equatable](container: Set[T]) -> List[T]:
+    var out = List[T]()
+    for elem in container:
+        out.append(elem.copy())
+    return out^
+
+
+def sqrrl__Set_json_from_list[
+    T: Copyable & ImplicitlyDeletable & Hashable & Equatable
+](var items: List[T]) -> Set[T]:
+    var out = Set[T]()
+    for item in items:
+        out.add(item.copy())
+    return out^
+
+
+def sqrrl__Optional_json_to_list[T: Copyable](container: Optional[T]) -> List[T]:
+    var out = List[T]()
+    if container:
+        out.append(container.value().copy())
+    return out^
+
+
+def sqrrl__Optional_json_from_list[T: Movable & ImplicitlyDeletable](var items: List[T]) raises -> Optional[T]:
+    if len(items) == 0:
+        return None
+    if len(items) > 1:
+        raise Error("InvalidJson: Optional field has more than one value")
+    return items.pop()
+
+
+def sqrrl__Dict_json_to_pairs[
+    K: Copyable & ImplicitlyDeletable & Hashable & Equatable, V: Copyable & ImplicitlyDeletable
+](container: Dict[K, V]) -> List[Tuple[K, V]]:
+    var out = List[Tuple[K, V]]()
+    for entry in container.items():
+        out.append((entry.key.copy(), entry.value.copy()))
+    return out^
+
+
+def sqrrl__Dict_json_from_pairs[
+    K: Copyable & ImplicitlyDeletable & Hashable & Equatable, V: Copyable & ImplicitlyDeletable
+](var pairs: List[Tuple[K, V]]) -> Dict[K, V]:
+    var out = Dict[K, V]()
+    for pair in pairs:
+        out[pair[0].copy()] = pair[1].copy()
+    return out^

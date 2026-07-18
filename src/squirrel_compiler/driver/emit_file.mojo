@@ -53,6 +53,7 @@ def emit_file(
     cross_file_symbols: Dict[String, String],
     plain_struct_names: Dict[String, Bool] = Dict[String, Bool](),
     plain_value_fields: Dict[String, Dict[String, String]] = Dict[String, Dict[String, String]](),
+    json_used: Bool = False,
 ) raises -> String:
     """Emits the generated Mojo source for `path` (a single `.mojo.sqrrl`
     file), prefixed with the runtime imports, an import for every
@@ -60,6 +61,12 @@ def emit_file(
     transformed text actually references and that isn't declared in this
     same file (`own_module_path`), and, if this file's script body touches
     `sqrrl__world` at all, an import line for it.
+
+    `json_used` (`driver/misc_builders.mojo`'s `project_uses_json`,
+    computed project-wide *before* any file gets transformed) gates both
+    the `sqrrl__JsonSerializable` import here and whether `emit_entity`
+    (via `transform_source`) adds the conformance/method at all -- a
+    project that never touches JSON anywhere shouldn't carry either.
 
     Slimmed from rw_squirrel_2's own `emit_file`: no JSON imports (M5), no
     `EntityHandle`/`TableStateLike`/`Rel`-family runtime imports -- swapped
@@ -74,17 +81,24 @@ def emit_file(
     try:
         transformed = transform_source(
             source, relation_schema, struct_names, function_returns, unique_fields, indexed_fields, multi_fields,
-            ordered_fields, world_methods, stats_fields, plain_struct_names, plain_value_fields
+            ordered_fields, world_methods, stats_fields, plain_struct_names, plain_value_fields, json_used
         )
     except e:
         raise Error(path + ": " + String(e))
 
     var out = String("from squirrel_runtime.entity_storage import EntityStorage\n")
     out += "from squirrel_runtime.index import PlainIndex, UniqueIndex, MultiIndex, OrderedIndex\n"
-    # Every entity wrapper conforms to sqrrl__JsonSerializable now (M5,
-    # codegen/entity.mojo's emit_entity), regardless of whether this file's
-    # own script touches JSON at all.
-    out += "from squirrel_runtime.json import sqrrl__JsonSerializable, sqrrl__to_json\n"
+    # `sqrrl__to_json` itself is never imported here (the JSON-container-
+    # dispatch rearchitecture): it's a per-project *generated* function
+    # now (`sqrrl__json.mojo`, only emitted when the project actually
+    # uses JSON at all), not static runtime code, and this entity file's
+    # own generated body never actually calls it directly (`sqrrl__to_
+    # json(self) -> String` on the entity wrapper itself is just the
+    # row's own bare id, no recursive call) -- confirmed unused here, not
+    # just moved, by checking codegen/entity.mojo's own generated method
+    # body. The conformance itself is conditional too, same reason.
+    if json_used:
+        out += "from squirrel_runtime.json import sqrrl__JsonSerializable\n"
     out += "from std.memory import ArcPointer\n"
     out += "from std.hashlib import Hasher\n"
     out += "from std.collections import Set\n"

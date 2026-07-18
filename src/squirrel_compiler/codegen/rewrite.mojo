@@ -75,7 +75,7 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
             var parsed = sc.parse_struct()
             out += emit_entity_inner(parsed, ctx.plain_struct_names)
             out += "\n\n"
-            out += emit_entity(parsed, rewrite_method_body(parsed.method_body, parsed.name, ctx))
+            out += emit_entity(parsed, rewrite_method_body(parsed.method_body, parsed.name, ctx), ctx.json_used)
             out += "\n\n"
             out += emit_indexes(parsed, ctx.plain_struct_names)
             out += "\n\n"
