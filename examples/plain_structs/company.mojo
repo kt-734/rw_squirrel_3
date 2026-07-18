@@ -146,6 +146,7 @@ struct sqrrl__PersonInner(Movable, ImplicitlyDeletable):
     var _home: Address
     var _meta: Tagged[String]
     var _hometown: ExternalCity
+    var _sqrrl__box: Box[sqrrl__Employee]
 
     def __del__(deinit self):
         self._table[].indexes.name.remove(self._id, self._name)
@@ -166,6 +167,9 @@ struct sqrrl__PersonInner(Movable, ImplicitlyDeletable):
     def set_hometown(mut self, var v: ExternalCity):
         self._hometown = v^
 
+    def set_sqrrl__box(mut self, var v: Box[sqrrl__Employee]):
+        self._sqrrl__box = v^
+
     @always_inline
     def get_name(self) -> ref [self._name] String:
         return self._name
@@ -181,6 +185,10 @@ struct sqrrl__PersonInner(Movable, ImplicitlyDeletable):
     @always_inline
     def get_hometown(self) -> ref [self._hometown] ExternalCity:
         return self._hometown
+
+    @always_inline
+    def get_sqrrl__box(self) -> ref [self._sqrrl__box] Box[sqrrl__Employee]:
+        return self._sqrrl__box
 
 
 struct sqrrl__Person(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable, sqrrl__JsonSerializable):
@@ -224,11 +232,11 @@ struct sqrrl__PersonTable(Movable):
     def __init__(out self):
         self.storage = ArcPointer(EntityStorage[sqrrl__PersonIndexes, sqrrl__PersonInner](sqrrl__PersonIndexes()))
 
-    def create(mut self, name: String, var home: Address, var meta: Tagged[String], var hometown: ExternalCity) raises -> sqrrl__Person:
+    def create(mut self, name: String, var home: Address, var meta: Tagged[String], var hometown: ExternalCity, var sqrrl__box: Box[sqrrl__Employee]) raises -> sqrrl__Person:
         if self.storage[].indexes.name.contains(name):
             raise Error("UniqueConstraintViolation: 'name' already in use by another entity")
         var id = self.storage[].alloc_id()
-        var inner = ArcPointer(sqrrl__PersonInner(_id=id, _table=self.storage, _name=name, _home=home^, _meta=meta^, _hometown=hometown^))
+        var inner = ArcPointer(sqrrl__PersonInner(_id=id, _table=self.storage, _name=name, _home=home^, _meta=meta^, _hometown=hometown^, _sqrrl__box=sqrrl__box^))
         self.storage[].register_weak(id, inner)
         self.storage[].indexes.name.add(id, inner[]._name)
         return sqrrl__Person(inner^)
@@ -269,12 +277,13 @@ def main() raises:
         var sqrrl__bob = sqrrl__world.Employee.create(name = "Bob")
         var addr = Address(city = "Springfield", owner = sqrrl__bob)
         var meta = Tagged[String](label = "vip", count = 1)
-        var sqrrl__alice = sqrrl__world.Person.create(name = "Alice", home = addr^, meta = meta^, hometown = ExternalCity(name = "Ogdenville"))
+        var sqrrl__alice = sqrrl__world.Person.create(name = "Alice", home = addr^, meta = meta^, hometown = ExternalCity(name = "Ogdenville"), sqrrl__box = Box(sqrrl__bob))
 
         print(sqrrl__alice._inner[]._home.city)
         print(sqrrl__alice._inner[]._home.owner._inner[]._name)
         print(sqrrl__alice._inner[]._meta.label, sqrrl__alice._inner[]._meta.count)
         print(sqrrl__alice._inner[]._hometown.name)
+        print(sqrrl__alice._inner[]._sqrrl__box.value._inner[].get_name())
 
         sqrrl__alice._inner[]._home.city = "Shelbyville";
         sqrrl__alice._inner[]._home.owner = sqrrl__bob;
@@ -306,7 +315,12 @@ def main() raises:
         print(sqrrl__alice2._inner[]._home.owner._inner[]._name)
         print(sqrrl__alice2._inner[]._meta.label, sqrrl__alice2._inner[]._meta.count)
         print(sqrrl__alice2._inner[]._hometown.name)
-        print("reload OK: ids, plain-struct field, generic plain-struct field, and undiscovered external plain-value field preserved")
+        print(sqrrl__alice2._inner[]._sqrrl__box.value._inner[].get_name())
+        print(
+            "reload OK: ids, plain-struct field, generic plain-struct field, undiscovered"
+            " external plain-value field, and a generic plain-struct field whose own"
+            " bare type parameter resolves to a relation, all preserved"
+        )
         sqrrl__end_init_from_json(sqrrl__temp_keep_alives^)
     finally:
         sqrrl__world.sqrrl__check_no_leaks()

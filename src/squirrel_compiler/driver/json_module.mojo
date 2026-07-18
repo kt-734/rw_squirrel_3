@@ -298,6 +298,7 @@ def _parse_value_expr(
     mut tmp_id: Int,
     mut out: String,
     type_param_names: Dict[String, Bool] = Dict[String, Bool](),
+    plain_struct_type_params: Dict[String, List[TypeParam]] = Dict[String, List[TypeParam]](),
 ) raises -> String:
     """The generated-code *expression* evaluating to one parsed JSON value
     of type `t`, off `sc` -- the single recursive core every
@@ -343,7 +344,7 @@ def _parse_value_expr(
             + ".storage[].handle_for(UInt32(sc.parse_json_int())))"
         )
     if t.name in plain_struct_names:
-        return _plain_struct_from_json_call(t, plain_struct_fields, plain_struct_names)
+        return _plain_struct_from_json_call(t, plain_struct_fields, plain_struct_names, plain_struct_type_params)
     if t.kind == TypeExpr.LEAF:
         return _leaf_from_json_expr(struct_name, field_name, t.name, type_param_names)
 
@@ -360,7 +361,8 @@ def _parse_value_expr(
         out += indent + "    " + var_name + " = Optional[" + elem_type_str + "]()\n"
         out += indent + "else:\n"
         var elem_expr = _parse_value_expr(
-            elem, plain_struct_fields, plain_struct_names, struct_name, field_name, indent + "    ", tmp_id, out, type_param_names
+            elem, plain_struct_fields, plain_struct_names, struct_name, field_name, indent + "    ", tmp_id, out,
+            type_param_names, plain_struct_type_params,
         )
         out += indent + "    " + var_name + " = Optional[" + elem_type_str + "](" + elem_expr + ")\n"
         return var_name + "^"
@@ -387,7 +389,8 @@ def _parse_value_expr(
         out += indent + "if not sc.try_consume_byte(UInt8(ord(\"]\"))):\n"
         out += indent + "    while True:\n"
         var elem_expr = _parse_value_expr(
-            elem, plain_struct_fields, plain_struct_names, struct_name, field_name, indent + "        ", tmp_id, out, type_param_names
+            elem, plain_struct_fields, plain_struct_names, struct_name, field_name, indent + "        ", tmp_id, out,
+            type_param_names, plain_struct_type_params,
         )
         var builder = "add" if build_wrapper == "Set" else "append"
         out += indent + "        " + var_name + "." + builder + "(" + elem_expr + ")\n"
@@ -422,12 +425,14 @@ def _parse_value_expr(
         out += indent + "    while True:\n"
         out += indent + "        sc.expect_byte(UInt8(ord(\"[\")))\n"
         var key_expr = _parse_value_expr(
-            key_t, plain_struct_fields, plain_struct_names, struct_name, field_name, indent + "        ", tmp_id, out, type_param_names
+            key_t, plain_struct_fields, plain_struct_names, struct_name, field_name, indent + "        ", tmp_id, out,
+            type_param_names, plain_struct_type_params,
         )
         out += indent + "        var " + key_var + " = " + key_expr + "\n"
         out += indent + "        sc.expect_byte(UInt8(ord(\",\")))\n"
         var val_expr = _parse_value_expr(
-            val_t, plain_struct_fields, plain_struct_names, struct_name, field_name, indent + "        ", tmp_id, out, type_param_names
+            val_t, plain_struct_fields, plain_struct_names, struct_name, field_name, indent + "        ", tmp_id, out,
+            type_param_names, plain_struct_type_params,
         )
         if is_custom_dict:
             out += indent + "        " + var_name + ".append((" + key_var + ", " + val_expr + "))\n"
@@ -463,6 +468,7 @@ def _emit_field_json_parse(
     plain_struct_fields: Dict[String, List[Field]],
     plain_struct_names: Dict[String, Bool],
     type_param_names: Dict[String, Bool] = Dict[String, Bool](),
+    plain_struct_type_params: Dict[String, List[TypeParam]] = Dict[String, List[TypeParam]](),
 ) raises -> String:
     """`from_json` reconstruction for any container-shaped, non-`multi`
     field -- a thin per-field wrapper around the recursive `_parse_value_
@@ -473,7 +479,8 @@ def _emit_field_json_parse(
     var tmp_id = 0
     var out = String()
     var expr = _parse_value_expr(
-        t, plain_struct_fields, plain_struct_names, struct_name, f.name, "                ", tmp_id, out, type_param_names
+        t, plain_struct_fields, plain_struct_names, struct_name, f.name, "                ", tmp_id, out,
+        type_param_names, plain_struct_type_params,
     )
     out += "                parsed_" + f.name + " = " + expr + "\n"
     return out^
@@ -609,10 +616,128 @@ def _plain_struct_value_base(f: Field, plain_struct_names: Dict[String, Bool]) -
     return None
 
 
+def _mono_ident_for_type(t: TypeExpr) -> String:
+    """A Mojo-identifier-safe rendering of a concrete type argument, for
+    building a monomorphized plain-struct `from_json` companion's own
+    distinct name -- `Employee` (a relation's bare target name, `@@`
+    already stripped) -> `"Employee"`, `List[Employee]` -> `"List_
+    Employee"`."""
+    if t.kind == TypeExpr.RELATION or t.kind == TypeExpr.LEAF:
+        return t.name
+    var out = t.name
+    for i in range(t.arg_count()):
+        out += "_" + _mono_ident_for_type(t.arg(i))
+    return out^
+
+
+def _mono_suffix_for_type_args(t: TypeExpr) -> String:
+    """`_<arg1>_<arg2>...` off `t`'s own type arguments, e.g. `Box[
+    @@Employee]` -> `"_Employee"` -- appended to a generic plain struct's
+    own bare name to build its monomorphized companion's distinct name
+    (`sqrrl__Box_Employee_from_json`), since Mojo has no way to overload
+    on a still-generic function's own compile-time type parameter the way
+    this needs."""
+    var out = String()
+    for i in range(t.arg_count()):
+        out += "_" + _mono_ident_for_type(t.arg(i))
+    return out^
+
+
+def _substituted_fields_for(
+    t: TypeExpr,
+    plain_struct_fields: Dict[String, List[Field]],
+    plain_struct_type_params: Dict[String, List[TypeParam]],
+) raises -> List[Field]:
+    """`t`'s own base plain struct's raw field list, with every bare type
+    parameter substituted by `t`'s own concrete type arguments and
+    rendered back into ordinary DSL-syntax text (`value: T` -> `value:
+    @@Employee`) -- what a monomorphized `sqrrl__<Name>_from_json`
+    companion's own field list should look like, so every existing
+    per-field dispatch branch (`is_relation_field`, `_plain_struct_value_
+    base`, container-with-relation, ...) recognizes it exactly as if the
+    DSL author had written the concrete type directly, with zero new
+    special-casing needed in `_emit_plain_struct_from_json` itself."""
+    var type_params = (
+        plain_struct_type_params[t.name].copy() if t.name in plain_struct_type_params else List[TypeParam]()
+    )
+    var type_args = List[TypeExpr]()
+    for i in range(t.arg_count()):
+        type_args.append(t.arg(i).copy())
+    var out = List[Field]()
+    for f in plain_struct_fields[t.name]:
+        var raw = parse_type_expr(f.type_str)
+        var substituted = _substitute_type_params_expr(raw, type_params, type_args)
+        out.append(Field(name=f.name, type_str=substituted.render(), modifier=f.modifier, is_stats=f.is_stats))
+    return out^
+
+
+def _collect_mono_plain_struct_targets_from_type(
+    t: TypeExpr,
+    plain_struct_fields: Dict[String, List[Field]],
+    plain_struct_type_params: Dict[String, List[TypeParam]],
+    plain_struct_names: Dict[String, Bool],
+    mut seen: Dict[String, Bool],
+    mut out: List[TypeExpr],
+) raises:
+    """Collects every distinct generic plain-struct instantiation
+    reachable from `t` whose own bare type parameter(s), once substituted,
+    reach a relation (`Box[@@Employee]`) -- what `emit_json_module` needs
+    to generate a monomorphized `sqrrl__<Name><_MonoSuffix>_from_json`
+    companion for, per `_plain_struct_from_json_call`'s own doc comment.
+    A relation-free generic instantiation (`Box[String]`) is already
+    fully handled by the ordinary shared dispatch table (`_collect_
+    dispatch_types`) and is skipped here. Recurses into a matched
+    instantiation's own substituted field graph too (a nested generic
+    plain struct field might independently need its own distinct
+    companion), and into every type argument either way (an argument
+    might itself be an independently-reachable generic instantiation)."""
+    if (
+        t.name in plain_struct_names
+        and t.arg_count() > 0
+        and t.render() not in seen
+        and _type_involves_relation(t, plain_struct_fields, plain_struct_type_params)
+    ):
+        seen[t.render()] = True
+        out.append(t.copy())
+        var type_params = (
+            plain_struct_type_params[t.name].copy() if t.name in plain_struct_type_params else List[TypeParam]()
+        )
+        var type_args = List[TypeExpr]()
+        for i in range(t.arg_count()):
+            type_args.append(t.arg(i).copy())
+        for f in plain_struct_fields[t.name]:
+            var raw = parse_type_expr(f.type_str)
+            var substituted = _substitute_type_params_expr(raw, type_params, type_args)
+            _collect_mono_plain_struct_targets_from_type(
+                substituted, plain_struct_fields, plain_struct_type_params, plain_struct_names, seen, out
+            )
+    for i in range(t.arg_count()):
+        _collect_mono_plain_struct_targets_from_type(
+            t.arg(i), plain_struct_fields, plain_struct_type_params, plain_struct_names, seen, out
+        )
+
+
+def _collect_mono_plain_struct_targets(
+    fields: List[Field],
+    plain_struct_fields: Dict[String, List[Field]],
+    plain_struct_type_params: Dict[String, List[TypeParam]],
+    plain_struct_names: Dict[String, Bool],
+    mut seen: Dict[String, Bool],
+    mut out: List[TypeExpr],
+) raises:
+    for f in fields:
+        if f.modifier == FieldModifier.MULTI:
+            continue
+        _collect_mono_plain_struct_targets_from_type(
+            parse_type_expr(f.type_str), plain_struct_fields, plain_struct_type_params, plain_struct_names, seen, out
+        )
+
+
 def _plain_struct_from_json_call(
     t: TypeExpr,
     plain_struct_fields: Dict[String, List[Field]],
     plain_struct_names: Dict[String, Bool],
+    plain_struct_type_params: Dict[String, List[TypeParam]] = Dict[String, List[TypeParam]](),
 ) raises -> String:
     """The generated-code expression reconstructing a plain-struct-valued
     value's own nested JSON object off `sc`, via its auto-generated
@@ -623,13 +748,40 @@ def _plain_struct_from_json_call(
     was already flattened *through* this exact plain struct, every
     `sqrrl__tbl_<Target>` this call needs is guaranteed already in scope.
 
-    A generic instantiation (`item: Box[String]`/`item: Box[@@Employee]`)
-    supplies its own explicit `[...]` type-argument list, rendered through
-    `rewritten_field_type` on each argument's own marked source text
-    (`t.arg(i).render()`) -- the exact same relation-vs-plain-struct
-    rewriting every other field type already goes through, just applied
-    one argument at a time here instead of to a whole field's type."""
+    A generic instantiation whose own bare type parameter, once
+    substituted, reaches a relation (`Box[@@Employee]`, detected via
+    `_type_involves_relation`) routes to a distinct, fully-monomorphized
+    `sqrrl__<Base><_MonoSuffix>_from_json` companion instead of the
+    ordinary generic one -- `Box`'s own generic `sqrrl__Box_from_json[T]`
+    is generated once, from `Box`'s raw (unsubstituted) fields, so its
+    body's `value: T` field can never know `T` is actually `Employee` at
+    this call site; the monomorphized companion is generated with `T`
+    already substituted throughout its own field list (`_substituted_
+    fields_for`), so every existing field-dispatch branch (`is_relation_
+    field`, container-with-relation, ...) recognizes the relation exactly
+    as if it had been written directly. A non-generic plain struct
+    embedding a relation directly (`Address`'s `@@owner: @@Employee`)
+    never needs this -- its own raw fields already show the relation with
+    no substitution required, so the ordinary generic path (which, for a
+    non-generic struct, is just the *only* path) already handles it.
+
+    Otherwise (no relation reachable through substitution), a generic
+    instantiation (`item: Box[String]`) supplies its own explicit `[...]`
+    type-argument list, rendered through `rewritten_field_type` on each
+    argument's own marked source text (`t.arg(i).render()`) -- the exact
+    same relation-vs-plain-struct rewriting every other field type already
+    goes through, just applied one argument at a time here instead of to a
+    whole field's type."""
     var base = t.name
+    if t.arg_count() > 0 and _type_involves_relation(t, plain_struct_fields, plain_struct_type_params):
+        var mono_fields = _substituted_fields_for(t, plain_struct_fields, plain_struct_type_params)
+        var mono_suffix = _mono_suffix_for_type_args(t)
+        var siblings = _sibling_relation_targets(mono_fields, plain_struct_fields)
+        var mono_call = "sqrrl__" + base + mono_suffix + "_from_json("
+        for target in siblings:
+            mono_call += "sqrrl__tbl_" + target + ", "
+        mono_call += "sc)"
+        return mono_call^
     var type_args = String()
     if t.arg_count() > 0:
         type_args += "["
@@ -927,7 +1079,9 @@ def _emit_from_json_with_id(
         elif _is_supported_container_field(f) and _type_involves_relation(
             parse_type_expr(f.type_str), plain_struct_fields, plain_struct_type_params
         ):
-            out += _emit_field_json_parse(f, parsed.name, plain_struct_fields, plain_struct_names)
+            out += _emit_field_json_parse(
+                f, parsed.name, plain_struct_fields, plain_struct_names, Dict[String, Bool](), plain_struct_type_params
+            )
         elif is_relation_field(f) and not is_container_type(f.type_str):
             # A *wrapped* relation (`List[@@Employee]`, `@@container`
             # support) is also `is_relation_field(f)` (used correctly by
@@ -963,7 +1117,9 @@ def _emit_from_json_with_id(
             # plain struct), so it must run first.
             var plain_base = _plain_struct_value_base(f, plain_struct_names)
             if plain_base:
-                var call = _plain_struct_from_json_call(plain_base.value(), plain_struct_fields, plain_struct_names)
+                var call = _plain_struct_from_json_call(
+                    plain_base.value(), plain_struct_fields, plain_struct_names, plain_struct_type_params
+                )
                 out += "                parsed_" + f.name + " = " + call + "\n"
             elif _is_json_unsupported_container_field(f):
                 raise _unsupported_container_field_error(parsed.name, f.name, f.type_str)
@@ -1317,6 +1473,8 @@ def _emit_plain_struct_from_json(
     plain_struct_names: Dict[String, Bool],
     type_params: List[TypeParam] = List[TypeParam](),
     plain_struct_type_params: Dict[String, List[TypeParam]] = Dict[String, List[TypeParam]](),
+    mono_suffix: String = "",
+    mono_return_type: String = "",
 ) raises -> String:
     """`sqrrl__<Name>_from_json[<T: Bound, ...>](<sibling tables>, mut sc)
     raises -> <Name>[<T, ...>]` -- the auto-generated reconstruction
@@ -1338,7 +1496,18 @@ def _emit_plain_struct_from_json(
     unqualified by `parser/field_parsing.mojo`), so the function needs to
     bind them itself for that reference to mean anything. `_plain_struct_
     from_json_call` supplies the matching explicit type arguments at every
-    call site, so callers never have to rely on inference."""
+    call site, so callers never have to rely on inference.
+
+    `mono_suffix`/`mono_return_type` (non-empty only for a monomorphized
+    companion -- see `_plain_struct_from_json_call`'s own doc comment)
+    generate a distinct, fully-concrete `sqrrl__<Name><mono_suffix>_from_
+    json` with no `[...]` type-parameter list at all instead: `fields` is
+    expected to already be fully substituted in this case (`_substituted_
+    fields_for`), so `type_params` is always empty alongside it -- every
+    field-dispatch branch below runs exactly as it would for a struct that
+    was never generic in the first place, since a substituted field's own
+    `type_str` (`"@@Employee"`, rendered by `_substituted_fields_for`)
+    looks identical to one the DSL author wrote directly."""
     var siblings = _sibling_relation_targets(fields, plain_struct_fields)
     var params = String()
     for target in siblings:
@@ -1356,14 +1525,17 @@ def _emit_plain_struct_from_json(
             type_param_decl += type_params[i].name + ": " + type_params[i].bound
             type_param_names += type_params[i].name
         type_param_decl += "]"
-    var return_type = name + "[" + type_param_names + "]" if len(type_params) > 0 else name
+    var fn_name = name + mono_suffix
+    var return_type = (
+        mono_return_type if mono_suffix != "" else (name + "[" + type_param_names + "]" if len(type_params) > 0 else name)
+    )
 
     var type_param_name_set = Dict[String, Bool]()
     for tp in type_params:
         type_param_name_set[tp.name] = True
 
     var out = String(
-        "\ndef sqrrl__" + name + "_from_json" + type_param_decl + "(" + params + ") raises -> " + return_type + ":\n"
+        "\ndef sqrrl__" + fn_name + "_from_json" + type_param_decl + "(" + params + ") raises -> " + return_type + ":\n"
     )
     for f in fields:
         out += "    var parsed_" + f.name + ": Optional[" + rewritten_field_type(f.type_str, plain_struct_names) + "] = None\n"
@@ -1380,7 +1552,9 @@ def _emit_plain_struct_from_json(
         if _is_supported_container_field(f) and _type_involves_relation(
             parse_type_expr(f.type_str), plain_struct_fields, plain_struct_type_params
         ):
-            out += _emit_field_json_parse(f, name, plain_struct_fields, plain_struct_names, type_param_name_set)
+            out += _emit_field_json_parse(
+                f, name, plain_struct_fields, plain_struct_names, type_param_name_set, plain_struct_type_params
+            )
         elif is_relation_field(f) and not is_container_type(f.type_str):
             # Same exclusion as `_emit_from_json_with_id` above -- a
             # *supported* wrapped relation (`List`/`Set`/`Optional`) was
@@ -1408,7 +1582,9 @@ def _emit_plain_struct_from_json(
             # after.
             var plain_base = _plain_struct_value_base(f, plain_struct_names)
             if plain_base:
-                var call = _plain_struct_from_json_call(plain_base.value(), plain_struct_fields, plain_struct_names)
+                var call = _plain_struct_from_json_call(
+                    plain_base.value(), plain_struct_fields, plain_struct_names, plain_struct_type_params
+                )
                 out += "                parsed_" + f.name + " = " + call + "\n"
             elif _is_json_unsupported_container_field(f):
                 raise _unsupported_container_field_error(name, f.name, f.type_str)
@@ -1800,6 +1976,33 @@ def emit_json_module(
         out += _emit_plain_struct_from_json(
             plain_name, this_fields, plain_struct_fields, plain_struct_names, this_type_params,
             plain_struct_discovery.type_params,
+        )
+
+    # A generic plain struct's own bare type parameter can hide a relation
+    # that only appears once some real caller instantiates it concretely
+    # (`Box[@@Employee]`) -- the ordinary generic companion just emitted
+    # above, from `Box`'s own raw (unsubstituted) fields, can never see
+    # that relation (`_plain_struct_from_json_call`'s own doc comment has
+    # the full rationale). Every distinct such instantiation reachable
+    # project-wide gets its own additional, fully-monomorphized companion
+    # here, generated from its substituted (fully concrete) field list --
+    # `_plain_struct_from_json_call` routes to it instead of the generic
+    # one whenever this exact instantiation is used.
+    var mono_seen = Dict[String, Bool]()
+    var mono_targets = List[TypeExpr]()
+    for ds in discovery_structs:
+        _collect_mono_plain_struct_targets(
+            ds.parsed.fields, plain_struct_fields, plain_struct_discovery.type_params, plain_struct_names,
+            mono_seen, mono_targets,
+        )
+
+    for mt in mono_targets:
+        var mono_fields = _substituted_fields_for(mt, plain_struct_fields, plain_struct_discovery.type_params)
+        var mono_suffix = _mono_suffix_for_type_args(mt)
+        var mono_return_type = rewritten_field_type(mt.render(), plain_struct_names)
+        out += _emit_plain_struct_from_json(
+            mt.name, mono_fields, plain_struct_fields, plain_struct_names, List[TypeParam](),
+            plain_struct_discovery.type_params, mono_suffix, mono_return_type,
         )
 
     out += _emit_temp_keep_alives_struct(discovery_structs)

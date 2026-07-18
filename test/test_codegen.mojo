@@ -2,9 +2,9 @@ from std.testing import assert_true, assert_false, assert_equal, TestSuite
 
 from squirrel_compiler.codegen import transform_source
 from squirrel_compiler.driver.cycles import check_no_relation_cycles
-from squirrel_compiler.driver.discovery import DiscoveryResult, DiscoveredStruct
+from squirrel_compiler.driver.discovery import DiscoveryResult, DiscoveredStruct, PlainStructDiscovery
 from squirrel_compiler.driver.json_module import emit_json_module
-from squirrel_compiler.parser import ParsedStruct, Field, FieldModifier
+from squirrel_compiler.parser import ParsedStruct, Field, FieldModifier, TypeParam
 
 
 def test_transform_plain_struct_and_script() raises:
@@ -1966,6 +1966,76 @@ def test_emit_json_module_three_argument_wrapper_rejected() raises:
     except:
         raised = True
     assert_true(raised)
+
+
+def test_emit_json_module_generic_plain_struct_relation_field_gets_monomorphized_companion() raises:
+    """A generic plain struct's own bare type-parameter field (`Box[T]`'s
+    `value: T`) can't be reconstructed by the ordinary, once-per-struct
+    generic `sqrrl__Box_from_json[T]` companion whenever some real caller
+    instantiates it with a relation (`Box[@@Employee]`) -- that companion
+    is generated from `Box`'s own raw, unsubstituted fields, so its body
+    routes `value: T` through the shared `sqrrl__from_json[T]` dispatch
+    table, which never has (and structurally can't have) a branch for a
+    relation. `_plain_struct_from_json_call` detects this via `_type_
+    involves_relation` (substituting `T -> Employee` into `Box`'s own
+    field list before checking) and routes to a distinct, fully-concrete
+    `sqrrl__Box_Employee_from_json` companion instead -- generated from
+    `Box`'s substituted field list, so its own `value` field is just an
+    ordinary relation field at that point, with `Employee`'s own sibling
+    table threaded through both the call site and the companion's own
+    signature. The ordinary generic companion is still emitted alongside
+    it, unchanged, for any other -- relation-free -- instantiation of
+    `Box` reachable project-wide."""
+    var box_fields = List[Field]()
+    box_fields.append(Field(name="value", type_str="T", modifier=FieldModifier.NONE, is_stats=False))
+    var plain_fields = Dict[String, List[Field]]()
+    plain_fields["Box"] = box_fields^
+    var plain_module_of = Dict[String, String]()
+    plain_module_of["Box"] = "box_module"
+    var plain_is_generic = Dict[String, Bool]()
+    plain_is_generic["Box"] = True
+    var plain_type_params = Dict[String, List[TypeParam]]()
+    var box_type_params = List[TypeParam]()
+    box_type_params.append(TypeParam(name="T", bound="Copyable & ImplicitlyDeletable"))
+    plain_type_params["Box"] = box_type_params^
+    var plain_struct_discovery = PlainStructDiscovery(
+        plain_fields^, plain_module_of^, plain_is_generic^, plain_type_params^
+    )
+
+    var employee_fields = List[Field]()
+    employee_fields.append(Field(name="name", type_str="String", modifier=FieldModifier.UNIQUE, is_stats=False))
+    var department_fields = List[Field]()
+    department_fields.append(Field(name="name", type_str="String", modifier=FieldModifier.UNIQUE, is_stats=False))
+    department_fields.append(Field(name="box", type_str="Box[@@Employee]", modifier=FieldModifier.NONE, is_stats=False))
+    var structs = List[DiscoveredStruct]()
+    structs.append(DiscoveredStruct(module_path="main", parsed=ParsedStruct(name="Employee", fields=employee_fields^)))
+    structs.append(DiscoveredStruct(module_path="main", parsed=ParsedStruct(name="Department", fields=department_fields^)))
+
+    var out = emit_json_module(structs, structs, plain_struct_discovery)
+
+    assert_true("from box_module import Box\n" in out)
+    # The ordinary generic companion is still emitted, untouched -- it's
+    # what any relation-free `Box[...]` instantiation still uses.
+    assert_true(
+        "def sqrrl__Box_from_json[T: Copyable & ImplicitlyDeletable](mut sc: sqrrl__JsonScanner) raises -> Box[T]:"
+        in out
+    )
+    assert_true("parsed_value = sqrrl__from_json[T](sc)" in out)
+    # The new monomorphized companion -- fully concrete, `Employee`'s own
+    # sibling table threaded through its signature, `value` dispatched as
+    # an ordinary relation field (no dispatch-table call at all).
+    assert_true(
+        "def sqrrl__Box_Employee_from_json(sqrrl__tbl_Employee: sqrrl__EmployeeTable, mut sc: sqrrl__JsonScanner)"
+        " raises -> Box[sqrrl__Employee]:"
+        in out
+    )
+    assert_true(
+        "parsed_value = sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(rid_value))" in out
+    )
+    # The call site, inside Department's own `from_json_with_id`, routes
+    # to the monomorphized companion -- not the generic one -- passing
+    # `Employee`'s own sibling table it already has in scope.
+    assert_true("parsed_box = sqrrl__Box_Employee_from_json(sqrrl__tbl_Employee, sc)" in out)
 
 
 def main() raises:

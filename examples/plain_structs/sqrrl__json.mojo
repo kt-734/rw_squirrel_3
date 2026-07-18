@@ -145,6 +145,10 @@ def sqrrl__Person_to_json(e: sqrrl__Person) -> String:
     out += ","
     out += '"hometown":'
     out += sqrrl__to_json(e._inner[].get_hometown())
+    out += ","
+    out += '"box":'
+    ref fv_box = e._inner[].get_sqrrl__box()
+    out += sqrrl__to_json(fv_box)
     out += "}"
     return out^
 
@@ -153,6 +157,7 @@ def sqrrl__Person_from_json_with_id(table: sqrrl__PersonTable, sqrrl__tbl_Employ
     var parsed_home: Optional[Address] = None
     var parsed_meta: Optional[Tagged[String]] = None
     var parsed_hometown: Optional[ExternalCity] = None
+    var parsed_box: Optional[Box[sqrrl__Employee]] = None
     sc.expect_byte(UInt8(ord("{")))
     if not sc.try_consume_byte(UInt8(ord("}"))):
         while True:
@@ -166,6 +171,8 @@ def sqrrl__Person_from_json_with_id(table: sqrrl__PersonTable, sqrrl__tbl_Employ
                 parsed_meta = sqrrl__Tagged_from_json[String](sc)
             elif key == "hometown":
                 parsed_hometown = sqrrl__ExternalCity_from_json(sc)
+            elif key == "box":
+                parsed_box = sqrrl__Box_Employee_from_json(sqrrl__tbl_Employee, sc)
             else:
                 raise Error("InvalidJson: unknown field " + key + " for Person")
             if not sc.try_consume_byte(UInt8(ord(","))):
@@ -179,12 +186,15 @@ def sqrrl__Person_from_json_with_id(table: sqrrl__PersonTable, sqrrl__tbl_Employ
         raise Error("InvalidJson: missing field meta for Person")
     if not parsed_hometown:
         raise Error("InvalidJson: missing field hometown for Person")
+    if not parsed_box:
+        raise Error("InvalidJson: missing field box for Person")
     table.storage[].alloc_specific_id(id)
     var v_name = parsed_name.value()
     var v_home = parsed_home.take()
     var v_meta = parsed_meta.take()
     var v_hometown = parsed_hometown.take()
-    var inner = ArcPointer(sqrrl__PersonInner(_id=id, _table=table.storage, _name=v_name, _home=v_home^, _meta=v_meta^, _hometown=v_hometown^))
+    var v_box = parsed_box.take()
+    var inner = ArcPointer(sqrrl__PersonInner(_id=id, _table=table.storage, _name=v_name, _home=v_home^, _meta=v_meta^, _hometown=v_hometown^, _sqrrl__box=v_box^))
     table.storage[].register_weak(id, inner)
     table.storage[].indexes.name.add(id, inner[]._name)
     return sqrrl__Person(inner^)
@@ -261,6 +271,43 @@ def sqrrl__Tagged_from_json[Kind: Copyable & ImplicitlyDeletable](mut sc: sqrrl_
     if not parsed_count:
         raise Error("InvalidJson: missing field count for Tagged")
     return Tagged[Kind](label=parsed_label.take(), count=parsed_count.take())
+
+def sqrrl__Box_from_json[T: Copyable & ImplicitlyDeletable](mut sc: sqrrl__JsonScanner) raises -> Box[T]:
+    var parsed_value: Optional[T] = None
+    sc.expect_byte(UInt8(ord("{")))
+    if not sc.try_consume_byte(UInt8(ord("}"))):
+        while True:
+            var key = sc.parse_json_string()
+            sc.expect_byte(UInt8(ord(":")))
+            if key == "value":
+                parsed_value = sqrrl__from_json[T](sc)
+            else:
+                raise Error("InvalidJson: unknown field " + key + " for Box")
+            if not sc.try_consume_byte(UInt8(ord(","))):
+                break
+        sc.expect_byte(UInt8(ord("}")))
+    if not parsed_value:
+        raise Error("InvalidJson: missing field value for Box")
+    return Box[T](value=parsed_value.take())
+
+def sqrrl__Box_Employee_from_json(sqrrl__tbl_Employee: sqrrl__EmployeeTable, mut sc: sqrrl__JsonScanner) raises -> Box[sqrrl__Employee]:
+    var parsed_value: Optional[sqrrl__Employee] = None
+    sc.expect_byte(UInt8(ord("{")))
+    if not sc.try_consume_byte(UInt8(ord("}"))):
+        while True:
+            var key = sc.parse_json_string()
+            sc.expect_byte(UInt8(ord(":")))
+            if key == "value":
+                var rid_value = UInt32(sc.parse_json_int())
+                parsed_value = sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(rid_value))
+            else:
+                raise Error("InvalidJson: unknown field " + key + " for Box")
+            if not sc.try_consume_byte(UInt8(ord(","))):
+                break
+        sc.expect_byte(UInt8(ord("}")))
+    if not parsed_value:
+        raise Error("InvalidJson: missing field value for Box")
+    return Box[sqrrl__Employee](value=parsed_value.take())
 
 struct sqrrl__TempKeepAlives(Movable):
     var Employee: List[sqrrl__Employee]
