@@ -1842,6 +1842,71 @@ def test_emit_json_module_dict_field_round_trips() raises:
     assert_true("parsed_scores = nc1^" in out)
 
 
+def test_emit_json_module_dict_field_relation_in_value_position_round_trips() raises:
+    """`Dict[String, @@Employee]` -- a relation in the *value* position,
+    not the key -- round-trips correctly, and (the actual bug this test
+    guards) `Department`'s own `from_json_with_id` correctly receives
+    `Employee`'s sibling table. `_relation_target_base_name`'s own walk
+    only ever followed a container's *first* type argument, so a relation
+    reachable only through a later one was invisible to sibling-table
+    discovery even once `is_wrapped_relation_type` itself was widened to
+    notice it at parse time -- `_relation_target_base_names` (plural) is
+    the fix, collecting every target at any position/depth."""
+    var employee_fields = List[Field]()
+    employee_fields.append(Field(name="name", type_str="String", modifier=FieldModifier.UNIQUE, is_stats=False))
+    var department_fields = List[Field]()
+    department_fields.append(Field(name="name", type_str="String", modifier=FieldModifier.UNIQUE, is_stats=False))
+    department_fields.append(
+        Field(name="leads", type_str="Dict[String, @@Employee]", modifier=FieldModifier.NONE, is_stats=False)
+    )
+    var structs = List[DiscoveredStruct]()
+    structs.append(DiscoveredStruct(module_path="main", parsed=ParsedStruct(name="Employee", fields=employee_fields^)))
+    structs.append(DiscoveredStruct(module_path="main", parsed=ParsedStruct(name="Department", fields=department_fields^)))
+    var out = emit_json_module(structs, structs)
+    # The actual bug: Department's own from_json_with_id must receive
+    # Employee's sibling table, even though the relation sits in the
+    # Dict's value position, not its key.
+    assert_true(
+        "def sqrrl__Department_from_json_with_id(table: sqrrl__DepartmentTable, sqrrl__tbl_Employee:"
+        " sqrrl__EmployeeTable, id: UInt32, mut sc: sqrrl__JsonScanner)"
+        in out
+    )
+    assert_true("var nc1 = Dict[String, sqrrl__Employee]()" in out)
+    assert_true("nc1[nck1] = sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sc.parse_json_int())))" in out)
+    assert_true("parsed_leads = nc1^" in out)
+
+
+def test_emit_json_module_dict_field_relation_in_both_positions_round_trips() raises:
+    """`Dict[@@Employee, @@Department]` -- a *distinct* relation in each
+    position at once -- both of `Company`'s own sibling tables get
+    discovered and threaded through, not just the first one found."""
+    var employee_fields = List[Field]()
+    employee_fields.append(Field(name="name", type_str="String", modifier=FieldModifier.UNIQUE, is_stats=False))
+    var department_fields = List[Field]()
+    department_fields.append(Field(name="name", type_str="String", modifier=FieldModifier.UNIQUE, is_stats=False))
+    var company_fields = List[Field]()
+    company_fields.append(Field(name="name", type_str="String", modifier=FieldModifier.UNIQUE, is_stats=False))
+    company_fields.append(
+        Field(
+            name="assignments", type_str="Dict[@@Employee, @@Department]", modifier=FieldModifier.NONE, is_stats=False
+        )
+    )
+    var structs = List[DiscoveredStruct]()
+    structs.append(DiscoveredStruct(module_path="main", parsed=ParsedStruct(name="Employee", fields=employee_fields^)))
+    structs.append(DiscoveredStruct(module_path="main", parsed=ParsedStruct(name="Department", fields=department_fields^)))
+    structs.append(DiscoveredStruct(module_path="main", parsed=ParsedStruct(name="Company", fields=company_fields^)))
+    var out = emit_json_module(structs, structs)
+    assert_true(
+        "def sqrrl__Company_from_json_with_id(table: sqrrl__CompanyTable, sqrrl__tbl_Employee: sqrrl__EmployeeTable,"
+        " sqrrl__tbl_Department: sqrrl__DepartmentTable, id: UInt32, mut sc: sqrrl__JsonScanner)"
+        in out
+    )
+    assert_true("var nck1 = sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sc.parse_json_int())))" in out)
+    assert_true(
+        "nc1[nck1] = sqrrl__Department(sqrrl__tbl_Department.storage[].handle_for(UInt32(sc.parse_json_int())))" in out
+    )
+
+
 def test_emit_json_module_nested_container_round_trips() raises:
     """A further-nested container as an element (`List[List[String]]`) is
     fully supported at arbitrary depth via the shared dispatcher (the

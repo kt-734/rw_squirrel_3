@@ -7,10 +7,34 @@ def _relation_target_base_name(t: TypeExpr) -> String:
     unwraps any container nesting first (`List[@@Employee]`/`List[List[
     @@Employee]]` -> `"Employee"`, `@@Box[String]` -> `"Box"`, plain
     `@@Employee` -> `"Employee"`) -- what both `plain_struct_fields`'s own
-    keys and `discovery.structs`' own names are keyed by."""
+    keys and `discovery.structs`' own names are keyed by. Only follows the
+    *first* argument at each level -- correct for every caller of this
+    specific function, which only ever apply it to an *unmarked* field's
+    own wrapper-or-leaf base name (`_relation_target_base_names`, below,
+    is the one that needs to find every relation reachable at any
+    position)."""
     if t.kind == TypeExpr.RELATION or t.kind == TypeExpr.LEAF:
         return t.name
     return _relation_target_base_name(t.arg(0))
+
+
+def _relation_target_base_names(t: TypeExpr, mut out: List[String]):
+    """Every distinct relation target `t` reaches, at *any* argument
+    position and nesting depth -- `Dict[@@Employee, String]` (relation in
+    the key), `Dict[String, @@Employee]` (relation in the *value*,
+    previously invisible to `_relation_target_base_name`'s first-argument-
+    only walk), `Dict[@@Employee, @@Department]` (both, two distinct
+    targets) -- mirrors `_is_relation_shaped`'s own generalization in
+    `parser/relation_type_text.mojo` (same reasoning: a relation was
+    always genuinely reachable through a later argument, the old walk
+    just never looked). Not deduplicated here -- `collect_relation_
+    targets`'s own `seen` dict, keyed by target name, already handles
+    that project-wide."""
+    if t.kind == TypeExpr.RELATION:
+        out.append(t.name)
+        return
+    for i in range(t.arg_count()):
+        _relation_target_base_names(t.arg(i), out)
 
 
 def collect_relation_targets(
@@ -35,7 +59,6 @@ def collect_relation_targets(
     rw_squirrel_2's own `analysis/relation_targets.mojo`, confirmed by
     reading it)."""
     for f in fields:
-        var t = _relation_target_base_name(parse_type_expr(f.type_str))
         if not is_relation_field(f):
             # An unmarked plain-value field (`home: Address`) is never
             # itself a relation, but its value may still be a plain
@@ -46,18 +69,26 @@ def collect_relation_targets(
             # parameter. Anything else unmarked (an ordinary leaf like
             # `name: String`, or a genuinely opaque hand-written type) has
             # nothing further to reach.
+            var t = _relation_target_base_name(parse_type_expr(f.type_str))
             if t in seen or t not in plain_struct_fields:
                 continue
             seen[t] = True
             collect_relation_targets(plain_struct_fields[t], plain_struct_fields, seen, out)
             continue
-        if t in seen:
-            continue
-        seen[t] = True
-        if t in plain_struct_fields:
-            collect_relation_targets(plain_struct_fields[t], plain_struct_fields, seen, out)
-        else:
-            out.append(t)
+        # A marked field may reach more than one distinct relation target
+        # at once (`Dict[@@Employee, @@Department]`, relation in both
+        # positions) -- `_relation_target_base_names` finds every one of
+        # them, at any argument position/depth, not just the first.
+        var targets = List[String]()
+        _relation_target_base_names(parse_type_expr(f.type_str), targets)
+        for t in targets:
+            if t in seen:
+                continue
+            seen[t] = True
+            if t in plain_struct_fields:
+                collect_relation_targets(plain_struct_fields[t], plain_struct_fields, seen, out)
+            else:
+                out.append(t)
 
 
 def _collect_plain_struct_targets_from_type(

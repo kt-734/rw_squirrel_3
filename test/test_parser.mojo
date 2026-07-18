@@ -324,6 +324,14 @@ def test_type_expr_relation_and_wrapped() raises:
     assert_equal(relation_target_of("@@Department"), "Department")
     assert_false(is_wrapped_relation_type("List[String]"))
 
+    # A relation reachable through any argument position, not just the
+    # first -- `Dict[String, @@Employee]` (value position), `Dict[
+    # @@Employee, @@Department]` (both) -- previously invisible since the
+    # check only ever followed a container's first type argument.
+    assert_true(is_wrapped_relation_type("Dict[String, @@Employee]"))
+    assert_true(is_wrapped_relation_type("Dict[@@Employee, @@Department]"))
+    assert_false(is_wrapped_relation_type("Dict[String, Int]"))
+
 
 def test_find_next_marker_begin_init_from_json() raises:
     var s = Scanner('@@@begin_init_from_json(dump)')

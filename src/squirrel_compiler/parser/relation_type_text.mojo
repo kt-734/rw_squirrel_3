@@ -2,26 +2,34 @@ from squirrel_compiler.parser.type_expr import parse_type_expr, TypeExpr
 
 
 def _is_relation_shaped(t: TypeExpr) -> Bool:
-    """True if `t` is itself a relation (`@@Employee`), or a container whose
-    *first* type argument is (recursively) relation-shaped -- `List[
-    @@Employee]`, `List[List[@@Employee]]`, ... Plain-structs milestone:
-    generalizes what used to be `is_wrapped_relation_type`'s one-level-only
-    check to arbitrary container nesting (`@@container` field support, the
-    general recursive access chain -- see the plan's Revision 3)."""
+    """True if `t` is itself a relation (`@@Employee`), or a container
+    reaching one anywhere in its own structure -- any argument position, at
+    any nesting depth (`List[@@Employee]`, `List[List[@@Employee]]`,
+    `Dict[String, @@Employee]` -- relation in the *value* position,
+    `Dict[@@Employee, @@Department]` -- both). Originally only ever
+    checked the *first* type argument (a real limitation, not a deliberate
+    restriction -- a relation was always genuinely reachable through a
+    later argument too, this just failed to notice); generalized to check
+    every argument once a real field (`Dict[String, @@Employee]`) needed
+    it. `@@container` field support, the general recursive access chain --
+    see the plan's Revision 3."""
     if t.is_relation():
         return True
-    if t.is_parameterized() and t.arg_count() >= 1:
-        return _is_relation_shaped(t.arg(0))
+    for i in range(t.arg_count()):
+        if _is_relation_shaped(t.arg(i)):
+            return True
     return False
 
 
 def is_wrapped_relation_type(type_str: String) -> Bool:
-    """True if `type_str` looks like `Ident[@@Type]` -- e.g.
-    `List[@@Employee]`, or a nested container of one, e.g. `List[List[
-    @@Employee]]` -- the collection form of a relation field, alongside the
-    bare `@@Type` form. Only the *first* type argument is checked."""
+    """True if `type_str` looks like a container reaching a relation
+    anywhere in its own structure -- `List[@@Employee]`, a nested container
+    of one (`List[List[@@Employee]]`), `Dict[String, @@Employee]` (relation
+    in the *value* position), or `Dict[@@Employee, @@Department]` (both) --
+    the collection form of a relation field, alongside the bare `@@Type`
+    form."""
     var t = parse_type_expr(type_str)
-    return t.is_parameterized() and t.arg_count() >= 1 and _is_relation_shaped(t.arg(0))
+    return t.is_parameterized() and _is_relation_shaped(t)
 
 
 def relation_target_of(type_str: String) -> String:

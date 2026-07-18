@@ -197,6 +197,18 @@ def sqrrl__Department_to_json(e: sqrrl__Department) -> String:
     ds4 += "]"
     out += ds4
     out += ","
+    out += '"leads":'
+    ref fv_leads = e._inner[].get_sqrrl__leads()
+    var ds5 = String("[")
+    var dfirst5 = True
+    for de5 in fv_leads.items():
+        if not dfirst5:
+            ds5 += ","
+        ds5 += "[" + sqrrl__to_json(de5.key) + "," + String(de5.value.id()) + "]"
+        dfirst5 = False
+    ds5 += "]"
+    out += ds5
+    out += ","
     out += '"groups":'
     out += sqrrl__to_json(e._inner[].get_groups())
     out += ","
@@ -215,6 +227,7 @@ def sqrrl__Department_from_json_with_id(table: sqrrl__DepartmentTable, sqrrl__tb
     var parsed_lead: Optional[Optional[sqrrl__Employee]] = None
     var parsed_tags: Optional[List[String]] = None
     var parsed_scores: Optional[Dict[sqrrl__Employee, String]] = None
+    var parsed_leads: Optional[Dict[String, sqrrl__Employee]] = None
     var parsed_groups: Optional[List[List[String]]] = None
     var parsed_ring: Optional[Ring[String]] = None
     var parsed_grid: Optional[Grid[String, Int]] = None
@@ -268,6 +281,20 @@ def sqrrl__Department_from_json_with_id(table: sqrrl__DepartmentTable, sqrrl__tb
                             break
                     sc.expect_byte(UInt8(ord("]")))
                 parsed_scores = nc1^
+            elif key == "leads":
+                var nc1 = Dict[String, sqrrl__Employee]()
+                sc.expect_byte(UInt8(ord("[")))
+                if not sc.try_consume_byte(UInt8(ord("]"))):
+                    while True:
+                        sc.expect_byte(UInt8(ord("[")))
+                        var nck1 = sc.parse_json_string()
+                        sc.expect_byte(UInt8(ord(",")))
+                        nc1[nck1] = sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sc.parse_json_int())))
+                        sc.expect_byte(UInt8(ord("]")))
+                        if not sc.try_consume_byte(UInt8(ord(","))):
+                            break
+                    sc.expect_byte(UInt8(ord("]")))
+                parsed_leads = nc1^
             elif key == "groups":
                 parsed_groups = sqrrl__from_json[List[List[String]]](sc)
             elif key == "ring":
@@ -291,6 +318,8 @@ def sqrrl__Department_from_json_with_id(table: sqrrl__DepartmentTable, sqrrl__tb
         raise Error("InvalidJson: missing field tags for Department")
     if not parsed_scores:
         raise Error("InvalidJson: missing field scores for Department")
+    if not parsed_leads:
+        raise Error("InvalidJson: missing field leads for Department")
     if not parsed_groups:
         raise Error("InvalidJson: missing field groups for Department")
     if not parsed_ring:
@@ -304,10 +333,11 @@ def sqrrl__Department_from_json_with_id(table: sqrrl__DepartmentTable, sqrrl__tb
     var v_lead = parsed_lead.take()
     var v_tags = parsed_tags.take()
     var v_scores = parsed_scores.take()
+    var v_leads = parsed_leads.take()
     var v_groups = parsed_groups.take()
     var v_ring = parsed_ring.take()
     var v_grid = parsed_grid.take()
-    var inner = ArcPointer(sqrrl__DepartmentInner(_id=id, _table=table.storage, _name=v_name, _sqrrl__members=v_members^, _sqrrl__backup=v_backup^, _sqrrl__lead=v_lead^, _tags=v_tags^, _sqrrl__scores=v_scores^, _groups=v_groups^, _ring=v_ring^, _grid=v_grid^))
+    var inner = ArcPointer(sqrrl__DepartmentInner(_id=id, _table=table.storage, _name=v_name, _sqrrl__members=v_members^, _sqrrl__backup=v_backup^, _sqrrl__lead=v_lead^, _tags=v_tags^, _sqrrl__scores=v_scores^, _sqrrl__leads=v_leads^, _groups=v_groups^, _ring=v_ring^, _grid=v_grid^))
     table.storage[].register_weak(id, inner)
     table.storage[].indexes.name.add(id, inner[]._name)
     return sqrrl__Department(inner^)

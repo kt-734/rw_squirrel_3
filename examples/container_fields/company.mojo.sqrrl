@@ -11,6 +11,7 @@ from grid_module import Grid, sqrrl__Grid_json_to_pairs, sqrrl__Grid_json_from_p
     @@lead: Optional[@@Employee]
     tags: List[String]
     @@scores: Dict[@@Employee, String]
+    @@leads: Dict[String, @@Employee]
     groups: List[List[String]]
     ring: Ring[String]
     grid: Grid[String, Int]
@@ -22,6 +23,8 @@ def main() raises:
         var scores_dict = Dict[sqrrl__Employee, String]()
         scores_dict[@@alice] = "lead"
         scores_dict[@@bob] = "member"
+        var leads_dict = Dict[String, sqrrl__Employee]()
+        leads_dict["primary"] = @@alice
         var @@eng = @@@Department {
             .name = "Engineering",
             .@@members = [@@alice, @@bob],
@@ -29,6 +32,7 @@ def main() raises:
             .@@lead = Optional(@@alice),
             .tags = ["urgent", "core"],
             .@@scores = scores_dict,
+            .@@leads = leads_dict,
             .groups = [["a", "b"], ["c"]],
             .ring = Ring[String](items=["x", "y"]),
             .grid = Grid[String, Int](pairs=[("p", 1), ("q", 2)]),
@@ -41,6 +45,7 @@ def main() raises:
             print(@@eng.@@lead.value()._inner[].get_name())
         print(@@eng.tags[0], @@eng.tags[1])
         print(@@eng.@@scores[@@alice])
+        print(@@eng.@@leads["primary"]._inner[].get_name())
         print(@@eng.groups[0][0], @@eng.groups[0][1], @@eng.groups[1][0])
         print(@@eng.ring[0], @@eng.ring[1])
         print(@@eng.grid.get("p"), @@eng.grid.get("q"))
@@ -74,8 +79,12 @@ def main() raises:
             print(@@eng2.@@lead.value()._inner[].get_name())
         print(@@eng2.tags[0], @@eng2.tags[1])
         print(@@eng2.@@scores[@@alice2])
+        print(@@eng2.@@leads["primary"]._inner[].get_name())
         print(@@eng2.groups[0][0], @@eng2.groups[0][1], @@eng2.groups[1][0])
         print(@@eng2.ring[0], @@eng2.ring[1])
         print(@@eng2.grid.get("p"), @@eng2.grid.get("q"))
-        print("reload OK: List/Set/Optional/Dict relations, a nested List, and custom one- and two-argument containers all preserved")
+        print(
+            "reload OK: List/Set/Optional/Dict relations (key or value position), a nested"
+            " List, and custom one- and two-argument containers all preserved"
+        )
         @@@end_init_from_json()

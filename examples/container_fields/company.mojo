@@ -123,6 +123,7 @@ struct sqrrl__DepartmentInner(Movable, ImplicitlyDeletable):
     var _sqrrl__lead: Optional[sqrrl__Employee]
     var _tags: List[String]
     var _sqrrl__scores: Dict[sqrrl__Employee, String]
+    var _sqrrl__leads: Dict[String, sqrrl__Employee]
     var _groups: List[List[String]]
     var _ring: Ring[String]
     var _grid: Grid[String, Int]
@@ -151,6 +152,9 @@ struct sqrrl__DepartmentInner(Movable, ImplicitlyDeletable):
 
     def set_sqrrl__scores(mut self, var v: Dict[sqrrl__Employee, String]):
         self._sqrrl__scores = v^
+
+    def set_sqrrl__leads(mut self, var v: Dict[String, sqrrl__Employee]):
+        self._sqrrl__leads = v^
 
     def set_groups(mut self, var v: List[List[String]]):
         self._groups = v^
@@ -184,6 +188,10 @@ struct sqrrl__DepartmentInner(Movable, ImplicitlyDeletable):
     @always_inline
     def get_sqrrl__scores(self) -> ref [self._sqrrl__scores] Dict[sqrrl__Employee, String]:
         return self._sqrrl__scores
+
+    @always_inline
+    def get_sqrrl__leads(self) -> ref [self._sqrrl__leads] Dict[String, sqrrl__Employee]:
+        return self._sqrrl__leads
 
     @always_inline
     def get_groups(self) -> ref [self._groups] List[List[String]]:
@@ -239,11 +247,11 @@ struct sqrrl__DepartmentTable(Movable):
     def __init__(out self):
         self.storage = ArcPointer(EntityStorage[sqrrl__DepartmentIndexes, sqrrl__DepartmentInner](sqrrl__DepartmentIndexes()))
 
-    def create(mut self, name: String, var sqrrl__members: List[sqrrl__Employee], var sqrrl__backup: Set[sqrrl__Employee], var sqrrl__lead: Optional[sqrrl__Employee], var tags: List[String], var sqrrl__scores: Dict[sqrrl__Employee, String], var groups: List[List[String]], var ring: Ring[String], var grid: Grid[String, Int]) raises -> sqrrl__Department:
+    def create(mut self, name: String, var sqrrl__members: List[sqrrl__Employee], var sqrrl__backup: Set[sqrrl__Employee], var sqrrl__lead: Optional[sqrrl__Employee], var tags: List[String], var sqrrl__scores: Dict[sqrrl__Employee, String], var sqrrl__leads: Dict[String, sqrrl__Employee], var groups: List[List[String]], var ring: Ring[String], var grid: Grid[String, Int]) raises -> sqrrl__Department:
         if self.storage[].indexes.name.contains(name):
             raise Error("UniqueConstraintViolation: 'name' already in use by another entity")
         var id = self.storage[].alloc_id()
-        var inner = ArcPointer(sqrrl__DepartmentInner(_id=id, _table=self.storage, _name=name, _sqrrl__members=sqrrl__members^, _sqrrl__backup=sqrrl__backup^, _sqrrl__lead=sqrrl__lead^, _tags=tags^, _sqrrl__scores=sqrrl__scores^, _groups=groups^, _ring=ring^, _grid=grid^))
+        var inner = ArcPointer(sqrrl__DepartmentInner(_id=id, _table=self.storage, _name=name, _sqrrl__members=sqrrl__members^, _sqrrl__backup=sqrrl__backup^, _sqrrl__lead=sqrrl__lead^, _tags=tags^, _sqrrl__scores=sqrrl__scores^, _sqrrl__leads=sqrrl__leads^, _groups=groups^, _ring=ring^, _grid=grid^))
         self.storage[].register_weak(id, inner)
         self.storage[].indexes.name.add(id, inner[]._name)
         return sqrrl__Department(inner^)
@@ -286,7 +294,9 @@ def main() raises:
         var scores_dict = Dict[sqrrl__Employee, String]()
         scores_dict[sqrrl__alice] = "lead"
         scores_dict[sqrrl__bob] = "member"
-        var sqrrl__eng = sqrrl__world.Department.create(name = "Engineering", sqrrl__members = [sqrrl__alice, sqrrl__bob], sqrrl__backup = Set(sqrrl__alice), sqrrl__lead = Optional(sqrrl__alice), tags = ["urgent", "core"], sqrrl__scores = scores_dict^, groups = [["a", "b"], ["c"]], ring = Ring[String](items=["x", "y"]), grid = Grid[String, Int](pairs=[("p", 1), ("q", 2)]))
+        var leads_dict = Dict[String, sqrrl__Employee]()
+        leads_dict["primary"] = sqrrl__alice
+        var sqrrl__eng = sqrrl__world.Department.create(name = "Engineering", sqrrl__members = [sqrrl__alice, sqrrl__bob], sqrrl__backup = Set(sqrrl__alice), sqrrl__lead = Optional(sqrrl__alice), tags = ["urgent", "core"], sqrrl__scores = scores_dict^, sqrrl__leads = leads_dict^, groups = [["a", "b"], ["c"]], ring = Ring[String](items=["x", "y"]), grid = Grid[String, Int](pairs=[("p", 1), ("q", 2)]))
 
         print(sqrrl__eng._inner[]._sqrrl__members[0]._inner[]._name)
         print(sqrrl__eng._inner[]._sqrrl__members[1]._inner[]._name)
@@ -295,6 +305,7 @@ def main() raises:
             print(sqrrl__eng._inner[]._sqrrl__lead.value()._inner[].get_name())
         print(sqrrl__eng._inner[]._tags[0], sqrrl__eng._inner[]._tags[1])
         print(sqrrl__eng._inner[]._sqrrl__scores[sqrrl__alice])
+        print(sqrrl__eng._inner[]._sqrrl__leads["primary"]._inner[].get_name())
         print(sqrrl__eng._inner[]._groups[0][0], sqrrl__eng._inner[]._groups[0][1], sqrrl__eng._inner[]._groups[1][0])
         print(sqrrl__eng._inner[]._ring[0], sqrrl__eng._inner[]._ring[1])
         print(sqrrl__eng._inner[]._grid.get("p"), sqrrl__eng._inner[]._grid.get("q"))
@@ -328,10 +339,14 @@ def main() raises:
             print(sqrrl__eng2._inner[]._sqrrl__lead.value()._inner[].get_name())
         print(sqrrl__eng2._inner[]._tags[0], sqrrl__eng2._inner[]._tags[1])
         print(sqrrl__eng2._inner[]._sqrrl__scores[sqrrl__alice2])
+        print(sqrrl__eng2._inner[]._sqrrl__leads["primary"]._inner[].get_name())
         print(sqrrl__eng2._inner[]._groups[0][0], sqrrl__eng2._inner[]._groups[0][1], sqrrl__eng2._inner[]._groups[1][0])
         print(sqrrl__eng2._inner[]._ring[0], sqrrl__eng2._inner[]._ring[1])
         print(sqrrl__eng2._inner[]._grid.get("p"), sqrrl__eng2._inner[]._grid.get("q"))
-        print("reload OK: List/Set/Optional/Dict relations, a nested List, and custom one- and two-argument containers all preserved")
+        print(
+            "reload OK: List/Set/Optional/Dict relations (key or value position), a nested"
+            " List, and custom one- and two-argument containers all preserved"
+        )
         sqrrl__end_init_from_json(sqrrl__temp_keep_alives^)
     finally:
         sqrrl__world.sqrrl__check_no_leaks()
