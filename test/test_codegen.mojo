@@ -1485,6 +1485,48 @@ def test_transform_plain_struct_field_declaration_rewrites() raises:
     assert_false("@@Employee" in out)
 
 
+def test_transform_plain_struct_wrapped_relation_field_declaration_rewrites() raises:
+    """A hand-written plain struct's own `var @@members: List[@@Employee]`
+    field declaration -- a *wrapped* relation, not a bare one -- used to
+    raise outright ("a wrapped/container relation field isn't supported
+    as a hand-written struct's own field declaration yet"), an explicit,
+    honest gap the code itself flagged. Renders the same way the bare
+    case already does -- bare field name, wrapper kept as-is, only the
+    relation-typed argument gets `sqrrl__`-prefixed -- mirroring the
+    `ENTITY_PARAM` marker's own identical rendering for a function
+    parameter/var-decl initializer, just without the name prefix (never
+    applies to a field). `parse_entity_param`'s own scanner still only
+    recognizes this single-wrapper, single-argument shape (`Wrapper[
+    @@Type]`) -- a 2-argument wrapper (`Dict[@@K, V]`) or a relation
+    nested inside a further container on a hand-written struct's own
+    field declaration stays genuinely unsupported, a separate, narrower
+    parser limitation this doesn't touch."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    var function_returns = Dict[String, String]()
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+    var plain_struct_names = Dict[String, Bool]()
+    plain_struct_names["Roster"] = True
+
+    var src = String(
+        "struct Roster(Movable, ImplicitlyDeletable):\n"
+        + "    var @@members: List[@@Employee]\n"
+    )
+    var out = transform_source(
+        src,
+        relation_schema,
+        struct_names,
+        function_returns,
+        unique_fields,
+        indexed_fields,
+        plain_struct_names=plain_struct_names,
+    )
+    assert_true("var members: List[sqrrl__Employee]" in out)
+    assert_false("@@members" in out)
+    assert_false("@@Employee" in out)
+
+
 def test_transform_struct_field_referencing_plain_struct_renders_bare_type() raises:
     """A `@@struct`'s own field whose type is a discovered plain struct
     (`home: Address`, unmarked -- plan's Revision 2 point 1: only a

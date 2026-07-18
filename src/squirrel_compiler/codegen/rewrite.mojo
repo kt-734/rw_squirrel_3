@@ -243,19 +243,30 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
                 # sqrrl__-prefixed if it's a real entity). No `ctx.entity_
                 # to_type` registration here -- this isn't a local-variable
                 # binding, it's a struct field.
+                #
+                # A wrapped relation field (`@@members: List[@@Employee]`)
+                # renders the same way -- bare field name, wrapper kept
+                # as-is, only the relation-typed argument gets `sqrrl__`-
+                # prefixed -- mirroring the `is_param or is_var_decl`
+                # branch's own identical wrapped-type rendering just above
+                # (minus the name prefix, which never applies to a field).
+                # `parse_entity_param`'s own scanner only ever recognizes
+                # this single-wrapper, single-argument shape (`Wrapper[
+                # @@Type]`) -- a 2-argument wrapper (`Dict[@@K, V]`) or a
+                # relation nested inside a further container (`List[Dict[
+                # String, @@Employee]]`) on a *hand-written* struct's own
+                # field declaration stays genuinely unsupported (a
+                # separate, real parser limitation, not fixed here);
+                # `@@struct`'s own fields never went through this narrower
+                # marker-scanning path at all, so those already support
+                # every shape `parse_type_expr` does, unaffected.
                 if ep.wrapper:
-                    raise sc.err(
-                        "InvalidSquirrelSyntax: '@@"
-                        + ep.name
-                        + ": "
-                        + ep.wrapper.value()
-                        + "[@@"
-                        + ep.type_name
-                        + "]' -- a wrapped/container relation field isn't"
-                        " supported as a hand-written struct's own field"
-                        " declaration yet"
+                    out += (
+                        ep.name + ": " + ep.wrapper.value() + "["
+                        + rewritten_field_type("@@" + ep.type_name, ctx.plain_struct_names) + "]"
                     )
-                out += ep.name + ": " + rewritten_field_type("@@" + ep.type_name, ctx.plain_struct_names)
+                else:
+                    out += ep.name + ": " + rewritten_field_type("@@" + ep.type_name, ctx.plain_struct_names)
             pending_decl = None
             pending_for_loop_decl = None
 

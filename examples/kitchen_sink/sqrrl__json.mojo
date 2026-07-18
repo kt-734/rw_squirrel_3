@@ -132,7 +132,7 @@ def sqrrl__Team_to_json(e: sqrrl__Team) -> String:
     out += sqrrl__to_json(e._inner[].get_name())
     out += ","
     out += '"lead":'
-    out += sqrrl__to_json(e._inner[].get_lead())
+    out += sqrrl__Assignment_to_json(e._inner[].get_lead())
     out += ","
     out += '"members":'
     ref fv_members = e._inner[].get_sqrrl__members()

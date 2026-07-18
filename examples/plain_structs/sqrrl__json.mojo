@@ -140,7 +140,7 @@ def sqrrl__Person_to_json(e: sqrrl__Person) -> String:
     out += sqrrl__to_json(e._inner[].get_name())
     out += ","
     out += '"home":'
-    out += sqrrl__to_json(e._inner[].get_home())
+    out += sqrrl__Address_to_json(e._inner[].get_home())
     out += ","
     out += '"meta":'
     out += sqrrl__to_json(e._inner[].get_meta())
@@ -150,7 +150,7 @@ def sqrrl__Person_to_json(e: sqrrl__Person) -> String:
     out += ","
     out += '"box":'
     ref fv_box = e._inner[].get_sqrrl__box()
-    out += sqrrl__to_json(fv_box)
+    out += sqrrl__Box_Employee_to_json(fv_box)
     out += "}"
     return out^
 
@@ -318,6 +318,13 @@ def sqrrl__Box_from_json[T: Copyable & ImplicitlyDeletable](mut sc: sqrrl__JsonS
     if not parsed_value:
         raise Error("InvalidJson: missing field value for Box")
     return Box[T](value=parsed_value.take())
+
+def sqrrl__Box_Employee_to_json(value: Box[sqrrl__Employee]) -> String:
+    var out = String("{")
+    out += '"value":'
+    out += String(value.value.id())
+    out += "}"
+    return out^
 
 def sqrrl__Box_Employee_from_json(sqrrl__tbl_Employee: sqrrl__EmployeeTable, mut sc: sqrrl__JsonScanner) raises -> Box[sqrrl__Employee]:
     var parsed_value: Optional[sqrrl__Employee] = None

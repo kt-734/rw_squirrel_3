@@ -824,7 +824,9 @@ def _dump_value_expr(
     indent: String,
     mut tmp_id: Int,
     mut out: String,
-) -> String:
+    plain_struct_fields: Dict[String, List[Field]] = Dict[String, List[Field]](),
+    plain_struct_type_params: Dict[String, List[TypeParam]] = Dict[String, List[TypeParam]](),
+) raises -> String:
     """Mirror of `_parse_value_expr`, for the dump direction: returns an
     expression evaluating to the JSON text for `value_expr` (already a
     value of type `t`). Anything `sqrrl__to_json[T]` already handles
@@ -851,8 +853,29 @@ def _dump_value_expr(
         # unconditionally at this exact call site, not something that
         # needs to be sorted out generically at runtime.
         return "String(" + value_expr + ".id())"
+    if t.name in plain_struct_names:
+        # A relation-involving plain struct (`Roster.@@members: List[
+        # @@Employee]`) never gets a dispatch-table branch at all
+        # (`_collect_dispatch_types` deliberately excludes relation-
+        # involving subtrees, the same gate `_emit_plain_struct_to_json`'s
+        # own field-level check already applies) -- calling `sqrrl__to_
+        # json(value_expr)` here would fall through to `sqrrl__to_json_
+        # default`'s reflect[T] fallback, which can't walk a container
+        # field at all (confirmed via a real crash: `struct_field_types
+        # requires a struct type`). Calls the explicit `sqrrl__<Name>_to_
+        # json` companion directly instead -- mono-suffixed for a
+        # relation-involving *generic* instantiation (mirroring `_plain_
+        # struct_from_json_call`'s own identical monomorphization on the
+        # reload side exactly), bare for a non-generic one (`_mono_
+        # suffix_for_type_args` already returns "" when `t` has no type
+        # arguments, resolving to the ordinary, non-mono companion
+        # `_emit_plain_struct_to_json`'s own main emission loop always
+        # generates).
+        if _type_involves_relation(t, plain_struct_fields, plain_struct_type_params):
+            return "sqrrl__" + t.name + _mono_suffix_for_type_args(t) + "_to_json(" + value_expr + ")"
+        return "sqrrl__to_json(" + value_expr + ")"
     var kind = _container_wrapper_kind(t)
-    if t.name in plain_struct_names or kind == "":
+    if kind == "":
         return "sqrrl__to_json(" + value_expr + ")"
 
     tmp_id += 1
@@ -864,7 +887,8 @@ def _dump_value_expr(
         out += indent + "var " + out_var + ": String\n"
         out += indent + "if " + value_expr + ":\n"
         var elem_expr = _dump_value_expr(
-            value_expr + ".value()", elem, plain_struct_names, indent + "    ", tmp_id, out
+            value_expr + ".value()", elem, plain_struct_names, indent + "    ", tmp_id, out, plain_struct_fields,
+            plain_struct_type_params,
         )
         out += indent + "    " + out_var + " = " + elem_expr + "\n"
         out += indent + "else:\n"
@@ -890,8 +914,14 @@ def _dump_value_expr(
         out += indent + "for de" + String(this_id) + " in " + iter_expr + (".items()" if wrapper == "Dict" else "") + ":\n"
         out += indent + "    if not dfirst" + String(this_id) + ":\n"
         out += indent + "        " + out_var + " += \",\"\n"
-        var key_expr = _dump_value_expr(key_ref, key_t, plain_struct_names, indent + "    ", tmp_id, out)
-        var val_expr = _dump_value_expr(val_ref, val_t, plain_struct_names, indent + "    ", tmp_id, out)
+        var key_expr = _dump_value_expr(
+            key_ref, key_t, plain_struct_names, indent + "    ", tmp_id, out, plain_struct_fields,
+            plain_struct_type_params,
+        )
+        var val_expr = _dump_value_expr(
+            val_ref, val_t, plain_struct_names, indent + "    ", tmp_id, out, plain_struct_fields,
+            plain_struct_type_params,
+        )
         out += indent + "    " + out_var + " += \"[\" + " + key_expr + " + \",\" + " + val_expr + " + \"]\"\n"
         out += indent + "    dfirst" + String(this_id) + " = False\n"
         out += indent + out_var + " += \"]\"\n"
@@ -912,7 +942,8 @@ def _dump_value_expr(
     out += indent + "    if not dfirst" + String(this_id) + ":\n"
     out += indent + "        " + out_var + " += \",\"\n"
     var elem_expr = _dump_value_expr(
-        "dv" + String(this_id), elem, plain_struct_names, indent + "    ", tmp_id, out
+        "dv" + String(this_id), elem, plain_struct_names, indent + "    ", tmp_id, out, plain_struct_fields,
+        plain_struct_type_params,
     )
     out += indent + "    " + out_var + " += " + elem_expr + "\n"
     out += indent + "    dfirst" + String(this_id) + " = False\n"
@@ -965,7 +996,8 @@ def _emit_to_json(
         # -- this check keeps `_emit_to_json` consistent with it, found via
         # a real end-to-end compile: `Tagged[String]` tried to `for x in`
         # a plain struct that isn't iterable at all).
-        var is_plain_struct_field = Bool(_plain_struct_value_base(f, plain_struct_names))
+        var plain_struct_base = _plain_struct_value_base(f, plain_struct_names)
+        var is_plain_struct_field = Bool(plain_struct_base)
         if f.modifier == FieldModifier.MULTI:
             # multi's own type_str is always bare (`@@Target`, never
             # bracket-shaped -- the modifier itself already means "many
@@ -989,7 +1021,22 @@ def _emit_to_json(
             out += "        mfirst_" + f.name + " = False\n"
             out += "    out += \"]\"\n"
         elif is_plain_struct_field:
-            out += "    out += sqrrl__to_json(e._inner[].get_" + param_name(f) + "())\n"
+            # Same reflection-can't-walk-a-container gap `_dump_value_
+            # expr`'s own plain-struct branch closes for a *nested*
+            # plain-struct field -- a @@struct's own *direct* field needs
+            # the identical check: a relation-involving plain struct
+            # (`Roster.@@members: List[@@Employee]`) never gets a
+            # dispatch-table branch at all, so `sqrrl__to_json(...)` here
+            # would fall through to reflection and crash on its own
+            # container field, confirmed via a real compile.
+            var plain_t = plain_struct_base.value().copy()
+            if _type_involves_relation(plain_t, plain_struct_fields, plain_struct_type_params):
+                out += (
+                    "    out += sqrrl__" + plain_t.name + _mono_suffix_for_type_args(plain_t) + "_to_json(e._inner[]"
+                    ".get_" + param_name(f) + "())\n"
+                )
+            else:
+                out += "    out += sqrrl__to_json(e._inner[].get_" + param_name(f) + "())\n"
         elif is_container_type(f.type_str):
             var t = parse_type_expr(f.type_str)
             if _container_wrapper_kind(t) == "":
@@ -1007,7 +1054,10 @@ def _emit_to_json(
                 # branch for it.
                 out += "    ref fv_" + f.name + " = e._inner[].get_" + param_name(f) + "()\n"
                 var dump_out = String()
-                var expr = _dump_value_expr("fv_" + f.name, t, plain_struct_names, "    ", tmp_id, dump_out)
+                var expr = _dump_value_expr(
+                    "fv_" + f.name, t, plain_struct_names, "    ", tmp_id, dump_out, plain_struct_fields,
+                    plain_struct_type_params,
+                )
                 out += dump_out
                 out += "    out += " + expr + "\n"
             else:
@@ -1490,6 +1540,8 @@ def _emit_plain_struct_to_json(
     plain_struct_names: Dict[String, Bool],
     type_params: List[TypeParam] = List[TypeParam](),
     plain_struct_type_params: Dict[String, List[TypeParam]] = Dict[String, List[TypeParam]](),
+    mono_suffix: String = "",
+    mono_return_type: String = "",
 ) raises -> String:
     """`sqrrl__<Name>_to_json[<T: Bound, ...>](value: <Name>[<T, ...>]) ->
     String` -- the dump-direction companion `_emit_plain_struct_from_json`
@@ -1530,10 +1582,13 @@ def _emit_plain_struct_to_json(
             type_param_decl += type_params[i].name + ": " + type_params[i].bound
             type_param_names += type_params[i].name
         type_param_decl += "]"
-    var value_type = name + "[" + type_param_names + "]" if len(type_params) > 0 else name
+    var fn_name = name + mono_suffix
+    var value_type = (
+        mono_return_type if mono_suffix != "" else (name + "[" + type_param_names + "]" if len(type_params) > 0 else name)
+    )
 
     var out = String(
-        "\ndef sqrrl__" + name + "_to_json" + type_param_decl + "(value: " + value_type + ") -> String:\n"
+        "\ndef sqrrl__" + fn_name + "_to_json" + type_param_decl + "(value: " + value_type + ") -> String:\n"
     )
     out += "    var out = String(\"{\")\n"
     var tmp_id = 0
@@ -1548,7 +1603,10 @@ def _emit_plain_struct_to_json(
         ):
             out += "    out += sqrrl__to_json(value." + f.name + ")\n"
         else:
-            var value_expr = _dump_value_expr("value." + f.name, t, plain_struct_names, "    ", tmp_id, out)
+            var value_expr = _dump_value_expr(
+                "value." + f.name, t, plain_struct_names, "    ", tmp_id, out, plain_struct_fields,
+                plain_struct_type_params,
+            )
             out += "    out += " + value_expr + "\n"
         first = False
     out += "    out += \"}\"\n"
@@ -2107,6 +2165,10 @@ def emit_json_module(
         var mono_fields = _substituted_fields_for(mt, plain_struct_fields, plain_struct_discovery.type_params)
         var mono_suffix = _mono_suffix_for_type_args(mt)
         var mono_return_type = rewritten_field_type(mt.render(), plain_struct_names)
+        out += _emit_plain_struct_to_json(
+            mt.name, mono_fields, plain_struct_fields, plain_struct_names, List[TypeParam](),
+            plain_struct_discovery.type_params, mono_suffix, mono_return_type,
+        )
         out += _emit_plain_struct_from_json(
             mt.name, mono_fields, plain_struct_fields, plain_struct_names, List[TypeParam](),
             plain_struct_discovery.type_params, mono_suffix, mono_return_type,
