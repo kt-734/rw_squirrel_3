@@ -86,15 +86,17 @@ def _container_wrapper_kind(t: TypeExpr) -> String:
     """Classifies a container-shaped `TypeExpr`'s own JSON dump/reload
     shape -- `"array"` (`List`/`Set`/any custom single-type-argument
     wrapper, via an escape hatch -- see `_parse_value_expr`), `"optional"`
-    (`Optional` -- null-or-value, not an array), `"dict"` (`Dict` -- an
-    array of `[key,value]` pairs, the one two-argument wrapper with a
-    defined JSON shape), or `""` for anything else (any other 2+-argument
-    wrapper -- genuinely ambiguous, stays rejected: a JSON array can't
-    represent arbitrary multi-argument container semantics generically the
-    way it can a single-typed membership or a defined key/value pairing)."""
+    (`Optional` -- null-or-value, not an array), `"dict"` (`Dict`, or any
+    other two-type-argument wrapper -- built-in or custom, via the exact
+    same `_to_pairs`/`_from_pairs` escape hatch a custom single-argument
+    wrapper already uses -- an array of `[key,value]` pairs), or `""` for
+    anything else (any 3+-argument wrapper -- genuinely ambiguous, stays
+    rejected: a JSON array can't represent arbitrary multi-argument
+    container semantics generically the way it can a single-typed
+    membership or a defined key/value pairing)."""
     if t.arg_count() == 1:
         return "optional" if t.name == "Optional" else "array"
-    if t.arg_count() == 2 and t.name == "Dict":
+    if t.arg_count() == 2:
         return "dict"
     return ""
 
@@ -401,8 +403,20 @@ def _parse_value_expr(
         ref val_t = t.arg(1)
         var key_type_str = rewritten_field_type(key_t.render(), plain_struct_names)
         var val_type_str = rewritten_field_type(val_t.render(), plain_struct_names)
+        var wrapper = t.name
+        var is_custom_dict = wrapper != "Dict"
         var key_var = "nck" + String(this_id)
-        out += indent + "var " + var_name + " = Dict[" + key_type_str + ", " + val_type_str + "]()\n"
+        # `Dict` builds directly (a known, real constructor/`[]=`
+        # assignment); a custom two-argument wrapper -- no guaranteed
+        # constructor or key/value contract at all -- instead builds an
+        # ordinary `List[Tuple[K, V]]` (exactly like a custom single-
+        # argument wrapper builds an ordinary `List[T]`), then hands the
+        # *whole* list to a hand-written `sqrrl__<Wrapper>_json_from_
+        # pairs` companion at the end.
+        if is_custom_dict:
+            out += indent + "var " + var_name + " = List[Tuple[" + key_type_str + ", " + val_type_str + "]]()\n"
+        else:
+            out += indent + "var " + var_name + " = Dict[" + key_type_str + ", " + val_type_str + "]()\n"
         out += indent + "sc.expect_byte(UInt8(ord(\"[\")))\n"
         out += indent + "if not sc.try_consume_byte(UInt8(ord(\"]\"))):\n"
         out += indent + "    while True:\n"
@@ -415,11 +429,16 @@ def _parse_value_expr(
         var val_expr = _parse_value_expr(
             val_t, plain_struct_fields, plain_struct_names, struct_name, field_name, indent + "        ", tmp_id, out, type_param_names
         )
-        out += indent + "        " + var_name + "[" + key_var + "] = " + val_expr + "\n"
+        if is_custom_dict:
+            out += indent + "        " + var_name + ".append((" + key_var + ", " + val_expr + "))\n"
+        else:
+            out += indent + "        " + var_name + "[" + key_var + "] = " + val_expr + "\n"
         out += indent + "        sc.expect_byte(UInt8(ord(\"]\")))\n"
         out += indent + "        if not sc.try_consume_byte(UInt8(ord(\",\"))):\n"
         out += indent + "            break\n"
         out += indent + "    sc.expect_byte(UInt8(ord(\"]\")))\n"
+        if is_custom_dict:
+            return "sqrrl__" + wrapper + "_json_from_pairs(" + var_name + "^)"
         return var_name + "^"
 
     raise Error(
@@ -430,9 +449,11 @@ def _parse_value_expr(
         + "' has type '"
         + t.render_relation_stripped()
         + "' -- @@container JSON reload doesn't support this container"
-        " shape (List/Set/Optional/Dict, or a single-type-argument custom"
+        " shape (List/Set/Optional/Dict, a single-type-argument custom"
         " wrapper via a hand-written 'sqrrl__<Wrapper>_json_from_list'/"
-        "'sqrrl__<Wrapper>_json_to_list' pair, are the only ones supported)"
+        "'sqrrl__<Wrapper>_json_to_list' pair, or a two-type-argument one"
+        " via 'sqrrl__<Wrapper>_json_from_pairs'/'sqrrl__<Wrapper>_json_"
+        "to_pairs', are the only ones supported)"
     )
 
 
@@ -494,7 +515,7 @@ def _unsupported_container_field_error(struct_name: String, field_name: String, 
         + "' has type '"
         + type_str
         + "' -- @@@to_json/@@@init_from_json don't support this container"
-        " shape (List/Set/Optional/Dict, 'multi', or a single-type-"
+        " shape (List/Set/Optional/Dict, 'multi', or a one- or two-type-"
         "argument custom wrapper are the only ones supported)"
     )
 
@@ -701,17 +722,24 @@ def _dump_value_expr(
     if kind == "dict":
         ref key_t = t.arg(0)
         ref val_t = t.arg(1)
+        var wrapper = t.name
+        var iter_expr = value_expr
+        if wrapper != "Dict":
+            # Not guaranteed `.items()` -- converts to an ordinary
+            # `List[Tuple[K, V]]` first via the same hand-written
+            # `sqrrl__<Wrapper>_json_to_pairs` companion the top-level
+            # field dispatch already needs, mirroring a custom single-
+            # argument wrapper's own `sqrrl__<Wrapper>_json_to_list`.
+            iter_expr = "sqrrl__" + wrapper + "_json_to_pairs(" + value_expr + ")"
+        var key_ref = "de" + String(this_id) + ".key" if wrapper == "Dict" else "de" + String(this_id) + "[0]"
+        var val_ref = "de" + String(this_id) + ".value" if wrapper == "Dict" else "de" + String(this_id) + "[1]"
         out += indent + "var " + out_var + " = String(\"[\")\n"
         out += indent + "var dfirst" + String(this_id) + " = True\n"
-        out += indent + "for de" + String(this_id) + " in " + value_expr + ".items():\n"
+        out += indent + "for de" + String(this_id) + " in " + iter_expr + (".items()" if wrapper == "Dict" else "") + ":\n"
         out += indent + "    if not dfirst" + String(this_id) + ":\n"
         out += indent + "        " + out_var + " += \",\"\n"
-        var key_expr = _dump_value_expr(
-            "de" + String(this_id) + ".key", key_t, plain_struct_names, indent + "    ", tmp_id, out
-        )
-        var val_expr = _dump_value_expr(
-            "de" + String(this_id) + ".value", val_t, plain_struct_names, indent + "    ", tmp_id, out
-        )
+        var key_expr = _dump_value_expr(key_ref, key_t, plain_struct_names, indent + "    ", tmp_id, out)
+        var val_expr = _dump_value_expr(val_ref, val_t, plain_struct_names, indent + "    ", tmp_id, out)
         out += indent + "    " + out_var + " += \"[\" + " + key_expr + " + \",\" + " + val_expr + " + \"]\"\n"
         out += indent + "    dfirst" + String(this_id) + " = False\n"
         out += indent + out_var + " += \"]\"\n"
@@ -1206,24 +1234,31 @@ def _collect_custom_container_wrappers_from_type(
     plain_struct_names: Dict[String, Bool],
     mut seen: Dict[String, Bool],
     mut out: List[String],
+    mut arities: Dict[String, Int],
 ):
     """Collects every distinct *custom* container wrapper name (not
     `List`/`Set`/`Optional`/`Dict`, and not a discovered plain struct)
     reachable from `t`, at any nesting depth -- what `sqrrl__json.mojo`
     needs its own explicit `from <module> import <Wrapper>, sqrrl__
-    <Wrapper>_json_to_list, sqrrl__<Wrapper>_json_from_list` line for.
-    Unlike `List`/`Set`/`Optional`/`Dict` (always available via `squirrel_
-    runtime`) or a discovered plain struct (already imported via its own
-    `module_of`), the compiler has no other way to know where a custom
-    wrapper's own declaration -- and its two hand-written escape-hatch
-    companions -- actually live."""
+    <Wrapper>_json_to_list, sqrrl__<Wrapper>_json_from_list` (one-type-
+    argument wrapper) or `..._to_pairs, ..._from_pairs` (two-type-
+    argument wrapper) line for -- `arities` records each wrapper's own
+    argument count (from wherever it's first encountered; a wrapper's own
+    arity never varies between uses) so the import line can pick the
+    right suffix without re-deriving it. Unlike `List`/`Set`/`Optional`/
+    `Dict` (always available via `squirrel_runtime`) or a discovered
+    plain struct (already imported via its own `module_of`), the
+    compiler has no other way to know where a custom wrapper's own
+    declaration -- and its two hand-written escape-hatch companions --
+    actually live."""
     if t.arg_count() >= 1 and t.name not in plain_struct_names:
         var wrapper = t.name
         if wrapper != "List" and wrapper != "Set" and wrapper != "Optional" and wrapper != "Dict" and wrapper not in seen:
             seen[wrapper] = True
             out.append(wrapper)
+            arities[wrapper] = t.arg_count()
     for i in range(t.arg_count()):
-        _collect_custom_container_wrappers_from_type(t.arg(i), plain_struct_names, seen, out)
+        _collect_custom_container_wrappers_from_type(t.arg(i), plain_struct_names, seen, out, arities)
 
 
 def _collect_custom_container_wrappers(
@@ -1231,9 +1266,10 @@ def _collect_custom_container_wrappers(
     plain_struct_names: Dict[String, Bool],
     mut seen: Dict[String, Bool],
     mut out: List[String],
+    mut arities: Dict[String, Int],
 ) raises:
     for f in fields:
-        _collect_custom_container_wrappers_from_type(parse_type_expr(f.type_str), plain_struct_names, seen, out)
+        _collect_custom_container_wrappers_from_type(parse_type_expr(f.type_str), plain_struct_names, seen, out, arities)
 
 
 def _collect_custom_leaf_types_from_type(
@@ -1568,31 +1604,37 @@ def emit_json_module(
     for plain_name in plain_struct_name_list:
         out += "from " + plain_struct_discovery.module_of[plain_name] + " import " + plain_name + "\n"
 
-    # A custom container wrapper (the escape hatch -- any single-type-
-    # argument wrapper other than List/Set/Optional, and not a discovered
-    # plain struct) has no `module_of` entry at all -- the compiler never
-    # scanned a declaration for it, by definition. Imports it (and its two
-    # hand-written `sqrrl__<Wrapper>_json_to_list`/`_json_from_list`
-    # companions) from whichever real @@struct/plain struct's own module
-    # first referenced it, on the assumption that module itself already
-    # imports it to declare the field in the first place (so it's
-    # re-exportable from there) -- the same transitive-import assumption
-    # `build_entity_symbols`'s own cross-file import mechanism already
-    # relies on.
+    # A custom container wrapper (the escape hatch -- any one- or two-
+    # type-argument wrapper other than List/Set/Optional/Dict, and not a
+    # discovered plain struct) has no `module_of` entry at all -- the
+    # compiler never scanned a declaration for it, by definition. Imports
+    # it (and its two hand-written escape-hatch companions -- `_json_to_
+    # list`/`_json_from_list` for a one-argument wrapper, `_json_to_
+    # pairs`/`_json_from_pairs` for a two-argument one, picked via each
+    # wrapper's own recorded arity) from whichever real @@struct/plain
+    # struct's own module first referenced it, on the assumption that
+    # module itself already imports it to declare the field in the first
+    # place (so it's re-exportable from there) -- the same transitive-
+    # import assumption `build_entity_symbols`'s own cross-file import
+    # mechanism already relies on.
     var custom_wrapper_module = Dict[String, String]()
     var custom_wrapper_list = List[String]()
+    var custom_wrapper_arity = Dict[String, Int]()
     var cwseen = Dict[String, Bool]()
     for ds in discovery_structs:
         var before = len(custom_wrapper_list)
-        _collect_custom_container_wrappers(ds.parsed.fields, plain_struct_names, cwseen, custom_wrapper_list)
+        _collect_custom_container_wrappers(ds.parsed.fields, plain_struct_names, cwseen, custom_wrapper_list, custom_wrapper_arity)
         for i in range(before, len(custom_wrapper_list)):
             custom_wrapper_module[custom_wrapper_list[i]] = ds.module_path
     for plain_name in plain_struct_name_list:
         var before2 = len(custom_wrapper_list)
-        _collect_custom_container_wrappers(plain_struct_fields[plain_name], plain_struct_names, cwseen, custom_wrapper_list)
+        _collect_custom_container_wrappers(
+            plain_struct_fields[plain_name], plain_struct_names, cwseen, custom_wrapper_list, custom_wrapper_arity
+        )
         for i in range(before2, len(custom_wrapper_list)):
             custom_wrapper_module[custom_wrapper_list[i]] = plain_struct_discovery.module_of[plain_name]
     for wrapper in custom_wrapper_list:
+        var suffix = "_to_pairs, sqrrl__" + wrapper + "_json_from_pairs\n" if custom_wrapper_arity[wrapper] == 2 else "_to_list, sqrrl__" + wrapper + "_json_from_list\n"
         out += (
             "from "
             + custom_wrapper_module[wrapper]
@@ -1600,9 +1642,8 @@ def emit_json_module(
             + wrapper
             + ", sqrrl__"
             + wrapper
-            + "_json_to_list, sqrrl__"
-            + wrapper
-            + "_json_from_list\n"
+            + "_json"
+            + suffix
         )
 
     # A genuinely undiscovered plain-value leaf type (the escape hatch

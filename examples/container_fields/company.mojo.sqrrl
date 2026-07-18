@@ -1,4 +1,5 @@
 from ring_module import Ring, sqrrl__Ring_json_to_list, sqrrl__Ring_json_from_list
+from grid_module import Grid, sqrrl__Grid_json_to_pairs, sqrrl__Grid_json_from_pairs
 
 @@struct @@Employee:
     unique name: String
@@ -12,6 +13,7 @@ from ring_module import Ring, sqrrl__Ring_json_to_list, sqrrl__Ring_json_from_li
     @@scores: Dict[@@Employee, String]
     groups: List[List[String]]
     ring: Ring[String]
+    grid: Grid[String, Int]
 
 def main() raises:
     @@@:
@@ -29,6 +31,7 @@ def main() raises:
             .@@scores = scores_dict,
             .groups = [["a", "b"], ["c"]],
             .ring = Ring[String](items=["x", "y"]),
+            .grid = Grid[String, Int](pairs=[("p", 1), ("q", 2)]),
         }
 
         print(@@eng.@@members[0].name)
@@ -40,6 +43,7 @@ def main() raises:
         print(@@eng.@@scores[@@alice])
         print(@@eng.groups[0][0], @@eng.groups[0][1], @@eng.groups[1][0])
         print(@@eng.ring[0], @@eng.ring[1])
+        print(@@eng.grid.get("p"), @@eng.grid.get("q"))
 
         @@eng.@@members[0].name = "Alicia"
         print(@@eng.@@members[0].name)
@@ -72,5 +76,6 @@ def main() raises:
         print(@@eng2.@@scores[@@alice2])
         print(@@eng2.groups[0][0], @@eng2.groups[0][1], @@eng2.groups[1][0])
         print(@@eng2.ring[0], @@eng2.ring[1])
-        print("reload OK: List/Set/Optional/Dict relations, a nested List, and a custom container all preserved")
+        print(@@eng2.grid.get("p"), @@eng2.grid.get("q"))
+        print("reload OK: List/Set/Optional/Dict relations, a nested List, and custom one- and two-argument containers all preserved")
         @@@end_init_from_json()

@@ -1914,15 +1914,49 @@ def test_emit_json_module_custom_container_wrapper_uses_escape_hatch() raises:
     )
 
 
-def test_emit_json_module_two_argument_non_dict_wrapper_rejected() raises:
-    """The one remaining genuinely-unsupported shape: a 2+-argument
-    wrapper other than `Dict` has no defined JSON shape at all (unlike
-    Dict's own well-defined key/value pairing) -- stays a clear
-    codegen-time error, not silently mishandled."""
+def test_emit_json_module_custom_two_argument_wrapper_uses_pairs_escape_hatch() raises:
+    """A custom, two-type-argument wrapper (anything other than `Dict`)
+    now shares the exact same escape hatch `Dict` itself uses -- an array
+    of `[key,value]` pairs -- via hand-written `sqrrl__<Wrapper>_json_to_
+    pairs`/`_json_from_pairs` companions instead of `Dict`'s own native
+    `[]=`/`.items()`. The field itself is a single uniform dispatcher
+    call, same as any other container; the dispatch table's own branch
+    converts to/from an ordinary `List[Tuple[K, V]]` via `pairs_to_json`/
+    `pairs_from_json`, mirroring the one-argument custom-wrapper case
+    exactly. Also confirms the import line picks the `_to_pairs`/`_from_
+    pairs` suffix (not `_to_list`/`_from_list`) based on the wrapper's
+    own two-argument arity."""
     var employee_fields = List[Field]()
     employee_fields.append(Field(name="name", type_str="String", modifier=FieldModifier.UNIQUE, is_stats=False))
     employee_fields.append(
         Field(name="grid", type_str="Grid[String, Int]", modifier=FieldModifier.NONE, is_stats=False)
+    )
+    var structs = List[DiscoveredStruct]()
+    structs.append(DiscoveredStruct(module_path="main", parsed=ParsedStruct(name="Employee", fields=employee_fields^)))
+    var out = emit_json_module(structs, structs)
+    assert_true("from main import Grid, sqrrl__Grid_json_to_pairs, sqrrl__Grid_json_from_pairs" in out)
+    assert_true("out += sqrrl__to_json(e._inner[].get_grid())" in out)
+    assert_true("parsed_grid = sqrrl__from_json[Grid[String, Int]](sc)" in out)
+    assert_true(
+        "elif T == Grid[String, Int]:\n        return pairs_to_json(sqrrl__Grid_json_to_pairs(rebind[Grid[String, Int]](value)))"
+        in out
+    )
+    assert_true(
+        "elif T == Grid[String, Int]:\n        return sqrrl__movable_rebind[Grid[String, Int], T](sqrrl__Grid_json_from_pairs"
+        "(pairs_from_json[String, Int](sc)))"
+        in out
+    )
+
+
+def test_emit_json_module_three_argument_wrapper_rejected() raises:
+    """The one remaining genuinely-unsupported shape: a 3+-argument
+    wrapper has no defined JSON shape at all (unlike a 2-argument one's
+    well-defined key/value pairing) -- stays a clear codegen-time error,
+    not silently mishandled."""
+    var employee_fields = List[Field]()
+    employee_fields.append(Field(name="name", type_str="String", modifier=FieldModifier.UNIQUE, is_stats=False))
+    employee_fields.append(
+        Field(name="triple", type_str="Triple[String, Int, Bool]", modifier=FieldModifier.NONE, is_stats=False)
     )
     var structs = List[DiscoveredStruct]()
     structs.append(DiscoveredStruct(module_path="main", parsed=ParsedStruct(name="Employee", fields=employee_fields^)))

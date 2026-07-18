@@ -5,6 +5,7 @@ from sqrrl__world import sqrrl__World, sqrrl__init
 from company import sqrrl__Employee, sqrrl__EmployeeInner, sqrrl__EmployeeTable
 from company import sqrrl__Department, sqrrl__DepartmentInner, sqrrl__DepartmentTable
 from company import Ring, sqrrl__Ring_json_to_list, sqrrl__Ring_json_from_list
+from company import Grid, sqrrl__Grid_json_to_pairs, sqrrl__Grid_json_from_pairs
 
 
 def list_to_json[T: Movable](lst: List[T]) -> String:
@@ -67,6 +68,8 @@ def sqrrl__to_json[T: AnyType](value: T) -> String:
         return list_to_json(sqrrl__List_json_to_list(rebind[List[List[String]]](value)))
     elif T == Ring[String]:
         return list_to_json(sqrrl__Ring_json_to_list(rebind[Ring[String]](value)))
+    elif T == Grid[String, Int]:
+        return pairs_to_json(sqrrl__Grid_json_to_pairs(rebind[Grid[String, Int]](value)))
     else:
         return sqrrl__to_json_default(value)
 
@@ -80,6 +83,8 @@ def sqrrl__from_json[T: Movable & ImplicitlyDeletable](mut sc: sqrrl__JsonScanne
         return sqrrl__movable_rebind[List[List[String]], T](sqrrl__List_json_from_list(list_from_json[List[String]](sc)))
     elif T == Ring[String]:
         return sqrrl__movable_rebind[Ring[String], T](sqrrl__Ring_json_from_list(list_from_json[String](sc)))
+    elif T == Grid[String, Int]:
+        return sqrrl__movable_rebind[Grid[String, Int], T](sqrrl__Grid_json_from_pairs(pairs_from_json[String, Int](sc)))
     else:
         return sqrrl__from_json_default[T](sc)
 
@@ -197,6 +202,9 @@ def sqrrl__Department_to_json(e: sqrrl__Department) -> String:
     out += ","
     out += '"ring":'
     out += sqrrl__to_json(e._inner[].get_ring())
+    out += ","
+    out += '"grid":'
+    out += sqrrl__to_json(e._inner[].get_grid())
     out += "}"
     return out^
 
@@ -209,6 +217,7 @@ def sqrrl__Department_from_json_with_id(table: sqrrl__DepartmentTable, sqrrl__tb
     var parsed_scores: Optional[Dict[sqrrl__Employee, String]] = None
     var parsed_groups: Optional[List[List[String]]] = None
     var parsed_ring: Optional[Ring[String]] = None
+    var parsed_grid: Optional[Grid[String, Int]] = None
     sc.expect_byte(UInt8(ord("{")))
     if not sc.try_consume_byte(UInt8(ord("}"))):
         while True:
@@ -263,6 +272,8 @@ def sqrrl__Department_from_json_with_id(table: sqrrl__DepartmentTable, sqrrl__tb
                 parsed_groups = sqrrl__from_json[List[List[String]]](sc)
             elif key == "ring":
                 parsed_ring = sqrrl__from_json[Ring[String]](sc)
+            elif key == "grid":
+                parsed_grid = sqrrl__from_json[Grid[String, Int]](sc)
             else:
                 raise Error("InvalidJson: unknown field " + key + " for Department")
             if not sc.try_consume_byte(UInt8(ord(","))):
@@ -284,6 +295,8 @@ def sqrrl__Department_from_json_with_id(table: sqrrl__DepartmentTable, sqrrl__tb
         raise Error("InvalidJson: missing field groups for Department")
     if not parsed_ring:
         raise Error("InvalidJson: missing field ring for Department")
+    if not parsed_grid:
+        raise Error("InvalidJson: missing field grid for Department")
     table.storage[].alloc_specific_id(id)
     var v_name = parsed_name.value()
     var v_members = parsed_members.take()
@@ -293,7 +306,8 @@ def sqrrl__Department_from_json_with_id(table: sqrrl__DepartmentTable, sqrrl__tb
     var v_scores = parsed_scores.take()
     var v_groups = parsed_groups.take()
     var v_ring = parsed_ring.take()
-    var inner = ArcPointer(sqrrl__DepartmentInner(_id=id, _table=table.storage, _name=v_name, _sqrrl__members=v_members^, _sqrrl__backup=v_backup^, _sqrrl__lead=v_lead^, _tags=v_tags^, _sqrrl__scores=v_scores^, _groups=v_groups^, _ring=v_ring^))
+    var v_grid = parsed_grid.take()
+    var inner = ArcPointer(sqrrl__DepartmentInner(_id=id, _table=table.storage, _name=v_name, _sqrrl__members=v_members^, _sqrrl__backup=v_backup^, _sqrrl__lead=v_lead^, _tags=v_tags^, _sqrrl__scores=v_scores^, _groups=v_groups^, _ring=v_ring^, _grid=v_grid^))
     table.storage[].register_weak(id, inner)
     table.storage[].indexes.name.add(id, inner[]._name)
     return sqrrl__Department(inner^)

@@ -10,6 +10,7 @@ from sqrrl__json import sqrrl__begin_init_from_json, sqrrl__end_init_from_json, 
 
 
 from ring_module import Ring, sqrrl__Ring_json_to_list, sqrrl__Ring_json_from_list
+from grid_module import Grid, sqrrl__Grid_json_to_pairs, sqrrl__Grid_json_from_pairs
 
 @fieldwise_init
 struct sqrrl__EmployeeInner(Movable, ImplicitlyDeletable):
@@ -124,6 +125,7 @@ struct sqrrl__DepartmentInner(Movable, ImplicitlyDeletable):
     var _sqrrl__scores: Dict[sqrrl__Employee, String]
     var _groups: List[List[String]]
     var _ring: Ring[String]
+    var _grid: Grid[String, Int]
 
     def __del__(deinit self):
         self._table[].indexes.name.remove(self._id, self._name)
@@ -156,6 +158,9 @@ struct sqrrl__DepartmentInner(Movable, ImplicitlyDeletable):
     def set_ring(mut self, var v: Ring[String]):
         self._ring = v^
 
+    def set_grid(mut self, var v: Grid[String, Int]):
+        self._grid = v^
+
     @always_inline
     def get_name(self) -> ref [self._name] String:
         return self._name
@@ -187,6 +192,10 @@ struct sqrrl__DepartmentInner(Movable, ImplicitlyDeletable):
     @always_inline
     def get_ring(self) -> ref [self._ring] Ring[String]:
         return self._ring
+
+    @always_inline
+    def get_grid(self) -> ref [self._grid] Grid[String, Int]:
+        return self._grid
 
 
 struct sqrrl__Department(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable, sqrrl__JsonSerializable):
@@ -230,11 +239,11 @@ struct sqrrl__DepartmentTable(Movable):
     def __init__(out self):
         self.storage = ArcPointer(EntityStorage[sqrrl__DepartmentIndexes, sqrrl__DepartmentInner](sqrrl__DepartmentIndexes()))
 
-    def create(mut self, name: String, var sqrrl__members: List[sqrrl__Employee], var sqrrl__backup: Set[sqrrl__Employee], var sqrrl__lead: Optional[sqrrl__Employee], var tags: List[String], var sqrrl__scores: Dict[sqrrl__Employee, String], var groups: List[List[String]], var ring: Ring[String]) raises -> sqrrl__Department:
+    def create(mut self, name: String, var sqrrl__members: List[sqrrl__Employee], var sqrrl__backup: Set[sqrrl__Employee], var sqrrl__lead: Optional[sqrrl__Employee], var tags: List[String], var sqrrl__scores: Dict[sqrrl__Employee, String], var groups: List[List[String]], var ring: Ring[String], var grid: Grid[String, Int]) raises -> sqrrl__Department:
         if self.storage[].indexes.name.contains(name):
             raise Error("UniqueConstraintViolation: 'name' already in use by another entity")
         var id = self.storage[].alloc_id()
-        var inner = ArcPointer(sqrrl__DepartmentInner(_id=id, _table=self.storage, _name=name, _sqrrl__members=sqrrl__members^, _sqrrl__backup=sqrrl__backup^, _sqrrl__lead=sqrrl__lead^, _tags=tags^, _sqrrl__scores=sqrrl__scores^, _groups=groups^, _ring=ring^))
+        var inner = ArcPointer(sqrrl__DepartmentInner(_id=id, _table=self.storage, _name=name, _sqrrl__members=sqrrl__members^, _sqrrl__backup=sqrrl__backup^, _sqrrl__lead=sqrrl__lead^, _tags=tags^, _sqrrl__scores=sqrrl__scores^, _groups=groups^, _ring=ring^, _grid=grid^))
         self.storage[].register_weak(id, inner)
         self.storage[].indexes.name.add(id, inner[]._name)
         return sqrrl__Department(inner^)
@@ -277,7 +286,7 @@ def main() raises:
         var scores_dict = Dict[sqrrl__Employee, String]()
         scores_dict[sqrrl__alice] = "lead"
         scores_dict[sqrrl__bob] = "member"
-        var sqrrl__eng = sqrrl__world.Department.create(name = "Engineering", sqrrl__members = [sqrrl__alice, sqrrl__bob], sqrrl__backup = Set(sqrrl__alice), sqrrl__lead = Optional(sqrrl__alice), tags = ["urgent", "core"], sqrrl__scores = scores_dict^, groups = [["a", "b"], ["c"]], ring = Ring[String](items=["x", "y"]))
+        var sqrrl__eng = sqrrl__world.Department.create(name = "Engineering", sqrrl__members = [sqrrl__alice, sqrrl__bob], sqrrl__backup = Set(sqrrl__alice), sqrrl__lead = Optional(sqrrl__alice), tags = ["urgent", "core"], sqrrl__scores = scores_dict^, groups = [["a", "b"], ["c"]], ring = Ring[String](items=["x", "y"]), grid = Grid[String, Int](pairs=[("p", 1), ("q", 2)]))
 
         print(sqrrl__eng._inner[]._sqrrl__members[0]._inner[]._name)
         print(sqrrl__eng._inner[]._sqrrl__members[1]._inner[]._name)
@@ -288,6 +297,7 @@ def main() raises:
         print(sqrrl__eng._inner[]._sqrrl__scores[sqrrl__alice])
         print(sqrrl__eng._inner[]._groups[0][0], sqrrl__eng._inner[]._groups[0][1], sqrrl__eng._inner[]._groups[1][0])
         print(sqrrl__eng._inner[]._ring[0], sqrrl__eng._inner[]._ring[1])
+        print(sqrrl__eng._inner[]._grid.get("p"), sqrrl__eng._inner[]._grid.get("q"))
 
         sqrrl__eng._inner[]._sqrrl__members[0]._inner[].set_name("Alicia");
         print(sqrrl__eng._inner[]._sqrrl__members[0]._inner[]._name)
@@ -320,7 +330,8 @@ def main() raises:
         print(sqrrl__eng2._inner[]._sqrrl__scores[sqrrl__alice2])
         print(sqrrl__eng2._inner[]._groups[0][0], sqrrl__eng2._inner[]._groups[0][1], sqrrl__eng2._inner[]._groups[1][0])
         print(sqrrl__eng2._inner[]._ring[0], sqrrl__eng2._inner[]._ring[1])
-        print("reload OK: List/Set/Optional/Dict relations, a nested List, and a custom container all preserved")
+        print(sqrrl__eng2._inner[]._grid.get("p"), sqrrl__eng2._inner[]._grid.get("q"))
+        print("reload OK: List/Set/Optional/Dict relations, a nested List, and custom one- and two-argument containers all preserved")
         sqrrl__end_init_from_json(sqrrl__temp_keep_alives^)
     finally:
         sqrrl__world.sqrrl__check_no_leaks()
