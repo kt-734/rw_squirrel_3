@@ -1,0 +1,27 @@
+@@struct @@Project:
+    unique name: String
+
+@@struct @@Department:
+    unique name: String
+    multi @@projects: @@Project
+
+def main() raises:
+    @@@:
+        var @@website = @@@Project { .name = "Website" }
+        var @@app = @@@Project { .name = "App" }
+        var @@eng = @@@Department { .name = "Engineering", .@@projects = Set(@@website, @@app) }
+        var @@sales = @@@Department { .name = "Sales", .@@projects = Set(@@website) }
+
+        print("eng has", len(@@eng.@@projects), "projects")
+        print("website is used by", len(@@@Department.for_@@projects(@@website)), "departments")
+
+        _ = @@eng.remove_from_@@projects(@@app)
+        print("eng has", len(@@eng.@@projects), "projects after removal")
+        print("app is used by", len(@@@Department.for_@@projects(@@app)), "departments after removal")
+
+        print("website users:", len(@@@Department.for_@@projects(@@website)))
+
+        @@sales.@@projects = Set(@@app)
+        print("website users after sales switches to app:", len(@@@Department.for_@@projects(@@website)))
+        print("app users after sales switches to app:", len(@@@Department.for_@@projects(@@app)))
+        print("sales projects:", len(@@sales.@@projects), "eng projects:", len(@@eng.@@projects))

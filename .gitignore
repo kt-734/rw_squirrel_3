@@ -1,0 +1,9 @@
+# pixi environments
+.pixi/*
+!.pixi/config.toml
+
+# build output
+/squirrelc
+
+# personal/local settings, not shared
+.claude/settings.local.json

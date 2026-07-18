@@ -1,0 +1,83 @@
+from ext_module import ExternalCity, sqrrl__ExternalCity_from_json
+
+@fieldwise_init
+struct Address(Copyable, Movable, ImplicitlyDeletable):
+    var city: String
+    var @@owner: @@Employee
+
+
+struct Box[T: Copyable & ImplicitlyDeletable](Movable, ImplicitlyDeletable):
+    var value: Self.T
+
+    def __init__(out self, var value: Self.T):
+        self.value = value^
+
+
+@fieldwise_init
+struct Tagged[Kind: Copyable & ImplicitlyDeletable](Movable, ImplicitlyDeletable):
+    # Unlike Box, no field is typed as the bare type parameter itself --
+    # `Kind` only ever appears at the instantiation site (`Tagged[String]`
+    # below), never as a field's own storage type. That's the dividing
+    # line for JSON reload: a generic plain struct's `from_json` can only
+    # be generated when every field has a concrete type at codegen time,
+    # since there's no way to generate code that parses an abstract "T"
+    # from JSON text without knowing what it concretely is.
+    var label: String
+    var count: UInt32
+
+
+@@struct @@Employee:
+    unique name: String
+
+
+@@struct @@Person:
+    unique name: String
+    home: Address
+    meta: Tagged[String]
+    hometown: ExternalCity
+
+
+def main() raises:
+    @@@:
+        var @@bob = @@@Employee { .name = "Bob" }
+        var addr = Address(city = "Springfield", owner = @@bob)
+        var meta = Tagged[String](label = "vip", count = 1)
+        var @@alice = @@@Person { .name = "Alice", .home = addr, .meta = meta, .hometown = ExternalCity(name = "Ogdenville") }
+
+        print(@@alice.home.city)
+        print(@@alice.home.@@owner.name)
+        print(@@alice.meta.label, @@alice.meta.count)
+        print(@@alice.hometown.name)
+
+        @@alice.home.city = "Shelbyville"
+        @@alice.home.@@owner = @@bob
+
+        print(@@alice.home.city)
+        print(@@alice.home.@@owner.name)
+
+        var box_a = Box(42)
+        var box_b = Box("hello")
+        print(box_a.value)
+        print(box_b.value)
+
+        var dump = @@@to_json()
+        print("dump:", dump)
+
+        var bob_id = @@bob.id()
+        var alice_id = @@alice.id()
+
+        @@@begin_init_from_json(dump)
+        var @@bob2 = @@@Employee.for_name("Bob")
+        var @@alice2 = @@@Person.for_name("Alice")
+
+        if @@bob2.id() != bob_id:
+            raise Error("id mismatch: bob")
+        if @@alice2.id() != alice_id:
+            raise Error("id mismatch: alice")
+
+        print(@@alice2.home.city)
+        print(@@alice2.home.@@owner.name)
+        print(@@alice2.meta.label, @@alice2.meta.count)
+        print(@@alice2.hometown.name)
+        print("reload OK: ids, plain-struct field, generic plain-struct field, and undiscovered external plain-value field preserved")
+        @@@end_init_from_json()

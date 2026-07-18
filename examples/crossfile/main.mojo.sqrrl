@@ -1,0 +1,16 @@
+@@struct @@Employee:
+    indexed name: String
+    @@dept: @@Department
+
+def main() raises:
+    @@@:
+        var @@eng = @@@Department { .name = "Engineering" }
+        var @@alice = @@@Employee { .name = "alice", .@@dept = @@eng }
+        var @@bob = @@@Employee { .name = "bob", .@@dept = @@eng }
+
+        print(@@alice.name, @@alice.@@dept.name)
+
+        var @@matches = @@@Employee.for_name("alice")
+        print("found by index:", len(@@matches))
+
+        print("count:", @@@Employee.count(), @@alice.name, @@bob.name)

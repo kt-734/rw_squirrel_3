@@ -1,0 +1,40 @@
+trait HasId:
+    def entity_id(self) -> UInt32:
+        ...
+
+
+def print_entity_id[T: HasId](x: T):
+    print("id:", x.entity_id())
+
+
+def @@@greet_everyone() raises -> String:
+    var out = String("")
+    for @@p in @@@Person.all():
+        out += @@p.name + " "
+    return out
+
+
+@@struct @@Person(HasId):
+    name: String
+
+    def entity_id(self) -> UInt32:
+        return self.id()
+
+    def @@@greeting(self) -> String:
+        return "Hello, " + self.name + "! Total people: " + String(@@@Person.count())
+
+
+def main() raises:
+    @@@:
+        var @@alice = @@@Person { .name = "alice" }
+        var @@bob = @@@Person { .name = "bob" }
+
+        print(@@alice.@@@greeting())
+        print(@@bob.@@@greeting())
+
+        print("direct call:", @@alice.entity_id())
+        print_entity_id(@@alice)
+        print_entity_id(@@bob)
+
+        print("top-level @@@ function:", @@@greet_everyone())
+        print("count:", @@@Person.count(), @@alice.name, @@bob.name)

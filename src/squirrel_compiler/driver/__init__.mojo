@@ -1,0 +1,1 @@
+from squirrel_compiler.driver.convert_directory import convert_directory

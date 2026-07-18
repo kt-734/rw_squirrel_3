@@ -1,0 +1,2 @@
+from squirrel_compiler.analysis.field_shape import is_groupable, is_aggregatable
+from squirrel_compiler.analysis.relation_targets import collect_relation_targets, collect_plain_struct_targets

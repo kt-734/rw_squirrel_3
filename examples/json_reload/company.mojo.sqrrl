@@ -1,0 +1,53 @@
+@@struct @@Project:
+    unique name: String
+
+@@struct @@Department:
+    unique name: String
+    multi @@projects: @@Project
+
+@@struct keepalive @@Tag:
+    unique label: String
+
+def main() raises:
+    @@@:
+        var @@website = @@@Project { .name = "Website" }
+        var @@app = @@@Project { .name = "App" }
+        var @@eng = @@@Department { .name = "Engineering", .@@projects = Set(@@website, @@app) }
+        var @@t1 = @@@Tag { .label = "urgent" }
+
+        var dump = @@@to_json()
+        print("dump:", dump)
+
+        # Captured after to_json() -- these calls are each variable's true
+        # last use, so ASAP destruction doesn't free them until here, well
+        # after to_json() has already walked every table (see the project's
+        # own documented ASAP-destruction-vs-weakly-referenced-entities
+        # pitfall: capturing these ids *before* to_json() would make that
+        # capture their true last use instead, destroying them -- and
+        # emptying every table -- before to_json() ever ran).
+        var website_id = @@website.id()
+        var app_id = @@app.id()
+        var eng_id = @@eng.id()
+        var t1_id = @@t1.id()
+
+        @@@begin_init_from_json(dump)
+        var @@website2 = @@@Project.for_name("Website")
+        var @@app2 = @@@Project.for_name("App")
+        var @@eng2 = @@@Department.for_name("Engineering")
+        var @@t1_2 = @@@Tag.for_label("urgent")
+
+        if @@website2.id() != website_id:
+            raise Error("id mismatch: website")
+        if @@app2.id() != app_id:
+            raise Error("id mismatch: app")
+        if @@eng2.id() != eng_id:
+            raise Error("id mismatch: eng")
+        if @@t1_2.id() != t1_id:
+            raise Error("id mismatch: t1")
+
+        var @@members = @@@Department.for_@@projects(@@website2)
+        if len(@@members) != 1:
+            raise Error("reloaded multi index broken: website2 membership")
+
+        print("reload OK: ids preserved, multi index intact")
+        @@@end_init_from_json()

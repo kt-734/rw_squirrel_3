@@ -1,0 +1,20 @@
+@@struct @@Department:
+    unique name: String
+
+@@struct @@Person:
+    indexed name: String
+    age: UInt32
+    @@dept: @@Department
+
+def main() raises:
+    @@@:
+        var @@eng = @@@Department { .name = "Engineering" }
+        var @@alice = @@@Person { .name = "alice", .age = 30, .@@dept = @@eng }
+        var @@bob = @@@Person { .name = "bob", .age = 25, .@@dept = @@eng }
+        @@alice.age = 31
+        print(@@alice.name, @@alice.age, @@alice.@@dept.name)
+
+        var @@team = @@@Person.for_name("alice")
+        print("found by index:", len(@@team))
+
+        print("count:", @@@Person.count(), @@alice.name, @@bob.name)

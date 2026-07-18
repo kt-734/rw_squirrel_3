@@ -1,0 +1,76 @@
+from ring_module import Ring, sqrrl__Ring_json_to_list, sqrrl__Ring_json_from_list
+
+@@struct @@Employee:
+    unique name: String
+
+@@struct @@Department:
+    unique name: String
+    @@members: List[@@Employee]
+    @@backup: Set[@@Employee]
+    @@lead: Optional[@@Employee]
+    tags: List[String]
+    @@scores: Dict[@@Employee, String]
+    groups: List[List[String]]
+    ring: Ring[String]
+
+def main() raises:
+    @@@:
+        var @@alice = @@@Employee { .name = "Alice" }
+        var @@bob = @@@Employee { .name = "Bob" }
+        var scores_dict = Dict[sqrrl__Employee, String]()
+        scores_dict[@@alice] = "lead"
+        scores_dict[@@bob] = "member"
+        var @@eng = @@@Department {
+            .name = "Engineering",
+            .@@members = [@@alice, @@bob],
+            .@@backup = Set(@@alice),
+            .@@lead = Optional(@@alice),
+            .tags = ["urgent", "core"],
+            .@@scores = scores_dict,
+            .groups = [["a", "b"], ["c"]],
+            .ring = Ring[String](items=["x", "y"]),
+        }
+
+        print(@@eng.@@members[0].name)
+        print(@@eng.@@members[1].name)
+        print(len(@@eng.@@backup))
+        if @@eng.@@lead:
+            print(@@eng.@@lead.value()._inner[].get_name())
+        print(@@eng.tags[0], @@eng.tags[1])
+        print(@@eng.@@scores[@@alice])
+        print(@@eng.groups[0][0], @@eng.groups[0][1], @@eng.groups[1][0])
+        print(@@eng.ring[0], @@eng.ring[1])
+
+        @@eng.@@members[0].name = "Alicia"
+        print(@@eng.@@members[0].name)
+
+        var dump = @@@to_json()
+        print("dump:", dump)
+
+        var alice_id = @@alice.id()
+        var bob_id = @@bob.id()
+        var eng_id = @@eng.id()
+
+        @@@begin_init_from_json(dump)
+        var @@alice2 = @@@Employee.for_name("Alicia")
+        var @@bob2 = @@@Employee.for_name("Bob")
+        var @@eng2 = @@@Department.for_name("Engineering")
+
+        if @@alice2.id() != alice_id:
+            raise Error("id mismatch: alice")
+        if @@bob2.id() != bob_id:
+            raise Error("id mismatch: bob")
+        if @@eng2.id() != eng_id:
+            raise Error("id mismatch: eng")
+
+        print(@@eng2.@@members[0].name)
+        print(@@eng2.@@members[1].name)
+        print(len(@@eng2.@@backup))
+        if @@eng2.@@lead:
+            print(@@eng2.@@lead.value()._inner[].get_name())
+        print(@@eng2.tags[0], @@eng2.tags[1])
+        print(@@eng2.@@scores[@@alice2])
+        print(@@eng2.groups[0][0], @@eng2.groups[0][1], @@eng2.groups[1][0])
+        print(@@eng2.ring[0], @@eng2.ring[1])
+        print("reload OK: List/Set/Optional/Dict relations, a nested List, and a custom container all preserved")
+        @@@end_init_from_json()

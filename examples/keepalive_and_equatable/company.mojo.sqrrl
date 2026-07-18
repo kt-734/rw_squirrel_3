@@ -1,0 +1,24 @@
+@@struct keepalive @@Project:
+    unique name: String
+
+@@struct equatable @@Person:
+    name: String
+    age: UInt32
+
+def main() raises:
+    @@@:
+        _ = @@@Project.create(name = "Website Revamp")
+        _ = @@@Project.create(name = "Onboarding Redesign")
+        print("all projects:", len(@@@Project.all()))
+
+        var @@handle = @@@Project.for_name("Website Revamp")
+        var released = @@handle.dont_keepalive()
+        print("released website revamp:", released)
+
+        var @@alice = @@@Person { .name = "alice", .age = 30 }
+        var @@alice_twin = @@@Person { .name = "alice", .age = 30 }
+        var @@bob = @@@Person { .name = "bob", .age = 25 }
+
+        print("alice equals alice_twin (value):", @@alice.value_eq(@@alice_twin))
+        print("alice equals bob (value):", @@alice.value_eq(@@bob))
+        print("alice equals alice_twin (identity):", @@alice == @@alice_twin)

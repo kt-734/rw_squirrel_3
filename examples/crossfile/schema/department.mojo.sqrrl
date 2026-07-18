@@ -1,0 +1,2 @@
+@@struct @@Department:
+    unique name: String

@@ -1,0 +1,52 @@
+@@struct @@Department:
+    unique name: String
+
+@@struct @@Employee:
+    unique name: String
+    ordered years_employed: UInt32
+    stats salary: Float64
+    indexed @@dept: @@Department
+
+def main() raises:
+    @@@:
+        var @@eng = @@@Department { .name = "Engineering" }
+        var @@sales = @@@Department { .name = "Sales" }
+        var @@alice = @@@Employee { .name = "Alice", .years_employed = 5, .salary = 90000.0, .@@dept = @@eng }
+        var @@bob = @@@Employee { .name = "Bob", .years_employed = 2, .salary = 70000.0, .@@dept = @@eng }
+        var @@carol = @@@Employee { .name = "Carol", .years_employed = 8, .salary = 120000.0, .@@dept = @@sales }
+        var @@dave = @@@Employee { .name = "Dave", .years_employed = 5, .salary = 85000.0, .@@dept = @@sales }
+
+        print("exact match (5 years):", len(@@@Employee.for_years_employed(5)))
+        print("more than 3 years:", len(@@@Employee.for_years_employed_greater_than(3)))
+        print("at least 5 years:", len(@@@Employee.for_years_employed_at_least(5)))
+        print("less than 5 years:", len(@@@Employee.for_years_employed_less_than(5)))
+        print("at most 5 years:", len(@@@Employee.for_years_employed_at_most(5)))
+        print("3 to 6 years inclusive:", len(@@@Employee.for_years_employed_between(3, 6)))
+
+        var @@ranged = @@@Employee.for_years_employed_between(0, 100)
+        for @@e in @@ranged:
+            print("in range:", @@e.name, @@e.years_employed)
+
+        @@bob.years_employed = 9
+        print("after raise, more than 8 years:", len(@@@Employee.for_years_employed_greater_than(8)))
+
+        print("total salary:", @@@Employee.sum_salary())
+        print("average salary:", @@@Employee.avg_salary())
+        print("min years employed:", @@@Employee.min_years_employed())
+        print("max years employed:", @@@Employee.max_years_employed())
+        print("median years employed:", @@@Employee.median_years_employed())
+        print("median salary:", @@@Employee.median_salary())
+
+        print("eng total salary:", @@@Employee.sum_salary_for_@@dept(@@eng))
+        print("sales average salary:", @@@Employee.avg_salary_for_@@dept(@@sales))
+
+        var @@salary_by_dept = @@@Employee.sum_salary_by_@@dept()
+        print("departments with salary totals:", len(@@salary_by_dept))
+
+        print("distinct years employed:", len(@@@Employee.distinct_years_employed()))
+        print("count with 5 years:", @@@Employee.count_years_employed(5))
+
+        var @@by_dept = @@@Employee.group_by_@@dept()
+        print("departments with employees:", len(@@by_dept))
+
+        print("alice", @@alice.name, "bob", @@bob.name, "carol", @@carol.name, "dave", @@dave.name)
