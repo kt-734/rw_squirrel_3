@@ -1703,6 +1703,40 @@ def test_transform_for_loop_over_container_field_registers_element_type() raises
     assert_true("sqrrl__e._inner[]._name" in out)
 
 
+def test_transform_for_loop_over_indexed_container_field_registers_element_type() raises:
+    """`for @@x in @@entity.@@field[i]:` -- indexing into a multi-level
+    container field (`@@groups: List[List[@@Employee]]`), *then* iterating
+    the indexed result -- registered `pending_decl` (`var @@x = @@entity.
+    @@field[i]`) at the terminal `INDEX` step, but never `pending_for_
+    loop_decl`, so `@@x` inside the loop body stayed entirely unregistered
+    and `@@x.name` failed with the same "was never constructed"
+    error a bare, unindexed field read used to hit before the sibling
+    fix above. Registers one level further down than the index-unwrapped
+    element type (`container_element_of(elem_type)`, not `elem_type`
+    itself) -- the loop iterates *that* value, not the value at the
+    index."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    relation_schema["Department"] = Dict[String, String]()
+    relation_schema["Department"]["groups"] = "List[List[Employee]]"
+    var struct_names = Dict[String, Bool]()
+    struct_names["Department"] = True
+    struct_names["Employee"] = True
+    var function_returns = Dict[String, String]()
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+
+    var src = String(
+        "def foo(@@eng: @@Department) raises:\n"
+        + "    for @@e in @@eng.@@groups[0]:\n"
+        + "        print(@@e.name)\n"
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+    )
+    assert_true("for sqrrl__e in " in out)
+    assert_true("sqrrl__e._inner[]._name" in out)
+
+
 def test_check_no_relation_cycles_through_plain_struct_rejected() raises:
     """A relation cycle running *through* a hand-written plain struct's
     own field is rejected too (plan's §3): `Person.home: Address`,

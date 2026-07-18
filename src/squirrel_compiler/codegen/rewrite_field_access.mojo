@@ -155,6 +155,24 @@ def handle_field_access(
                         return
                     if pending_decl:
                         ctx.entity_to_type[pending_decl.value()] = elem_type
+                    # `for @@x in @@entity.@@field[i]:` -- same registration
+                    # a terminal *FIELD* step already does for `pending_for_
+                    # loop_decl` (`for @@x in @@entity.@@field:`), just off
+                    # the index-unwrapped `elem_type` instead of the raw
+                    # field type: an *further* level down, since the loop
+                    # iterates whatever `elem_type` itself is (only
+                    # meaningful when that's still container-shaped --
+                    # `@@entity.@@field[i]` yielding a bare relation/leaf
+                    # would never appear as a for-loop's own iterable in
+                    # the first place). Confirmed missing via a real
+                    # compile: `@@field: List[Dict[String, @@Employee]]`,
+                    # `for @@e in @@entity.@@field[0]:` left `@@e`
+                    # completely unregistered, surfacing as a misleading
+                    # "was never constructed" error one statement later,
+                    # not a "Dict iteration only yields keys" one -- the
+                    # actual, correct outcome once this registers at all.
+                    if pending_for_loop_decl and is_container_type(elem_type):
+                        ctx.entity_to_type[pending_for_loop_decl.value()] = container_element_of(elem_type)
                     out += expr
                     pending_decl = None
                     pending_for_loop_decl = None
