@@ -7,3 +7,8 @@
 
 # personal/local settings, not shared
 .claude/settings.local.json
+
+# scratch notes, not shared
+notes.md
+notes2.md
+notes*.md
