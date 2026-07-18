@@ -1803,7 +1803,7 @@ def test_emit_json_module_plain_leaf_container_round_trips() raises:
     )
     assert_true(
         "elif T == List[String]:\n        return sqrrl__movable_rebind[List[String], T](sqrrl__List_json_from_list"
-        "(list_from_json[String](sqrrl__sc)))"
+        "(list_from_json[String](sc)))"
         in out
     )
 
@@ -1909,7 +1909,7 @@ def test_emit_json_module_custom_container_wrapper_uses_escape_hatch() raises:
     )
     assert_true(
         "elif T == Ring[String]:\n        return sqrrl__movable_rebind[Ring[String], T](sqrrl__Ring_json_from_list"
-        "(list_from_json[String](sqrrl__sc)))"
+        "(list_from_json[String](sc)))"
         in out
     )
 

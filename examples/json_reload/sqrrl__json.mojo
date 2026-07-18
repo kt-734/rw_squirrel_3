@@ -8,54 +8,54 @@ from company import sqrrl__Tag, sqrrl__TagInner, sqrrl__TagTable
 
 
 def list_to_json[T: Movable](lst: List[T]) -> String:
-    var sqrrl__out = String("[")
-    for sqrrl__i in range(len(lst)):
-        if sqrrl__i > 0:
-            sqrrl__out += ","
-        sqrrl__out += sqrrl__to_json(lst[sqrrl__i])
-    sqrrl__out += "]"
-    return sqrrl__out^
+    var out = String("[")
+    for i in range(len(lst)):
+        if i > 0:
+            out += ","
+        out += sqrrl__to_json(lst[i])
+    out += "]"
+    return out^
 
 
-def list_from_json[T: Movable & ImplicitlyDeletable](mut sqrrl__sc: sqrrl__JsonScanner) raises -> List[T]:
-    var sqrrl__lst = List[T]()
-    sqrrl__sc.expect_byte(UInt8(ord("[")))
-    if not sqrrl__sc.try_consume_byte(UInt8(ord("]"))):
+def list_from_json[T: Movable & ImplicitlyDeletable](mut sc: sqrrl__JsonScanner) raises -> List[T]:
+    var lst = List[T]()
+    sc.expect_byte(UInt8(ord("[")))
+    if not sc.try_consume_byte(UInt8(ord("]"))):
         while True:
-            sqrrl__lst.append(sqrrl__from_json[T](sqrrl__sc))
-            if sqrrl__sc.try_consume_byte(UInt8(ord(","))):
+            lst.append(sqrrl__from_json[T](sc))
+            if sc.try_consume_byte(UInt8(ord(","))):
                 continue
-            sqrrl__sc.expect_byte(UInt8(ord("]")))
+            sc.expect_byte(UInt8(ord("]")))
             break
-    return sqrrl__lst^
+    return lst^
 
 
 def pairs_to_json[K: Movable, V: Movable](pairs: List[Tuple[K, V]]) -> String:
-    var sqrrl__out = String("[")
-    for sqrrl__i in range(len(pairs)):
-        if sqrrl__i > 0:
-            sqrrl__out += ","
-        sqrrl__out += "[" + sqrrl__to_json(pairs[sqrrl__i][0]) + "," + sqrrl__to_json(pairs[sqrrl__i][1]) + "]"
-    sqrrl__out += "]"
-    return sqrrl__out^
+    var out = String("[")
+    for i in range(len(pairs)):
+        if i > 0:
+            out += ","
+        out += "[" + sqrrl__to_json(pairs[i][0]) + "," + sqrrl__to_json(pairs[i][1]) + "]"
+    out += "]"
+    return out^
 
 
-def pairs_from_json[K: Copyable & ImplicitlyDeletable, V: Copyable & ImplicitlyDeletable](mut sqrrl__sc: sqrrl__JsonScanner) raises -> List[Tuple[K, V]]:
-    var sqrrl__pairs = List[Tuple[K, V]]()
-    sqrrl__sc.expect_byte(UInt8(ord("[")))
-    if not sqrrl__sc.try_consume_byte(UInt8(ord("]"))):
+def pairs_from_json[K: Copyable & ImplicitlyDeletable, V: Copyable & ImplicitlyDeletable](mut sc: sqrrl__JsonScanner) raises -> List[Tuple[K, V]]:
+    var pairs = List[Tuple[K, V]]()
+    sc.expect_byte(UInt8(ord("[")))
+    if not sc.try_consume_byte(UInt8(ord("]"))):
         while True:
-            sqrrl__sc.expect_byte(UInt8(ord("[")))
-            var sqrrl__k = sqrrl__from_json[K](sqrrl__sc)
-            sqrrl__sc.expect_byte(UInt8(ord(",")))
-            var sqrrl__v = sqrrl__from_json[V](sqrrl__sc)
-            sqrrl__sc.expect_byte(UInt8(ord("]")))
-            sqrrl__pairs.append((sqrrl__k.copy(), sqrrl__v.copy()))
-            if sqrrl__sc.try_consume_byte(UInt8(ord(","))):
+            sc.expect_byte(UInt8(ord("[")))
+            var k = sqrrl__from_json[K](sc)
+            sc.expect_byte(UInt8(ord(",")))
+            var v = sqrrl__from_json[V](sc)
+            sc.expect_byte(UInt8(ord("]")))
+            pairs.append((k.copy(), v.copy()))
+            if sc.try_consume_byte(UInt8(ord(","))):
                 continue
-            sqrrl__sc.expect_byte(UInt8(ord("]")))
+            sc.expect_byte(UInt8(ord("]")))
             break
-    return sqrrl__pairs^
+    return pairs^
 
 
 def sqrrl__to_json[T: AnyType](value: T) -> String:
@@ -65,11 +65,11 @@ def sqrrl__to_json[T: AnyType](value: T) -> String:
         return sqrrl__to_json_default(value)
 
 
-def sqrrl__from_json[T: Movable & ImplicitlyDeletable](mut sqrrl__sc: sqrrl__JsonScanner) raises -> T:
+def sqrrl__from_json[T: Movable & ImplicitlyDeletable](mut sc: sqrrl__JsonScanner) raises -> T:
     comptime if False:
         pass
     else:
-        return sqrrl__from_json_default[T](sqrrl__sc)
+        return sqrrl__from_json_default[T](sc)
 
 def sqrrl__Project_to_json(e: sqrrl__Project) -> String:
     var sqrrl__out = String("{")

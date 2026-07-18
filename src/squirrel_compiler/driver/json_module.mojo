@@ -1468,7 +1468,7 @@ def _emit_container_dispatch_branches(t: TypeExpr, mut to_json_out: String, mut 
             + key_str
             + ", "
             + val_str
-            + "](sqrrl__sc)))\n"
+            + "](sc)))\n"
         )
         return
     # "array" or "optional" -- both share the single-type-argument list
@@ -1488,7 +1488,7 @@ def _emit_container_dispatch_branches(t: TypeExpr, mut to_json_out: String, mut 
         + wrapper
         + "_json_from_list(list_from_json["
         + elem_str
-        + "](sqrrl__sc)))\n"
+        + "](sc)))\n"
     )
 
 
@@ -1515,7 +1515,7 @@ def _emit_plain_struct_dispatch_branch(t: TypeExpr, mut from_json_out: String):
         args_str += "]"
     from_json_out += "    elif T == " + type_str + ":\n"
     from_json_out += (
-        "        return sqrrl__movable_rebind[" + type_str + ", T](sqrrl__" + base + "_from_json" + args_str + "(sqrrl__sc))\n"
+        "        return sqrrl__movable_rebind[" + type_str + ", T](sqrrl__" + base + "_from_json" + args_str + "(sc))\n"
     )
 
 
@@ -1663,7 +1663,7 @@ def emit_json_module(
 
     var to_json_table = String("def sqrrl__to_json[T: AnyType](value: T) -> String:\n    comptime if False:\n        pass\n")
     var from_json_table = String(
-        "def sqrrl__from_json[T: Movable & ImplicitlyDeletable](mut sqrrl__sc: sqrrl__JsonScanner) raises -> T:\n"
+        "def sqrrl__from_json[T: Movable & ImplicitlyDeletable](mut sc: sqrrl__JsonScanner) raises -> T:\n"
         "    comptime if False:\n        pass\n"
     )
     for t in container_dispatch_types:
@@ -1671,61 +1671,61 @@ def emit_json_module(
     for t in plain_dispatch_types:
         _emit_plain_struct_dispatch_branch(t, from_json_table)
     to_json_table += "    else:\n        return sqrrl__to_json_default(value)\n"
-    from_json_table += "    else:\n        return sqrrl__from_json_default[T](sqrrl__sc)\n"
+    from_json_table += "    else:\n        return sqrrl__from_json_default[T](sc)\n"
 
     out += "\n\n"
     out += "def list_to_json[T: Movable](lst: List[T]) -> String:\n"
-    out += "    var sqrrl__out = String(\"[\")\n"
-    out += "    for sqrrl__i in range(len(lst)):\n"
-    out += "        if sqrrl__i > 0:\n"
-    out += "            sqrrl__out += \",\"\n"
-    out += "        sqrrl__out += sqrrl__to_json(lst[sqrrl__i])\n"
-    out += "    sqrrl__out += \"]\"\n"
-    out += "    return sqrrl__out^\n"
+    out += "    var out = String(\"[\")\n"
+    out += "    for i in range(len(lst)):\n"
+    out += "        if i > 0:\n"
+    out += "            out += \",\"\n"
+    out += "        out += sqrrl__to_json(lst[i])\n"
+    out += "    out += \"]\"\n"
+    out += "    return out^\n"
     out += "\n\n"
-    out += "def list_from_json[T: Movable & ImplicitlyDeletable](mut sqrrl__sc: sqrrl__JsonScanner) raises -> List[T]:\n"
-    out += "    var sqrrl__lst = List[T]()\n"
-    out += "    sqrrl__sc.expect_byte(UInt8(ord(\"[\")))\n"
-    out += "    if not sqrrl__sc.try_consume_byte(UInt8(ord(\"]\"))):\n"
+    out += "def list_from_json[T: Movable & ImplicitlyDeletable](mut sc: sqrrl__JsonScanner) raises -> List[T]:\n"
+    out += "    var lst = List[T]()\n"
+    out += "    sc.expect_byte(UInt8(ord(\"[\")))\n"
+    out += "    if not sc.try_consume_byte(UInt8(ord(\"]\"))):\n"
     out += "        while True:\n"
-    out += "            sqrrl__lst.append(sqrrl__from_json[T](sqrrl__sc))\n"
-    out += "            if sqrrl__sc.try_consume_byte(UInt8(ord(\",\"))):\n"
+    out += "            lst.append(sqrrl__from_json[T](sc))\n"
+    out += "            if sc.try_consume_byte(UInt8(ord(\",\"))):\n"
     out += "                continue\n"
-    out += "            sqrrl__sc.expect_byte(UInt8(ord(\"]\")))\n"
+    out += "            sc.expect_byte(UInt8(ord(\"]\")))\n"
     out += "            break\n"
-    out += "    return sqrrl__lst^\n"
+    out += "    return lst^\n"
     out += "\n\n"
     out += "def pairs_to_json[K: Movable, V: Movable](pairs: List[Tuple[K, V]]) -> String:\n"
-    out += "    var sqrrl__out = String(\"[\")\n"
-    out += "    for sqrrl__i in range(len(pairs)):\n"
-    out += "        if sqrrl__i > 0:\n"
-    out += "            sqrrl__out += \",\"\n"
+    out += "    var out = String(\"[\")\n"
+    out += "    for i in range(len(pairs)):\n"
+    out += "        if i > 0:\n"
+    out += "            out += \",\"\n"
     out += (
-        "        sqrrl__out += \"[\" + sqrrl__to_json(pairs[sqrrl__i][0]) + \",\" + sqrrl__to_json(pairs[sqrrl__i][1])"
+        "        out += \"[\" + sqrrl__to_json(pairs[i][0]) + \",\" + sqrrl__to_json(pairs[i][1])"
         " + \"]\"\n"
     )
-    out += "    sqrrl__out += \"]\"\n"
-    out += "    return sqrrl__out^\n"
+    out += "    out += \"]\"\n"
+    out += "    return out^\n"
     out += "\n\n"
     out += (
-        "def pairs_from_json[K: Copyable & ImplicitlyDeletable, V: Copyable & ImplicitlyDeletable](mut sqrrl__sc:"
+        "def pairs_from_json[K: Copyable & ImplicitlyDeletable, V: Copyable & ImplicitlyDeletable](mut sc:"
         " sqrrl__JsonScanner) raises -> List[Tuple[K, V]]:\n"
     )
-    out += "    var sqrrl__pairs = List[Tuple[K, V]]()\n"
-    out += "    sqrrl__sc.expect_byte(UInt8(ord(\"[\")))\n"
-    out += "    if not sqrrl__sc.try_consume_byte(UInt8(ord(\"]\"))):\n"
+    out += "    var pairs = List[Tuple[K, V]]()\n"
+    out += "    sc.expect_byte(UInt8(ord(\"[\")))\n"
+    out += "    if not sc.try_consume_byte(UInt8(ord(\"]\"))):\n"
     out += "        while True:\n"
-    out += "            sqrrl__sc.expect_byte(UInt8(ord(\"[\")))\n"
-    out += "            var sqrrl__k = sqrrl__from_json[K](sqrrl__sc)\n"
-    out += "            sqrrl__sc.expect_byte(UInt8(ord(\",\")))\n"
-    out += "            var sqrrl__v = sqrrl__from_json[V](sqrrl__sc)\n"
-    out += "            sqrrl__sc.expect_byte(UInt8(ord(\"]\")))\n"
-    out += "            sqrrl__pairs.append((sqrrl__k.copy(), sqrrl__v.copy()))\n"
-    out += "            if sqrrl__sc.try_consume_byte(UInt8(ord(\",\"))):\n"
+    out += "            sc.expect_byte(UInt8(ord(\"[\")))\n"
+    out += "            var k = sqrrl__from_json[K](sc)\n"
+    out += "            sc.expect_byte(UInt8(ord(\",\")))\n"
+    out += "            var v = sqrrl__from_json[V](sc)\n"
+    out += "            sc.expect_byte(UInt8(ord(\"]\")))\n"
+    out += "            pairs.append((k.copy(), v.copy()))\n"
+    out += "            if sc.try_consume_byte(UInt8(ord(\",\"))):\n"
     out += "                continue\n"
-    out += "            sqrrl__sc.expect_byte(UInt8(ord(\"]\")))\n"
+    out += "            sc.expect_byte(UInt8(ord(\"]\")))\n"
     out += "            break\n"
-    out += "    return sqrrl__pairs^\n"
+    out += "    return pairs^\n"
     out += "\n\n"
     out += to_json_table
     out += "\n\n"
