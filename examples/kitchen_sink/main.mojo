@@ -29,7 +29,7 @@ from schema.assignment import Assignment
 from logic.factories import sqrrl__make_vendor, sqrrl__make_project, sqrrl__make_department, sqrrl__hire, sqrrl__hire_team, sqrrl__make_team, sqrrl__log
 
 
-def sqrrl__promote(mut sqrrl__world: sqrrl__World, sqrrl__e: sqrrl__Employee, new_title: String) -> sqrrl__Employee:
+def sqrrl__promote(sqrrl__e: sqrrl__Employee, new_title: String) -> sqrrl__Employee:
     sqrrl__e._inner[].set_title(new_title);
     return sqrrl__e
 
@@ -164,7 +164,7 @@ def main() raises:
         for sqrrl__p in  sqrrl__world.Project.for_priority_between(1, 3):
             print("project in priority range:", sqrrl__p._inner[]._name)
 
-        var sqrrl__promoted_bob = sqrrl__promote(sqrrl__world, sqrrl__bob_emp, "Senior Sales Rep")
+        var sqrrl__promoted_bob = sqrrl__promote(sqrrl__bob_emp, "Senior Sales Rep")
         print("bob's new title:", sqrrl__promoted_bob._inner[]._title)
 
         var tags = List[String]()

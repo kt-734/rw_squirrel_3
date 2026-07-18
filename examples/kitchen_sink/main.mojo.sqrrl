@@ -8,7 +8,7 @@ from schema.assignment import Assignment
 from logic.factories import sqrrl__make_vendor, sqrrl__make_project, sqrrl__make_department, sqrrl__hire, sqrrl__hire_team, sqrrl__make_team, sqrrl__log
 
 
-def @@@promote(@@e: @@Employee, new_title: String) -> @@Employee:
+def @@promote(@@e: @@Employee, new_title: String) -> @@Employee:
     @@e.title = new_title
     return @@e
 
@@ -142,7 +142,7 @@ def main() raises:
         for @@p in @@@Project.for_priority_between(1, 3):
             print("project in priority range:", @@p.name)
 
-        var @@promoted_bob = @@@promote(@@bob_emp, "Senior Sales Rep")
+        var @@promoted_bob = @@promote(@@bob_emp, "Senior Sales Rep")
         print("bob's new title:", @@promoted_bob.title)
 
         var tags = List[String]()
