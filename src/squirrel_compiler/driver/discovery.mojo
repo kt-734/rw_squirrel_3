@@ -5,7 +5,7 @@ from squirrel_compiler.parser import (
     FieldModifier,
     parse_type_expr,
     TypeParam,
-    is_directly_entity_iterable,
+    is_directly_entity_reachable,
 )
 from squirrel_compiler.driver.file_paths import module_path_for
 from squirrel_compiler.codegen import sqrrl_prefixed
@@ -79,7 +79,7 @@ def _relation_fields_of(fields: List[Field]) -> Dict[String, String]:
     @@Project`'s is `@@Project`, same shape a bare relation field's is),
     so it's registered here identically, no separate case needed.
 
-    `is_directly_entity_iterable`, not the broader `is_relation_field` --
+    `is_directly_entity_reachable`, not the broader `is_relation_field` --
     a field's own *name* only ever ends up `@@`-marked when its type is
     directly entity-iterable (`field_parsing.mojo`'s own marking-symmetry
     check is the actual source of truth for this; a relation confined to
@@ -88,7 +88,7 @@ def _relation_fields_of(fields: List[Field]) -> Dict[String, String]:
     fields` below instead, consistent with how it was actually declared)."""
     var out = Dict[String, String]()
     for field in fields:
-        if is_directly_entity_iterable(field.type_str):
+        if is_directly_entity_reachable(field.type_str):
             out[field.name] = parse_type_expr(field.type_str).render_relation_stripped()
     return out^
 
@@ -127,7 +127,7 @@ def _plain_value_fields_of(fields: List[Field]) -> Dict[String, String]:
     dangling `@@` a plain (unmarked) field could never otherwise have."""
     var out = Dict[String, String]()
     for field in fields:
-        if not is_directly_entity_iterable(field.type_str):
+        if not is_directly_entity_reachable(field.type_str):
             out[field.name] = parse_type_expr(field.type_str).render_relation_stripped()
     return out^
 

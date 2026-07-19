@@ -27,7 +27,7 @@ from squirrel_compiler.parser.relation_type_text import (
     relation_target_of,
     relation_wrapper_of,
     _is_relation_shaped,
-    is_directly_entity_iterable,
+    is_directly_entity_reachable,
 )
 from squirrel_compiler.parser.field_parsing import parse_struct_body, parse_hand_written_struct_fields
 from squirrel_compiler.parser.type_expr import TypeExpr, parse_type_expr

@@ -1,10 +1,20 @@
-from squirrel_compiler.parser import Scanner, AccessStep, FieldAccess, NameRef, is_ident_char
+from squirrel_compiler.parser import (
+    Scanner,
+    AccessStep,
+    FieldAccess,
+    NameRef,
+    is_ident_char,
+    is_directly_entity_reachable,
+    parse_type_expr,
+)
 from squirrel_compiler.codegen.helpers import (
     sqrrl_prefixed,
     encode_container_type,
     is_container_type,
     container_wrapper_of,
     container_element_of,
+    container_index_result_of,
+    is_entity_iterable_leaf,
     storage_field_name_for_hop,
     storage_field_name_for_plain,
     param_name_for_construct_field,
@@ -201,7 +211,18 @@ def _walk_access_chain(
             if step.is_index():
                 var rewritten_index = rewrite_markers(step.name, ctx)
                 expr += "[" + rewritten_index + "]"
-                var elem_type = container_element_of(current_type)
+                # `container_index_result_of`, not `container_element_of` --
+                # *indexing* a two-argument wrapper (`Dict[K, V]`/`Grid[K,
+                # V]`) yields the value (V), not the key (K) iterating it
+                # would -- confirmed broken via a real end-to-end compile
+                # before this fix: `@@d.scores["k"].name` (`scores: Dict[
+                # String, @@Employee]`) silently mistracked the indexed
+                # result as `String`, triggering the "premature-leaf
+                # rollback" path and copying `.name` through unrewritten,
+                # surfacing only as a confusing real-Mojo "'sqrrl__Employee'
+                # value has no attribute 'name'" error two layers removed
+                # from the actual cause.
+                var elem_type = container_index_result_of(current_type)
                 if is_last:
                     if write_value:
                         var rewritten_value = rewrite_markers(write_value.value(), ctx)
@@ -228,6 +249,7 @@ def _walk_access_chain(
                     # not a "Dict iteration only yields keys" one -- the
                     # actual, correct outcome once this registers at all.
                     if pending_for_loop_decl and is_container_type(elem_type):
+                        _require_for_loop_entity_marking(sc, ctx, elem_type, pending_for_loop_decl.value())
                         ctx.entity_to_type[pending_for_loop_decl.value()] = container_element_of(elem_type)
                     out += expr
                     pending_decl = None
@@ -412,10 +434,12 @@ def _walk_access_chain(
                 # registration entirely (confirmed missing via a real
                 # transform_source check, not assumed).
                 if pending_for_loop_decl and is_container_type(registered_type):
+                    _require_for_loop_entity_marking(sc, ctx, registered_type, pending_for_loop_decl.value())
                     ctx.entity_to_type[pending_for_loop_decl.value()] = container_element_of(registered_type)
             elif is_plain_value:
                 var registered_type = ctx.plain_value_fields[current_type][step.name]
                 if pending_for_loop_decl and is_container_type(registered_type):
+                    _require_for_loop_entity_marking(sc, ctx, registered_type, pending_for_loop_decl.value())
                     ctx.entity_to_type[pending_for_loop_decl.value()] = container_element_of(registered_type)
             out += expr
             pending_decl = None
@@ -569,6 +593,7 @@ def handle_func_call_marker(
         if pending_decl:
             ctx.entity_to_type[pending_decl.value()] = registered.value()
         if pending_for_loop_decl and is_container_type(registered.value()):
+            _require_for_loop_entity_marking(sc, ctx, registered.value(), pending_for_loop_decl.value())
             ctx.entity_to_type[pending_for_loop_decl.value()] = container_element_of(registered.value())
     pending_decl = None
     pending_for_loop_decl = None
@@ -779,6 +804,7 @@ def _handle_instance_call(
         if pending_decl:
             ctx.entity_to_type[pending_decl.value()] = registered_type
         if pending_for_loop_decl and is_container_type(registered_type):
+            _require_for_loop_entity_marking(sc, ctx, registered_type, pending_for_loop_decl.value())
             ctx.entity_to_type[pending_for_loop_decl.value()] = container_element_of(registered_type)
         pending_decl = None
         pending_for_loop_decl = None
@@ -1018,13 +1044,24 @@ def handle_name_ref(
             var matched = False
             var wrapper = sc.scan_ident()
             sc.skip_trivia()
-            if wrapper.byte_length() > 0 and sc.try_consume("["):
-                sc.skip_trivia()
-                if sc.try_consume("@@"):
-                    var type_name = sc.scan_ident()
-                    if type_name.byte_length() > 0:
-                        matched = True
-                        ctx.entity_to_type[nr.name] = encode_container_type(wrapper, type_name)
+            if wrapper.byte_length() > 0 and sc.peek() == UInt8(ord("[")):
+                # General, arbitrary-nesting inference -- reuses the same
+                # canonical machinery `is_directly_entity_reachable`/
+                # `render_relation_stripped` already gives every
+                # *declaration*-side marking-symmetry check, rather than
+                # a parallel, shallow (one-level-only) scan: `scan_
+                # bracketed_span` captures the full argument-list text
+                # depth-aware (nested wrappers included, `List[Dict[
+                # String, @@Employee]]()`), then the same recursive
+                # "position 1, or (>= 2 arguments) position 2" rule and
+                # the same `@@`-stripped encoding apply uniformly,
+                # regardless of how deep the relation is nested or which
+                # position it's ultimately reachable through.
+                var body = sc.scan_bracketed_span()
+                var full_type_text = wrapper + "[" + body + "]"
+                if is_directly_entity_reachable(full_type_text):
+                    matched = True
+                    ctx.entity_to_type[nr.name] = parse_type_expr(full_type_text).render_relation_stripped()
             sc.pos = lookahead
             if not matched:
                 raise sc.err(
@@ -1040,6 +1077,7 @@ def handle_name_ref(
                 )
     sc.pos = save
     if not is_decl and pending_for_loop_decl and nr.name in ctx.entity_to_type and is_container_type(ctx.entity_to_type[nr.name]):
+        _require_for_loop_entity_marking(sc, ctx, ctx.entity_to_type[nr.name], pending_for_loop_decl.value())
         ctx.entity_to_type[pending_for_loop_decl.value()] = container_element_of(ctx.entity_to_type[nr.name])
     pending_decl = String(nr.name) if is_decl else None
     pending_for_loop_decl = None
@@ -1050,6 +1088,36 @@ def _contains(items: List[String], value: String) -> Bool:
         if item == value:
             return True
     return False
+
+
+def _require_for_loop_entity_marking(
+    sc: Scanner, ctx: RewriteContext, registered_type: String, loop_var: String
+) raises:
+    """`for @@x in <iterable>:`'s own marking-symmetry guard -- every
+    `pending_for_loop_decl` consumption site (bar table-level calls,
+    whose own registered type is always compiler-constructed and
+    guaranteed entity-shaped) calls this before registering the loop
+    variable's element type. Widening `@@`-marking eligibility to cover
+    a relation confined to position 1 (`Dict[String, @@Employee]`) made
+    this a real, previously-latent risk: iterating such a value/field/
+    call's result only ever exposes position 0 (the key), never
+    position 1, so a marked `@@x` would otherwise silently bind to a
+    plain, non-entity value with no error at all -- confirmed via a real
+    end-to-end compile of exactly this shape before this guard existed.
+    `is_entity_iterable_leaf`, not `is_directly_entity_reachable` --
+    iteration is narrower than marking eligibility on purpose."""
+    if not is_entity_iterable_leaf(registered_type, ctx.struct_names, ctx.plain_struct_names):
+        raise sc.err(
+            "InvalidSquirrelSyntax: '@@"
+            + loop_var
+            + "' -- iterating this only ever yields a plain value here"
+            " (any relation is only reachable by indexing, not"
+            " iterating) -- write 'for "
+            + loop_var
+            + " in ...:' (no '@@') instead of 'for @@"
+            + loop_var
+            + " in ...:'"
+        )
 
 
 @fieldwise_init

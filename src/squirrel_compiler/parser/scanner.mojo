@@ -21,7 +21,7 @@ from squirrel_compiler.parser.text_utils import (
     find_end_of_indented_block,
 )
 from squirrel_compiler.parser.field_parsing import parse_struct_body, parse_hand_written_struct_fields
-from squirrel_compiler.parser.relation_type_text import is_directly_entity_iterable
+from squirrel_compiler.parser.relation_type_text import is_directly_entity_reachable
 
 
 def parse_construct_fields(body: String) raises -> List[ConstructField]:
@@ -847,7 +847,7 @@ struct Scanner(Movable):
         var type_text = self.scan_entity_param_type_text()
         if type_text.byte_length() == 0:
             raise self.err("InvalidSquirrelSyntax: expected a type after ':'")
-        if not is_directly_entity_iterable(type_text):
+        if not is_directly_entity_reachable(type_text):
             raise self.err(
                 "InvalidSquirrelSyntax: '@@"
                 + name

@@ -6,7 +6,7 @@ from squirrel_compiler.driver.discovery import DiscoveryResult, DiscoveredStruct
 from squirrel_compiler.driver.topo_order import topo_sort_structs
 from squirrel_compiler.driver.misc_builders import build_function_returns
 from squirrel_compiler.driver.json_module import emit_json_module
-from squirrel_compiler.parser import ParsedStruct, Field, FieldModifier, TypeParam
+from squirrel_compiler.parser import ParsedStruct, Field, FieldModifier, TypeParam, parse_hand_written_struct_fields
 
 
 def test_transform_plain_struct_and_script() raises:
@@ -1178,7 +1178,7 @@ def test_transform_world_and_entity_marked_method_threads_world_and_registers_ty
 def test_transform_method_entity_return_recurses_through_nested_container() raises:
     """`scan_entity_return_shape` recurses through first-argument position
     at any depth (`List[List[@@Employee]]`), not just one wrapper deep --
-    same rule `is_directly_entity_iterable` already applies everywhere
+    same rule `is_directly_entity_reachable` already applies everywhere
     else `@@`-marking symmetry is decided. A bare method returning this
     nested shape is rejected (under-marked) exactly like a single-level
     container return already is."""
@@ -1219,13 +1219,15 @@ def test_transform_method_entity_return_recurses_through_nested_container() rais
     assert_true("def get_groups(self) -> List[List[sqrrl__Employee]]:" in out)
 
 
-def test_transform_method_value_position_relation_return_stays_unmarked() raises:
-    """A relation confined to a container's *non-first* argument position
-    (`Dict[String, @@Employee]`, the value) is never directly entity-
-    iterable -- a bare method returning this shape is *not* rejected
-    (unlike the directly-iterable cases above), the method-call parallel
-    of `is_directly_entity_iterable`'s own rule already applied to
-    top-level functions, struct fields, and def/var entity-params."""
+def test_transform_method_value_position_relation_return_needs_marking() raises:
+    """A relation confined to a container's *second* argument position
+    (`Dict[String, @@Employee]`, the value) *is* directly entity-reachable
+    now (widened: real Mojo indexing yields it, even though iteration
+    doesn't) -- a bare method returning this shape is rejected (under-
+    marked), the method-call parallel of `is_directly_entity_reachable`'s
+    own rule already applied to top-level functions, struct fields, and
+    def/var entity-params. Marking it correctly (`@@scores`) is accepted
+    and renders normally."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
@@ -1234,15 +1236,31 @@ def test_transform_method_value_position_relation_return_stays_unmarked() raises
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
-    var src = String(
+    var bare_src = String(
         "@@struct @@Department:\n"
         + "    unique name: String\n"
         + "\n"
         + "    def scores(self) -> Dict[String, @@Employee]:\n"
         + "        return Dict[String, sqrrl__Employee]()\n"
     )
+    var raised = False
+    try:
+        _ = transform_source(
+            bare_src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        )
+    except:
+        raised = True
+    assert_true(raised)
+
+    var marked_src = String(
+        "@@struct @@Department:\n"
+        + "    unique name: String\n"
+        + "\n"
+        + "    def @@scores(self) -> Dict[String, @@Employee]:\n"
+        + "        return Dict[String, sqrrl__Employee]()\n"
+    )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        marked_src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
     )
     assert_true("def scores(self) -> Dict[String, sqrrl__Employee]:" in out)
 
@@ -2101,7 +2119,7 @@ def test_transform_plain_struct_field_with_value_position_relation_stays_unmarke
     non-first-argument position (`Dict[String, @@Employee]`, relation in
     the *value* position) -- or nested even further (`List[Dict[String,
     @@Employee]]`) -- is a *plain* (unmarked) field declaration, not an
-    `@@`-marked one: `is_directly_entity_iterable` only counts a relation
+    `@@`-marked one: `is_directly_entity_reachable` only counts a relation
     reachable through a wrapper's own first argument, recursively (Dict
     iteration only ever yields keys). The type itself still resolves
     `@@Employee` -> `sqrrl__Employee` correctly wherever it appears,
@@ -2134,32 +2152,34 @@ def test_transform_plain_struct_field_with_value_position_relation_stays_unmarke
     assert_false("@@" in out)
 
 
-def test_transform_plain_struct_field_marking_mismatch_value_position_rejected() raises:
-    """The over-marked direction of the same rule: `@@members: Dict[
-    String, @@Employee]` (marked name, but the relation is confined to
-    the value position) is a hard `InvalidSquirrelSyntax` -- `@@` only
-    marks a field whose type is directly entity-iterable."""
-    var plain_struct_names = Dict[String, Bool]()
-    plain_struct_names["Roster"] = True
-
-    var src = String(
-        "struct Roster(Movable, ImplicitlyDeletable):\n"
-        + "    var @@members: Dict[String, @@Employee]\n"
-    )
+def test_transform_plain_struct_field_value_position_needs_marking() raises:
+    """The value-position rule, widened: `Dict[String, @@Employee]`'s
+    relation *is* directly entity-reachable now (real Mojo indexing
+    yields it), so a plain-struct field of this shape must be marked
+    (`@@members`) -- a *bare* `members: Dict[String, @@Employee]` is now
+    the rejected direction instead (under-marked). This marking-symmetry
+    check is `parse_hand_written_struct_fields`'s own (run at discovery
+    time, not by `transform_source` directly -- a hand-written struct's
+    body is ordinary Mojo text as far as the per-file rewrite pass is
+    concerned; only the discovery-time field-list scan validates it), so
+    it's tested directly here rather than through `transform_source`,
+    which never re-derives a plain struct's own field list from raw
+    source at all (it only ever consumes an already-built `plain_value_
+    fields` map, passed in as a test parameter everywhere else in this
+    file)."""
+    var bare_fields = List[Field]()
     var raised = False
     try:
-        _ = transform_source(
-            src,
-            Dict[String, Dict[String, String]](),
-            Dict[String, Bool](),
-            Dict[String, String](),
-            Dict[String, List[String]](),
-            Dict[String, List[String]](),
-            plain_struct_names=plain_struct_names,
-        )
+        parse_hand_written_struct_fields("    var members: Dict[String, @@Employee]\n", bare_fields)
     except:
         raised = True
     assert_true(raised)
+
+    var marked_fields = List[Field]()
+    parse_hand_written_struct_fields("    var @@members: Dict[String, @@Employee]\n", marked_fields)
+    assert_equal(len(marked_fields), 1)
+    assert_equal(marked_fields[0].name, "members")
+    assert_equal(marked_fields[0].type_str, "Dict[String, @@Employee]")
 
 
 def test_transform_entity_param_dict_key_position_registers_type() raises:
@@ -2187,13 +2207,17 @@ def test_transform_entity_param_dict_key_position_registers_type() raises:
     assert_true("print(sqrrl__e._inner[]._name)" in out)
 
 
-def test_transform_entity_param_value_position_marking_mismatch_rejected() raises:
-    """The def-parameter/var-decl side of the same mandatory-marking-
-    narrowing rule ("or methods or functions"): `@@scores: Dict[String,
-    @@Employee]` (marked name, relation confined to the value position)
-    is a hard `InvalidSquirrelSyntax` -- write the plain, unmarked form
-    instead (`scores: Dict[String, @@Employee]`), letting the embedded
-    `@@Employee` resolve via the ordinary type-position rewrite."""
+def test_transform_entity_param_value_position_needs_marking() raises:
+    """The def-parameter/var-decl side of the same widened rule ("or
+    methods or functions"): `@@scores: Dict[String, @@Employee]` (marked
+    name, relation confined to the value position) is now accepted --
+    real Mojo indexing reaches it, even though iteration doesn't. Unlike
+    struct fields/function names, a *bare*, unmarked parameter is never
+    validated against its own type at all (`parse_entity_param`'s check
+    only ever runs reactively, when the scanner already sees `@@` on the
+    parameter's own name -- a fully bare name never triggers it, a real,
+    pre-existing asymmetry this widening doesn't change either way), so
+    there's no corresponding under-marked-rejection half to test here."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
@@ -2201,18 +2225,14 @@ def test_transform_entity_param_value_position_marking_mismatch_rejected() raise
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
-    var src = String(
+    var marked_src = String(
         "def foo(@@scores: Dict[String, @@Employee]) raises:\n"
         + "    pass\n"
     )
-    var raised = False
-    try:
-        _ = transform_source(
-            src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
-        )
-    except:
-        raised = True
-    assert_true(raised)
+    var out = transform_source(
+        marked_src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+    )
+    assert_true("def foo(sqrrl__scores: Dict[String, sqrrl__Employee]) raises:" in out)
 
 
 def test_transform_method_entity_param_beyond_self_registers_type() raises:
@@ -2456,6 +2476,239 @@ def test_transform_for_loop_over_indexed_container_field_registers_element_type(
     )
     assert_true("for sqrrl__e in " in out)
     assert_true("sqrrl__e._inner[]._name" in out)
+
+
+def test_transform_dict_value_position_field_index_then_field_access() raises:
+    """Indexing into a Dict-valued field (`scores: Dict[String,
+    @@Employee]`, relation in the *value* position, so the field itself
+    stays unmarked) and continuing the chain (`@@eng.scores["senior"].
+    name`) resolves the indexed result to the Dict's *value* type
+    (`Employee`), not its key (`String`) -- confirmed broken via a real
+    end-to-end compile before this fix: `container_element_of`
+    (iteration semantics, always the key for a two-argument wrapper) was
+    also used for *indexing*, so the walker believed the indexed result
+    was a `String`, gave up on `.name` via the "premature-leaf rollback"
+    path, and copied it through unrewritten -- producing generated code
+    that called `.name` on a `sqrrl__Employee` (no bare `.name` field), a
+    confusing real-Mojo compile error two layers removed from the actual
+    cause. `container_index_result_of` (indexing semantics) fixes it."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Employee"] = True
+    struct_names["Department"] = True
+    var function_returns = Dict[String, String]()
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+    var plain_value_fields = Dict[String, Dict[String, String]]()
+    plain_value_fields["Department"] = Dict[String, String]()
+    plain_value_fields["Department"]["scores"] = "Dict[String, Employee]"
+
+    var src = String(
+        "def foo(@@eng: @@Department) raises:\n"
+        + '    print(@@eng.scores["senior"].name)\n'
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields,
+        plain_value_fields=plain_value_fields,
+    )
+    assert_true('print(sqrrl__eng._inner[]._scores["senior"]._inner[]._name)' in out)
+
+
+def test_transform_custom_two_argument_wrapper_index_yields_second_argument() raises:
+    """`container_index_result_of`'s own generalization: a custom two-
+    argument wrapper (`Grid[K, V]`, the same shape the JSON escape-hatch
+    examples already use to prove `Dict`-specific logic generalizes) is
+    keyed on argument count, not the literal name `Dict` -- indexing a
+    `Grid[String, @@Employee]`-valued field yields `Employee` (the second
+    argument), the same way indexing a `Dict[String, @@Employee]`-valued
+    field does, with no special-casing needed per wrapper name."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Employee"] = True
+    struct_names["Department"] = True
+    var function_returns = Dict[String, String]()
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+    var plain_value_fields = Dict[String, Dict[String, String]]()
+    plain_value_fields["Department"] = Dict[String, String]()
+    plain_value_fields["Department"]["scores"] = "Grid[String, Employee]"
+
+    var src = String(
+        "def foo(@@eng: @@Department) raises:\n"
+        + '    print(@@eng.scores["senior"].name)\n'
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields,
+        plain_value_fields=plain_value_fields,
+    )
+    assert_true('print(sqrrl__eng._inner[]._scores["senior"]._inner[]._name)' in out)
+
+
+def test_transform_function_value_position_return_needs_marking_and_chains_directly() raises:
+    """Mandatory marking, widened: a function whose return type has its
+    only relation in a two-argument wrapper's *second* position (`Dict[
+    String, @@Employee]`) must now mark its own name too -- previously
+    stayed correctly bare (relation unreachable at all under the old,
+    iteration-only rule), but the widened rule makes indexing a real
+    reachability path, so leaving it bare is now under-marked. Once
+    marked, its call is a real marker position exactly like a first-
+    position-returning function's -- direct indexing/chaining works, no
+    intermediate variable or explicit type annotation required."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Employee"] = True
+    struct_names["Department"] = True
+    var function_returns = Dict[String, String]()
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+
+    # The bare/marked cross-validation is `build_function_returns`'s own
+    # job (a signature-scan pass over raw files, run before `transform_
+    # source` -- which only ever *consumes* an already-built `function_
+    # returns` map, never re-derives it from source), so it's tested
+    # directly here rather than through `transform_source`, matching
+    # `test_build_function_returns_rejects_unmarked_entity_returning_
+    # function`'s own established pattern.
+    var bare_path = String("/tmp/test_value_position_return_bare.mojo.sqrrl")
+    var bf = open(bare_path, "w")
+    bf.write(
+        "def scores_for(@@d: @@Department) -> Dict[String, @@Employee]:\n"
+        + "    return @@d.name\n"
+    )
+    bf.close()
+    var bare_files = List[String]()
+    bare_files.append(bare_path)
+    var raised = False
+    try:
+        _ = build_function_returns(bare_files)
+    except:
+        raised = True
+    assert_true(raised)
+
+    var marked_path = String("/tmp/test_value_position_return_marked.mojo.sqrrl")
+    var mf = open(marked_path, "w")
+    mf.write(
+        "def @@scores_for(@@d: @@Department) -> Dict[String, @@Employee]:\n"
+        + "    return @@d.name\n"
+    )
+    mf.close()
+    var marked_files = List[String]()
+    marked_files.append(marked_path)
+    var registered = build_function_returns(marked_files)
+    assert_true("scores_for" in registered)
+    assert_equal(registered["scores_for"], "Dict[String, Employee]")
+
+    function_returns["scores_for"] = "Dict[String, Employee]"
+    var call_src = String(
+        "def foo(@@eng: @@Department) raises:\n"
+        + '    print(@@scores_for(@@eng)["senior"].name)\n'
+    )
+    var out = transform_source(
+        call_src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+    )
+    assert_true('print(sqrrl__scores_for(sqrrl__eng)["senior"]._inner[]._name)' in out)
+
+
+def test_transform_container_constructor_infers_second_position_relation() raises:
+    """`handle_name_ref`'s own unmarked-RHS container-constructor
+    inference, widened to match: `var @@x = Dict[String, @@Employee]()`
+    infers `@@x`'s type from the *second* argument, the same way `var
+    @@x = List[@@Employee]()` already inferred it from the first --
+    mirrors `is_directly_entity_reachable`'s own position 1-or-2 rule
+    for declarations, applied here to a bare container constructor's own
+    inferred type instead."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Employee"] = True
+    var function_returns = Dict[String, String]()
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+
+    var src = String(
+        "def foo() raises:\n"
+        + "    var @@scores = Dict[String, @@Employee]()\n"
+        + '    print(@@scores["senior"].name)\n'
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+    )
+    assert_true("var sqrrl__scores = Dict[String, sqrrl__Employee]()" in out)
+    assert_true('print(sqrrl__scores["senior"]._inner[]._name)' in out)
+
+
+def test_transform_container_constructor_infers_nested_relation() raises:
+    """The constructor inference is fully general, not one-level-only --
+    `var @@x = List[Dict[String, @@Employee]]()` (the relation nested
+    two levels down, in the *inner* wrapper's second position) is
+    inferred correctly, since the inference reuses `is_directly_entity_
+    reachable`/`render_relation_stripped` directly (the same recursive
+    machinery a declaration's own type text already goes through) on
+    the full, depth-aware-scanned bracket text (`Scanner.scan_bracketed_
+    span`), rather than a shallow, single-level scan of its own."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Employee"] = True
+    var function_returns = Dict[String, String]()
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+
+    var src = String(
+        "def foo() raises:\n"
+        + "    var @@rosters = List[Dict[String, @@Employee]]()\n"
+        + '    print(@@rosters[0]["senior"].name)\n'
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+    )
+    assert_true("var sqrrl__rosters = List[Dict[String, sqrrl__Employee]]()" in out)
+    assert_true('print(sqrrl__rosters[0]["senior"]._inner[]._name)' in out)
+
+
+def test_transform_for_loop_over_value_position_call_rejects_marked_variable() raises:
+    """The for-loop-variable-marking guard: `for @@x in <a marked call
+    whose only relation is in a two-argument wrapper's second
+    position>:` is rejected -- iterating it only ever yields the *key*
+    (real Dict iteration semantics), never the entity, so `@@x` would
+    otherwise silently bind to a plain, non-entity value with no error
+    at all. A *bare* `for x in ...:` is the correct, accepted form."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Employee"] = True
+    struct_names["Department"] = True
+    var function_returns = Dict[String, String]()
+    function_returns["scores_for"] = "Dict[String, Employee]"
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+
+    var marked_loop_src = String(
+        "def @@scores_for(@@d: @@Department) -> Dict[String, @@Employee]:\n"
+        + "    return @@d.name\n"
+        + "\n"
+        + "def foo(@@eng: @@Department) raises:\n"
+        + "    for @@x in @@scores_for(@@eng):\n"
+        + "        print(@@x.name)\n"
+    )
+    var raised = False
+    try:
+        _ = transform_source(
+            marked_loop_src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        )
+    except:
+        raised = True
+    assert_true(raised)
+
+    var bare_loop_src = String(
+        "def @@scores_for(@@d: @@Department) -> Dict[String, @@Employee]:\n"
+        + "    return @@d.name\n"
+        + "\n"
+        + "def foo(@@eng: @@Department) raises:\n"
+        + "    for key in @@scores_for(@@eng):\n"
+        + "        print(key)\n"
+    )
+    var out = transform_source(
+        bare_loop_src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+    )
+    assert_true("for key in sqrrl__scores_for(sqrrl__eng):" in out)
 
 
 def test_check_no_relation_cycles_through_plain_struct_rejected() raises:

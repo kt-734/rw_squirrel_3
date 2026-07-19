@@ -3,7 +3,7 @@ from squirrel_compiler.parser import (
     FieldModifier,
     parse_type_expr,
     is_wrapped_relation_type,
-    is_directly_entity_iterable,
+    is_directly_entity_reachable,
     TypeExpr,
     Scanner,
 )
@@ -49,7 +49,7 @@ def storage_field_name(f: Field) -> String:
     plan: every field gets a leading `_` (private storage, matching `_id`/
     `_table`'s existing convention), with `sqrrl__` added on top only for a
     field whose own name is `@@`-marked (point 3: mirrors the field's own
-    declaration) -- `is_directly_entity_iterable`, not the broader `is_
+    declaration) -- `is_directly_entity_reachable`, not the broader `is_
     relation_field` (mandatory-marking-narrowing milestone: a relation
     confined to a `Dict`'s value position, or nested too deep to be
     directly reachable through this field's own container-access surface,
@@ -58,7 +58,7 @@ def storage_field_name(f: Field) -> String:
     mojo`'s own marking-symmetry check, which is the actual source of
     truth for whether a given field ended up marked). `_name` for a plain
     field, `_sqrrl__dept` for a marked one."""
-    if is_directly_entity_iterable(f.type_str):
+    if is_directly_entity_reachable(f.type_str):
         return "_" + sqrrl_prefixed(f.name)
     return "_" + f.name
 
@@ -81,10 +81,10 @@ def param_name(f: Field) -> String:
     `get_<field>`/`for_<field>`/`add_to_<field>`/`remove_from_<field>` ->
     `set_sqrrl__dept`/`for_sqrrl__projects`/...). A plain field's name
     stays bare in both cases, matching its own unmarked declaration --
-    `is_directly_entity_iterable`, same narrowing `storage_field_name`
+    `is_directly_entity_reachable`, same narrowing `storage_field_name`
     just above already uses, and for the same reason (consistency with
     whichever way the field's own marking-symmetry check landed)."""
-    if is_directly_entity_iterable(f.type_str):
+    if is_directly_entity_reachable(f.type_str):
         return sqrrl_prefixed(f.name)
     return f.name
 
@@ -274,13 +274,28 @@ def container_wrapper_of(t: String) -> String:
 
 def container_element_of(t: String) -> String:
     """The element type an `@@`-marked variable bound to a container tracks
-    -- for `Dict[K, V]` (M4: `group_by_<field>`/`sum_<field>_by_<other>`/...)
-    this is `K` alone, never `K, V` -- iterating a bare `Dict` already only
-    ever yields keys (`for @@k in @@dict:`), and there's no mechanism to
-    track both a Dict's key and value types through the `@@` marker system
-    at once (inherited restriction from rw_squirrel_2, not a new one)."""
+    when *iterating* it (`for @@x in @@container:`) -- for any wrapper
+    with *at least two* type parameters (`Dict[K, V]`, or a custom key/
+    value-shaped wrapper like `Grid[K, V]`, M4: `group_by_<field>`/`sum_
+    <field>_by_<other>`/...) this is `K` alone, never `K, V, ...` --
+    iterating a bare `Dict` already only ever yields keys (`for @@k in
+    @@dict:`), and there's no mechanism to track both a key and a value
+    type through the `@@` marker system at once (inherited restriction
+    from rw_squirrel_2, not a new one). `>= 2`, not `== 2`: a real Mojo
+    `Dict` actually carries a third (`Hasher`-bound, defaulted) type
+    parameter almost nothing ever writes explicitly -- confirmed via a
+    real compiler crash when one is passed, so `Dict[String, @@Employee,
+    SomeHasher]` must be treated identically to the two-argument
+    spelling, not fall through to the generic join below. Keyed on
+    *argument count*, not the literal name `Dict` -- same generalization
+    `is_directly_entity_reachable` already applies (not tied to any
+    specific wrapper name), so a hand-written two-argument container gets
+    the same treatment `Dict` does, with no special-casing needed per
+    wrapper. See `container_index_result_of` for the *indexing*
+    (`@@container[key]`) counterpart, which for a two-or-more-argument
+    wrapper answers `V` (position 1) instead."""
     var parsed = parse_type_expr(t)
-    if parsed.name == "Dict":
+    if parsed.arg_count() >= 2:
         return parsed.arg(0).render()
     var out = String()
     for i in range(parsed.arg_count()):
@@ -288,6 +303,63 @@ def container_element_of(t: String) -> String:
             out += ", "
         out += parsed.arg(i).render()
     return out^
+
+
+def _entity_iterable_leaf_name(t: TypeExpr) -> String:
+    if not t.is_parameterized():
+        return t.name
+    if t.arg_count() == 0:
+        return t.name
+    return _entity_iterable_leaf_name(t.arg(0))
+
+
+def is_entity_iterable_leaf(
+    type_str: String, struct_names: Dict[String, Bool], plain_struct_names: Dict[String, Bool]
+) -> Bool:
+    """True if `type_str` -- an already-`@@`-stripped, *registered* type
+    string (`relation_schema`/`function_returns`/`method_returns`'s own
+    values, or a bound container variable's own tracked type) --
+    recursively bottoms out, through *position 0 only* (the one position
+    real iteration, `for x in container:`, ever exposes), at a known
+    struct name (real or plain) -- i.e. iterating this type genuinely
+    yields an entity, not a plain leaf like `String`.
+
+    Deliberately narrower than `is_directly_entity_reachable` (which
+    additionally accepts a relation confined to position 1, since
+    *marking* only needs the relation reachable through *some* position,
+    but *iteration* only ever exposes position 0): this is the for-loop-
+    variable-marking guard's own check -- `for @@x in <a call/field whose
+    iteration only reaches an entity through position 1>:` must be
+    rejected, requiring bare `x` instead, since `@@x` would otherwise
+    silently bind to a plain, non-entity value (`Dict[String,
+    @@Employee]`'s own iteration yields the `String` key, never the
+    `Employee`) -- confirmed as a real, previously-silent risk once
+    marking widened to cover position 2 as well as position 1."""
+    var leaf = _entity_iterable_leaf_name(parse_type_expr(type_str))
+    return leaf in struct_names or leaf in plain_struct_names
+
+
+def container_index_result_of(t: String) -> String:
+    """The element type `@@container[key]` yields when *indexing* it --
+    for any wrapper with *at least two* type parameters (`Dict[K, V]`, or
+    a custom key/value-shaped wrapper like `Grid[K, V]`) this is `V`, the
+    *value* (position 1) -- unlike `container_element_of`'s own `K`
+    (position 0), what *iterating* the same container yields (`for k in
+    dict:` only ever gives keys; `dict[k]` gives the value). `>= 2`, not
+    `== 2`, for the same reason `container_element_of` uses it -- a real
+    `Dict[K, V, Hasher]` (position 2+ ignored, whatever it is) indexes
+    the same way `Dict[K, V]` does. Keyed on argument count, not the
+    literal name `Dict`, mirroring `container_element_of`'s own
+    generalization -- a custom two-argument wrapper indexes the same way
+    `Dict` does, with no special-casing needed per wrapper. Indexing and
+    iterating a single-argument wrapper (`List[T]`/`Set[T]`/`Optional[T]`)
+    already agree (there's only one type parameter to disagree about), so
+    this falls straight through to `container_element_of` for anything
+    with fewer than two arguments."""
+    var parsed = parse_type_expr(t)
+    if parsed.arg_count() >= 2:
+        return parsed.arg(1).render()
+    return container_element_of(t)
 
 
 def encode_container_type(wrapper: String, type_name: String) -> String:
@@ -345,6 +417,6 @@ def scan_entity_return_shape(text: String) raises -> Optional[String]:
         return None
     sc.skip_trivia()
     var type_text = sc.scan_bracket_depth_aware_span(":")
-    if type_text.byte_length() == 0 or not is_directly_entity_iterable(type_text):
+    if type_text.byte_length() == 0 or not is_directly_entity_reachable(type_text):
         return None
     return Optional[String](parse_type_expr(type_text).render_relation_stripped())

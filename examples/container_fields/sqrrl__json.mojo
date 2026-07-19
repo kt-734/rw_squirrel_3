@@ -198,7 +198,7 @@ def sqrrl__Department_to_json(e: sqrrl__Department) -> String:
     out += ds4
     out += ","
     out += '"leads":'
-    ref fv_leads = e._inner[].get_leads()
+    ref fv_leads = e._inner[].get_sqrrl__leads()
     var ds5 = String("[")
     var dfirst5 = True
     for de5 in fv_leads.items():
@@ -337,7 +337,7 @@ def sqrrl__Department_from_json_with_id(table: sqrrl__DepartmentTable, sqrrl__tb
     var v_groups = parsed_groups.take()
     var v_ring = parsed_ring.take()
     var v_grid = parsed_grid.take()
-    var inner = ArcPointer(sqrrl__DepartmentInner(_id=id, _table=table.storage, _name=v_name, _sqrrl__members=v_members^, _sqrrl__backup=v_backup^, _sqrrl__lead=v_lead^, _tags=v_tags^, _sqrrl__scores=v_scores^, _leads=v_leads^, _groups=v_groups^, _ring=v_ring^, _grid=v_grid^))
+    var inner = ArcPointer(sqrrl__DepartmentInner(_id=id, _table=table.storage, _name=v_name, _sqrrl__members=v_members^, _sqrrl__backup=v_backup^, _sqrrl__lead=v_lead^, _tags=v_tags^, _sqrrl__scores=v_scores^, _sqrrl__leads=v_leads^, _groups=v_groups^, _ring=v_ring^, _grid=v_grid^))
     table.storage[].register_weak(id, inner)
     table.storage[].indexes.name.add(id, inner[]._name)
     return sqrrl__Department(inner^)

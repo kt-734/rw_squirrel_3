@@ -10,6 +10,8 @@ from squirrel_compiler.codegen.helpers import (
     is_container_type,
     container_wrapper_of,
     container_element_of,
+    container_index_result_of,
+    is_entity_iterable_leaf,
     encode_container_type,
     scan_entity_return_shape,
 )
