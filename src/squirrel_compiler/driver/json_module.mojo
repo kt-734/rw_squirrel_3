@@ -24,8 +24,8 @@ from std.memory import ArcPointer
 # Generates `sqrrl__json.mojo` -- every JSON-related symbol for the whole
 # project, in one file, per the user's own non-negotiable constraint (see
 # the M5 plan, "Non-negotiable constraint"): free functions operating on
-# `sqrrl__World`/a specific `Table`/an entity passed in as an ordinary
-# parameter, never a method added to `sqrrl__World` or any generated
+# `sqrrl___World`/a specific `Table`/an entity passed in as an ordinary
+# parameter, never a method added to `sqrrl___World` or any generated
 # `sqrrl__<Name>Table`.
 #
 # Plain-structs milestone (see the plan's §7): `to_json` is now fully
@@ -51,7 +51,7 @@ from std.memory import ArcPointer
 # project (e.g. a plain `home: ExternalAddress` field imported from an
 # ordinary, never-`.mojo.sqrrl` module) -- gets an escape hatch instead of
 # a raise: a hand-written `sqrrl__<TypeName>_from_json(mut sc:
-# sqrrl__JsonScanner) raises -> TypeName` companion is assumed to exist
+# sqrrl___JsonScanner) raises -> TypeName` companion is assumed to exist
 # and called directly, imported from wherever the referencing struct's
 # own module sources the type (`_collect_custom_leaf_types`), the same
 # convention/mechanism the custom container-wrapper escape hatch below
@@ -577,7 +577,7 @@ def _leaf_from_json_expr(
     (never scanned as `@@struct` or a plain struct anywhere in the
     project -- e.g. a plain `home: ExternalAddress` field imported from an
     ordinary, never-`.mojo.sqrrl` module) falls back to a hand-written
-    `sqrrl__<TypeName>_from_json(mut sc: sqrrl__JsonScanner) raises ->
+    `sqrrl__<TypeName>_from_json(mut sc: sqrrl___JsonScanner) raises ->
     TypeName` escape-hatch companion, the same convention the custom
     container-wrapper escape hatch above already established (`to_json`
     stays fully automatic either way, via `sqrrl__to_json[T]`'s own
@@ -848,7 +848,7 @@ def _dump_value_expr(
     if t.is_relation():
         # Dumped directly as its own bare id -- no generic dispatch/trait-
         # conformance detour needed at all (see this module's own doc
-        # comment for why `sqrrl__JsonSerializable` was removed): a
+        # comment for why `sqrrl___JsonSerializable` was removed): a
         # relation's own JSON shape is always just its id, known
         # unconditionally at this exact call site, not something that
         # needs to be sorted out generically at runtime.
@@ -962,7 +962,7 @@ def _emit_to_json(
     goes through the uniform, reflection-based `sqrrl__to_json(...)`
     (plain-structs milestone) -- it sorts out on its own whether the value
     is a leaf, a relation to a real entity (its own bare id, via `conforms_
-    to(sqrrl__JsonSerializable)` -- the target row itself is serialized
+    to(sqrrl___JsonSerializable)` -- the target row itself is serialized
     once, separately, as part of its own table's own dump), or a plain-
     struct value (recursing through `reflect[T]`, at any nesting depth --
     including a generic instantiation like `Box[UInt32]`, which is why the
@@ -1064,7 +1064,7 @@ def _emit_to_json(
                 out += "    out += sqrrl__to_json(e._inner[].get_" + param_name(f) + "())\n"
         elif is_relation_field(f) and not is_container_type(f.type_str):
             # A bare relation's own JSON shape is always just its id --
-            # dumped directly, no `sqrrl__JsonSerializable`/generic-
+            # dumped directly, no `sqrrl___JsonSerializable`/generic-
             # dispatch detour needed at all (this module's own doc
             # comment has the full rationale for why that trait is gone).
             out += "    out += String(e._inner[].get_" + param_name(f) + "().id())\n"
@@ -1096,7 +1096,7 @@ def _emit_from_json_with_id(
     var params = String("table: " + table_name)
     for target in siblings:
         params += ", sqrrl__tbl_" + target + ": " + sqrrl_prefixed(target) + "Table"
-    params += ", id: UInt32, mut sc: sqrrl__JsonScanner"
+    params += ", id: UInt32, mut sc: sqrrl___JsonScanner"
 
     var out = String(
         "\ndef sqrrl__" + parsed.name + "_from_json_with_id(" + params + ") raises -> " + entity_name + ":\n"
@@ -1308,7 +1308,7 @@ def _emit_all_from_json(parsed: ParsedStruct, plain_struct_fields: Dict[String, 
     """`sqrrl__<Name>_all_from_json(table, <sibling tables>, [mut temp],
     mut sc) raises` -- parses the `[[id, obj], ...]` array, calling
     `_from_json_with_id` per entry. `temp` (a `List[sqrrl__<Name>]` slot on
-    `sqrrl__TempKeepAlives`) is omitted entirely for a `keepalive`-tagged
+    `sqrrl___TempKeepAlives`) is omitted entirely for a `keepalive`-tagged
     struct -- its own `create()`-mirrored construction inside
     `_from_json_with_id` already retains it via the table's real
     `keepalive` set, no extra hold needed."""
@@ -1322,7 +1322,7 @@ def _emit_all_from_json(parsed: ParsedStruct, plain_struct_fields: Dict[String, 
         call_args += ", sqrrl__tbl_" + target
     if not parsed.is_keepalive:
         params += ", mut temp: List[" + entity_name + "]"
-    params += ", mut sc: sqrrl__JsonScanner"
+    params += ", mut sc: sqrrl___JsonScanner"
 
     var out = String("\ndef sqrrl__" + parsed.name + "_all_from_json(" + params + ") raises:\n")
     out += "    sc.expect_byte(UInt8(ord(\"[\")))\n"
@@ -1350,12 +1350,12 @@ def _emit_all_from_json(parsed: ParsedStruct, plain_struct_fields: Dict[String, 
 
 
 def _emit_temp_keep_alives_struct(structs: List[DiscoveredStruct]) -> String:
-    """`sqrrl__TempKeepAlives` -- one `List[sqrrl__<Name>]` field per
+    """`sqrrl___TempKeepAlives` -- one `List[sqrrl__<Name>]` field per
     non-keepalive struct, threaded as a real local in the generated
     *script* (bound by `@@@begin_init_from_json`, consumed by
-    `@@@end_init_from_json`), never stored on `sqrrl__World` itself (see
+    `@@@end_init_from_json`), never stored on `sqrrl___World` itself (see
     project memory's own settled M5 policy)."""
-    var out = String("\nstruct sqrrl__TempKeepAlives(Movable):\n")
+    var out = String("\nstruct sqrrl___TempKeepAlives(Movable):\n")
     var any_field = False
     for ds in structs:
         if not ds.parsed.is_keepalive:
@@ -1372,7 +1372,7 @@ def _emit_temp_keep_alives_struct(structs: List[DiscoveredStruct]) -> String:
 
 
 def _emit_world_to_json(topo_order: List[DiscoveredStruct]) -> String:
-    var out = String("\ndef sqrrl__world_to_json(world: sqrrl__World) -> String:\n")
+    var out = String("\ndef sqrrl___world_to_json(world: sqrrl___World) -> String:\n")
     out += "    var out = String(\"{\")\n"
     var first = True
     for ds in topo_order:
@@ -1391,13 +1391,13 @@ def _emit_world_from_json(
 ) raises -> String:
     """Dispatches on whatever top-level key order the JSON text actually
     has -- reload safety relies on the *document* being topo-ordered, which
-    any dump `sqrrl__world_to_json` itself produces always is (a
+    any dump `sqrrl___world_to_json` itself produces always is (a
     hand-edited or externally-produced dump with reordered keys could abort
     inside `handle_for` -- not a new gap this introduces, matching
     rw_squirrel_2's own identical property)."""
     var out = String(
-        "\ndef sqrrl__world_from_json(mut world: sqrrl__World, mut sc: sqrrl__JsonScanner, mut"
-        " temp: sqrrl__TempKeepAlives) raises:\n"
+        "\ndef sqrrl___world_from_json(mut world: sqrrl___World, mut sc: sqrrl___JsonScanner, mut"
+        " temp: sqrrl___TempKeepAlives) raises:\n"
     )
     out += "    sc.expect_byte(UInt8(ord(\"{\")))\n"
     out += "    if not sc.try_consume_byte(UInt8(ord(\"}\"))):\n"
@@ -1435,20 +1435,20 @@ def _emit_orchestration() -> String:
     rw_squirrel_2's own `world_module.mojo` doc comment records for the
     identical ASAP-destruction failure mode)."""
     var out = String()
-    out += "\ndef sqrrl__begin_init_from_json(mut world: sqrrl__World, json: String) raises -> sqrrl__TempKeepAlives:\n"
+    out += "\ndef sqrrl___begin_init_from_json(mut world: sqrrl___World, json: String) raises -> sqrrl___TempKeepAlives:\n"
     out += "    world.sqrrl__check_no_leaks()\n"
-    out += "    world = sqrrl__init()\n"
-    out += "    var sc = sqrrl__JsonScanner(json)\n"
-    out += "    var temp = sqrrl__TempKeepAlives()\n"
-    out += "    sqrrl__world_from_json(world, sc, temp)\n"
+    out += "    world = sqrrl___init()\n"
+    out += "    var sc = sqrrl___JsonScanner(json)\n"
+    out += "    var temp = sqrrl___TempKeepAlives()\n"
+    out += "    sqrrl___world_from_json(world, sc, temp)\n"
     out += "    return temp^\n"
 
-    out += "\ndef sqrrl__end_init_from_json(var temp: sqrrl__TempKeepAlives):\n"
+    out += "\ndef sqrrl___end_init_from_json(var temp: sqrrl___TempKeepAlives):\n"
     out += "    pass\n"
 
-    out += "\ndef sqrrl__init_from_json(mut world: sqrrl__World, json: String) raises:\n"
-    out += "    var temp = sqrrl__begin_init_from_json(world, json)\n"
-    out += "    sqrrl__end_init_from_json(temp^)\n"
+    out += "\ndef sqrrl___init_from_json(mut world: sqrrl___World, json: String) raises:\n"
+    out += "    var temp = sqrrl___begin_init_from_json(world, json)\n"
+    out += "    sqrrl___end_init_from_json(temp^)\n"
     return out^
 
 
@@ -1660,7 +1660,7 @@ def _emit_plain_struct_from_json(
     var params = String()
     for target in siblings:
         params += "sqrrl__tbl_" + target + ": " + sqrrl_prefixed(target) + "Table, "
-    params += "mut sc: sqrrl__JsonScanner"
+    params += "mut sc: sqrrl___JsonScanner"
 
     var type_param_decl = String()
     var type_param_names = String()
@@ -1902,8 +1902,8 @@ def emit_json_module(
     non-negotiable constraint, see this file's own module doc comment).
     `discovery_structs` (declaration order) drives the per-struct function
     definitions (order doesn't matter there); `topo_order` (dependency
-    order, `driver/topo_order.mojo`) drives `sqrrl__world_to_json`'s own
-    key order and `sqrrl__world_from_json`'s dispatch-branch order, so a
+    order, `driver/topo_order.mojo`) drives `sqrrl___world_to_json`'s own
+    key order and `sqrrl___world_from_json`'s dispatch-branch order, so a
     genuine dump always reloads safely. `plain_struct_discovery`
     (plain-structs milestone) drives one `sqrrl__<Name>_from_json`
     companion per *non-generic* plain struct discovered project-wide."""
@@ -1917,12 +1917,12 @@ def emit_json_module(
     var out = String(
         "from std.memory import ArcPointer\n"
         "from std.collections import Set\n"
-        "from squirrel_runtime.json import sqrrl__JsonScanner, sqrrl__json_string_literal,"
+        "from squirrel_runtime.json import sqrrl___JsonScanner, sqrrl__json_string_literal,"
         " sqrrl__json_bool_literal, sqrrl__to_json_default, sqrrl__from_json_default,"
         " sqrrl__List_json_to_list, sqrrl__List_json_from_list, sqrrl__Set_json_to_list,"
         " sqrrl__Set_json_from_list, sqrrl__Optional_json_to_list, sqrrl__Optional_json_from_list,"
         " sqrrl__Dict_json_to_pairs, sqrrl__Dict_json_from_pairs, sqrrl__movable_rebind\n"
-        "from sqrrl__world import sqrrl__World, sqrrl__init\n"
+        "from sqrrl__world import sqrrl___World, sqrrl___init\n"
     )
     for ds in discovery_structs:
         var module_path = ds.module_path
@@ -2041,7 +2041,7 @@ def emit_json_module(
 
     var to_json_table = String("def sqrrl__to_json[T: AnyType](value: T) -> String:\n    comptime if False:\n        pass\n")
     var from_json_table = String(
-        "def sqrrl__from_json[T: Movable & ImplicitlyDeletable](mut sc: sqrrl__JsonScanner) raises -> T:\n"
+        "def sqrrl__from_json[T: Movable & ImplicitlyDeletable](mut sc: sqrrl___JsonScanner) raises -> T:\n"
         "    comptime if False:\n        pass\n"
     )
     for t in container_dispatch_types:
@@ -2061,7 +2061,7 @@ def emit_json_module(
     out += "    out += \"]\"\n"
     out += "    return out^\n"
     out += "\n\n"
-    out += "def list_from_json[T: Movable & ImplicitlyDeletable](mut sc: sqrrl__JsonScanner) raises -> List[T]:\n"
+    out += "def list_from_json[T: Movable & ImplicitlyDeletable](mut sc: sqrrl___JsonScanner) raises -> List[T]:\n"
     out += "    var lst = List[T]()\n"
     out += "    sc.expect_byte(UInt8(ord(\"[\")))\n"
     out += "    if not sc.try_consume_byte(UInt8(ord(\"]\"))):\n"
@@ -2087,7 +2087,7 @@ def emit_json_module(
     out += "\n\n"
     out += (
         "def pairs_from_json[K: Copyable & ImplicitlyDeletable, V: Copyable & ImplicitlyDeletable](mut sc:"
-        " sqrrl__JsonScanner) raises -> List[Tuple[K, V]]:\n"
+        " sqrrl___JsonScanner) raises -> List[Tuple[K, V]]:\n"
     )
     out += "    var pairs = List[Tuple[K, V]]()\n"
     out += "    sc.expect_byte(UInt8(ord(\"[\")))\n"

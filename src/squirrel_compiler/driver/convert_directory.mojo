@@ -10,6 +10,7 @@ from squirrel_compiler.driver.discovery import (
     build_multi_fields,
     build_ordered_fields,
     build_world_methods,
+    build_method_returns,
     build_stats_fields,
     build_entity_symbols,
     discover_plain_structs,
@@ -63,6 +64,7 @@ def convert_directory(target_root: String) raises:
     var multi_fields = build_multi_fields(discovery)
     var ordered_fields = build_ordered_fields(discovery)
     var world_methods = build_world_methods(discovery)
+    var method_returns = build_method_returns(discovery)
     var stats_fields = build_stats_fields(discovery)
     var plain_value_fields = build_plain_value_fields(discovery, plain_struct_fields)
     var entity_symbols = build_entity_symbols(discovery)
@@ -90,7 +92,7 @@ def convert_directory(target_root: String) raises:
     # `sqrrl__json.mojo` -- a project that never calls a whole-world JSON
     # entry point anywhere (`project_uses_json`, scanning every file's own
     # *raw* source up front -- has to run before `emit_file` does, since
-    # its result now also gates `codegen/entity.mojo`'s own `sqrrl__
+    # its result now also gates `codegen/entity.mojo`'s own `sqrrl___
     # JsonSerializable` conformance while a struct is *being* emitted, not
     # just whether `sqrrl__json.mojo` gets written afterward) shouldn't be
     # forced to make every field JSON-parseable, or carry JSON-only
@@ -109,7 +111,7 @@ def convert_directory(target_root: String) raises:
         var generated = emit_file(
             path, own_module_path, relation_schema, struct_names, function_returns, unique_fields,
             indexed_fields, multi_fields, ordered_fields, world_methods, stats_fields, entity_symbols,
-            plain_struct_names, plain_value_fields, json_used
+            plain_struct_names, plain_value_fields, json_used, method_returns=method_returns
         )
         out_paths.append(out_path)
         generated_files.append(generated^)

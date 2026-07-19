@@ -16,13 +16,14 @@ def transform_source(
     plain_struct_names: Dict[String, Bool] = Dict[String, Bool](),
     plain_value_fields: Dict[String, Dict[String, String]] = Dict[String, Dict[String, String]](),
     json_used: Bool = False,
+    method_returns: Dict[String, Dict[String, String]] = Dict[String, Dict[String, String]](),
 ) raises -> String:
     """Entry point for converting one whole `.mojo.sqrrl` file: builds a
     fresh `RewriteContext` and hands off to `rewrite_markers`. `json_used`
     (whether the whole project touches JSON at all -- `driver/misc_
     builders.mojo`'s `project_uses_json`, computed *before* any file gets
     transformed, unlike `uses_json_entry_point`) gates `codegen/entity.
-    mojo`'s own `sqrrl__JsonSerializable` conformance -- consumed only by
+    mojo`'s own `sqrrl___JsonSerializable` conformance -- consumed only by
     JSON codegen (`driver/json_module.mojo`'s own module doc comment), so
     a project that never touches JSON at all shouldn't carry it on every
     entity unconditionally."""
@@ -35,6 +36,7 @@ def transform_source(
         multi_fields=multi_fields.copy(),
         ordered_fields=ordered_fields.copy(),
         world_methods=world_methods.copy(),
+        method_returns=method_returns.copy(),
         stats_fields=stats_fields.copy(),
         plain_struct_names=plain_struct_names.copy(),
         plain_value_fields=plain_value_fields.copy(),

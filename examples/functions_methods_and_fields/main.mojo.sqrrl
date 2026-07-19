@@ -50,18 +50,21 @@
             out += @@m.name + " "
         return String(out.strip())
 
-    # -- methods: a method's own name is never '@@'-marked, even when it
-    # returns a relation -- only top-level functions/var-decls/fields get
-    # the "single @@ vs @@@" mandatory-marking treatment; a method stays
-    # bare unless it genuinely needs sqrrl__world, in which case it's
-    # '@@@' the same way a top-level function is. A method's own return
-    # value also isn't registered as an entity anywhere (unlike a
-    # top-level function's, which now is) -- calling one and discarding
-    # the result, or querying back through an already-tracked field, are
-    # the two shapes that work; binding it to a fresh '@@'-marked local
-    # is a separate, unaddressed gap this example doesn't exercise.
     def promote_to_lead(self, @@e: @@Employee):
         self.@@lead = @@e
+
+    # -- methods: mandatory marking applies here too -- a method whose
+    # return type is directly entity-iterable must mark its own name,
+    # '@@' if it doesn't also need sqrrl___world, '@@@' if it does (the
+    # exact same rule a top-level function's own name already follows).
+    # Its call site is then a real marker position, same as a marked
+    # function's -- bind-then-use, direct for-loop, and direct chain all
+    # work off it, no intermediate variable required (see main() below).
+    def @@team_lead(self) -> @@Employee:
+        return self.@@lead
+
+    def @@roster(self) -> List[@@Employee]:
+        return self.@@team.copy()
 
     def @@@headcount(self) raises -> String:
         return self.name + ": " + String(@@@Employee.count())
@@ -88,7 +91,7 @@ def scores_for(@@d: @@Department) -> Dict[String, @@Employee]:
 
 
 def @@get_lead(@@d: @@Department) -> @@Employee:
-    # bare relation return -- needs marking, but not sqrrl__world (only
+    # bare relation return -- needs marking, but not sqrrl___world (only
     # hops through an existing relation, never constructs one)
     return @@d.@@lead
 
@@ -99,7 +102,7 @@ def @@get_team(@@d: @@Department) -> List[@@Employee]:
 
 
 def @@@make_employee(name: String) raises -> @@Employee:
-    # constructs an entity -- genuinely needs sqrrl__world
+    # constructs an entity -- genuinely needs sqrrl___world
     var @@e = @@@Employee { .name = name }
     return @@e
 
@@ -146,6 +149,18 @@ def main() raises:
         print(@@eng.lead_name())
         print("contains bob:", @@eng.contains(@@bob))
         print(@@eng.greet_team([@@carol]))
+
+        # a method's own name follows the exact same mandatory-marking
+        # rule a top-level function's does -- bind-then-use, direct
+        # for-loop, and direct chain all work off a marked method's own
+        # call, no intermediate variable required
+        var @@teamlead = @@eng.@@team_lead()
+        print(@@teamlead.name)
+
+        for @@m in @@eng.@@roster():
+            print("roster member:", @@m.name)
+
+        print(@@eng.@@team_lead().name)
 
         for @@e in @@eng.@@ranks:
             print("ranked:", @@e.name)

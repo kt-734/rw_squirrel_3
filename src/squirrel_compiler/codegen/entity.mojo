@@ -170,7 +170,7 @@ def emit_entity(parsed: ParsedStruct, rewritten_method_body: String, json_used: 
     to change shape when that happens, but M1 never passes anything
     non-empty.
 
-    `sqrrl__JsonSerializable` conformance (and the `sqrrl__to_json`
+    `sqrrl___JsonSerializable` conformance (and the `sqrrl__to_json`
     method satisfying it) is now conditional on `json_used` -- the
     JSON-container-dispatch rearchitecture special-cased a *relation*
     field's own dump to call `.id()` directly everywhere the compiler
@@ -187,7 +187,7 @@ def emit_entity(parsed: ParsedStruct, rewritten_method_body: String, json_used: 
     var inner_name = _inner_name(parsed.name)
     var traits = String("Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable")
     if json_used:
-        traits += ", sqrrl__JsonSerializable"
+        traits += ", sqrrl___JsonSerializable"
     for t in parsed.trait_list:
         traits += ", " + t
 
@@ -205,7 +205,7 @@ def emit_entity(parsed: ParsedStruct, rewritten_method_body: String, json_used: 
     out += "\n"
     # ArcPointer refcount introspection ("how many live handles currently
     # point at this exact row"), not a DSL concept -- deliberately named
-    # differently from the table-level `count()` (`sqrrl__world.Person.
+    # differently from the table-level `count()` (`sqrrl___world.Person.
     # count()`, "how many Person entities exist in total"), which means
     # something completely different despite the shared word. Renamed from
     # a plain `count()` here (M1-era, matching rw_squirrel_2's own naming)
@@ -223,7 +223,7 @@ def emit_entity(parsed: ParsedStruct, rewritten_method_body: String, json_used: 
     out += "        return self.id() != other.id()\n"
     out += "\n"
     if json_used:
-        # sqrrl__JsonSerializable conformance (M5): a relation field's own
+        # sqrrl___JsonSerializable conformance (M5): a relation field's own
         # to_json is always just its target's bare id -- the target row
         # itself is serialized separately, once, as part of its own
         # table's dump (driver/json_module.mojo's emit_json_module),
@@ -232,7 +232,7 @@ def emit_entity(parsed: ParsedStruct, rewritten_method_body: String, json_used: 
         out += "        return String(self.id())\n"
     if parsed.is_equatable:
         # Instance method, not table-level (M4 correction): field-by-field
-        # comparison never needs `sqrrl__world` or any table/index access
+        # comparison never needs `sqrrl___world` or any table/index access
         # at all -- reads straight off two entities' own `Inner`, same
         # "delegate through self._inner[]" shape `id()` above already
         # uses. Deliberately distinct from `__eq__` (id-based, "same row")

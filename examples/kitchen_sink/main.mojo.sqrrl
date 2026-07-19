@@ -14,7 +14,7 @@ def @@promote(@@e: @@Employee, new_title: String) -> @@Employee:
 
 
 def main() raises:
-    # `@@:` brings `sqrrl__world` into scope, already a real, empty world --
+    # `@@:` brings `sqrrl___world` into scope, already a real, empty world --
     # everything indented under it runs inside a `try:`, closed by an
     # implicit `finally:` at the end of that indented block (which checks
     # nothing is still alive before the function returns -- a workaround for
@@ -22,7 +22,7 @@ def main() raises:
     # README's "Known limitation"). `@@init()`/`@@@begin_init_from_json(...)`
     # may still be called any number of times afterward, in any control-flow
     # shape (`if restoring: @@@begin_init_from_json(dump); else: @@init();`),
-    # each one just replacing whatever `sqrrl__world` currently holds.
+    # each one just replacing whatever `sqrrl___world` currently holds.
     @@@:
         # ---- deep dependency chain: Vendor -> Project -> Department -> Employee -> Person -> Team ----
         var @@acme = @@@make_vendor("Acme Supplies")
@@ -233,18 +233,18 @@ def main() raises:
         print("alice's first boxed rating:", got_profile.boxed_ratings[0].value)
 
         # ---- per-entity JSON round trip ----
-        # ---- whole-world JSON round trip, reusing `sqrrl__world` itself --
+        # ---- whole-world JSON round trip, reusing `sqrrl___world` itself --
         # the dump has to happen *before* every entity built above has its
         # actual last mention (the "keep alive" print just below): Mojo's own
         # ASAP destruction drops a local var right after its last textual use,
         # regardless of what unrelated statements come later in the function,
-        # so `sqrrl__world.to_json()` called *after* that print would see an
+        # so `sqrrl___world.to_json()` called *after* that print would see an
         # empty world -- confirmed empirically (every count read back as 0
         # until this was reordered). Once the dump is taken and "keep alive"
         # has run, nothing is left referencing the current world, so
         # `@@@begin_init_from_json(...)` can safely replace it in place -- no
         # need to hand-thread a second, independent `sqrrl__World`.
-        # `sqrrl__world.to_json()` is still the one unavoidably
+        # `sqrrl___world.to_json()` is still the one unavoidably
         # `sqrrl__`-prefixed call here -- there's no `@@`-marked sugar for
         # "dump the current world," only for the reload half.
         var world_json = @@@to_json()

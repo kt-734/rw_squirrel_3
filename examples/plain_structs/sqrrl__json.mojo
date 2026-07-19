@@ -1,7 +1,7 @@
 from std.memory import ArcPointer
 from std.collections import Set
-from squirrel_runtime.json import sqrrl__JsonScanner, sqrrl__json_string_literal, sqrrl__json_bool_literal, sqrrl__to_json_default, sqrrl__from_json_default, sqrrl__List_json_to_list, sqrrl__List_json_from_list, sqrrl__Set_json_to_list, sqrrl__Set_json_from_list, sqrrl__Optional_json_to_list, sqrrl__Optional_json_from_list, sqrrl__Dict_json_to_pairs, sqrrl__Dict_json_from_pairs, sqrrl__movable_rebind
-from sqrrl__world import sqrrl__World, sqrrl__init
+from squirrel_runtime.json import sqrrl___JsonScanner, sqrrl__json_string_literal, sqrrl__json_bool_literal, sqrrl__to_json_default, sqrrl__from_json_default, sqrrl__List_json_to_list, sqrrl__List_json_from_list, sqrrl__Set_json_to_list, sqrrl__Set_json_from_list, sqrrl__Optional_json_to_list, sqrrl__Optional_json_from_list, sqrrl__Dict_json_to_pairs, sqrrl__Dict_json_from_pairs, sqrrl__movable_rebind
+from sqrrl__world import sqrrl___World, sqrrl___init
 from company import sqrrl__Employee, sqrrl__EmployeeInner, sqrrl__EmployeeTable
 from company import sqrrl__Person, sqrrl__PersonInner, sqrrl__PersonTable
 from company import Address
@@ -20,7 +20,7 @@ def list_to_json[T: Movable](lst: List[T]) -> String:
     return out^
 
 
-def list_from_json[T: Movable & ImplicitlyDeletable](mut sc: sqrrl__JsonScanner) raises -> List[T]:
+def list_from_json[T: Movable & ImplicitlyDeletable](mut sc: sqrrl___JsonScanner) raises -> List[T]:
     var lst = List[T]()
     sc.expect_byte(UInt8(ord("[")))
     if not sc.try_consume_byte(UInt8(ord("]"))):
@@ -43,7 +43,7 @@ def pairs_to_json[K: Movable, V: Movable](pairs: List[Tuple[K, V]]) -> String:
     return out^
 
 
-def pairs_from_json[K: Copyable & ImplicitlyDeletable, V: Copyable & ImplicitlyDeletable](mut sc: sqrrl__JsonScanner) raises -> List[Tuple[K, V]]:
+def pairs_from_json[K: Copyable & ImplicitlyDeletable, V: Copyable & ImplicitlyDeletable](mut sc: sqrrl___JsonScanner) raises -> List[Tuple[K, V]]:
     var pairs = List[Tuple[K, V]]()
     sc.expect_byte(UInt8(ord("[")))
     if not sc.try_consume_byte(UInt8(ord("]"))):
@@ -70,7 +70,7 @@ def sqrrl__to_json[T: AnyType](value: T) -> String:
         return sqrrl__to_json_default(value)
 
 
-def sqrrl__from_json[T: Movable & ImplicitlyDeletable](mut sc: sqrrl__JsonScanner) raises -> T:
+def sqrrl__from_json[T: Movable & ImplicitlyDeletable](mut sc: sqrrl___JsonScanner) raises -> T:
     comptime if False:
         pass
     elif T == Tagged[String]:
@@ -85,7 +85,7 @@ def sqrrl__Employee_to_json(e: sqrrl__Employee) -> String:
     out += "}"
     return out^
 
-def sqrrl__Employee_from_json_with_id(table: sqrrl__EmployeeTable, id: UInt32, mut sc: sqrrl__JsonScanner) raises -> sqrrl__Employee:
+def sqrrl__Employee_from_json_with_id(table: sqrrl__EmployeeTable, id: UInt32, mut sc: sqrrl___JsonScanner) raises -> sqrrl__Employee:
     var parsed_name: Optional[String] = None
     sc.expect_byte(UInt8(ord("{")))
     if not sc.try_consume_byte(UInt8(ord("}"))):
@@ -120,7 +120,7 @@ def sqrrl__Employee_all_to_json(table: sqrrl__EmployeeTable) -> String:
     out += "]"
     return out^
 
-def sqrrl__Employee_all_from_json(table: sqrrl__EmployeeTable, mut temp: List[sqrrl__Employee], mut sc: sqrrl__JsonScanner) raises:
+def sqrrl__Employee_all_from_json(table: sqrrl__EmployeeTable, mut temp: List[sqrrl__Employee], mut sc: sqrrl___JsonScanner) raises:
     sc.expect_byte(UInt8(ord("[")))
     if not sc.try_consume_byte(UInt8(ord("]"))):
         while True:
@@ -154,7 +154,7 @@ def sqrrl__Person_to_json(e: sqrrl__Person) -> String:
     out += "}"
     return out^
 
-def sqrrl__Person_from_json_with_id(table: sqrrl__PersonTable, sqrrl__tbl_Employee: sqrrl__EmployeeTable, id: UInt32, mut sc: sqrrl__JsonScanner) raises -> sqrrl__Person:
+def sqrrl__Person_from_json_with_id(table: sqrrl__PersonTable, sqrrl__tbl_Employee: sqrrl__EmployeeTable, id: UInt32, mut sc: sqrrl___JsonScanner) raises -> sqrrl__Person:
     var parsed_name: Optional[String] = None
     var parsed_home: Optional[Address] = None
     var parsed_meta: Optional[Tagged[String]] = None
@@ -213,7 +213,7 @@ def sqrrl__Person_all_to_json(table: sqrrl__PersonTable) -> String:
     out += "]"
     return out^
 
-def sqrrl__Person_all_from_json(table: sqrrl__PersonTable, sqrrl__tbl_Employee: sqrrl__EmployeeTable, mut temp: List[sqrrl__Person], mut sc: sqrrl__JsonScanner) raises:
+def sqrrl__Person_all_from_json(table: sqrrl__PersonTable, sqrrl__tbl_Employee: sqrrl__EmployeeTable, mut temp: List[sqrrl__Person], mut sc: sqrrl___JsonScanner) raises:
     sc.expect_byte(UInt8(ord("[")))
     if not sc.try_consume_byte(UInt8(ord("]"))):
         while True:
@@ -237,7 +237,7 @@ def sqrrl__Address_to_json(value: Address) -> String:
     out += "}"
     return out^
 
-def sqrrl__Address_from_json(sqrrl__tbl_Employee: sqrrl__EmployeeTable, mut sc: sqrrl__JsonScanner) raises -> Address:
+def sqrrl__Address_from_json(sqrrl__tbl_Employee: sqrrl__EmployeeTable, mut sc: sqrrl___JsonScanner) raises -> Address:
     var parsed_city: Optional[String] = None
     var parsed_owner: Optional[sqrrl__Employee] = None
     sc.expect_byte(UInt8(ord("{")))
@@ -271,7 +271,7 @@ def sqrrl__Tagged_to_json[Kind: Copyable & ImplicitlyDeletable](value: Tagged[Ki
     out += "}"
     return out^
 
-def sqrrl__Tagged_from_json[Kind: Copyable & ImplicitlyDeletable](mut sc: sqrrl__JsonScanner) raises -> Tagged[Kind]:
+def sqrrl__Tagged_from_json[Kind: Copyable & ImplicitlyDeletable](mut sc: sqrrl___JsonScanner) raises -> Tagged[Kind]:
     var parsed_label: Optional[String] = None
     var parsed_count: Optional[UInt32] = None
     sc.expect_byte(UInt8(ord("{")))
@@ -301,7 +301,7 @@ def sqrrl__Box_to_json[T: Copyable & ImplicitlyDeletable](value: Box[T]) -> Stri
     out += "}"
     return out^
 
-def sqrrl__Box_from_json[T: Copyable & ImplicitlyDeletable](mut sc: sqrrl__JsonScanner) raises -> Box[T]:
+def sqrrl__Box_from_json[T: Copyable & ImplicitlyDeletable](mut sc: sqrrl___JsonScanner) raises -> Box[T]:
     var parsed_value: Optional[T] = None
     sc.expect_byte(UInt8(ord("{")))
     if not sc.try_consume_byte(UInt8(ord("}"))):
@@ -326,7 +326,7 @@ def sqrrl__Box_Employee_to_json(value: Box[sqrrl__Employee]) -> String:
     out += "}"
     return out^
 
-def sqrrl__Box_Employee_from_json(sqrrl__tbl_Employee: sqrrl__EmployeeTable, mut sc: sqrrl__JsonScanner) raises -> Box[sqrrl__Employee]:
+def sqrrl__Box_Employee_from_json(sqrrl__tbl_Employee: sqrrl__EmployeeTable, mut sc: sqrrl___JsonScanner) raises -> Box[sqrrl__Employee]:
     var parsed_value: Optional[sqrrl__Employee] = None
     sc.expect_byte(UInt8(ord("{")))
     if not sc.try_consume_byte(UInt8(ord("}"))):
@@ -345,7 +345,7 @@ def sqrrl__Box_Employee_from_json(sqrrl__tbl_Employee: sqrrl__EmployeeTable, mut
         raise Error("InvalidJson: missing field value for Box")
     return Box[sqrrl__Employee](value=parsed_value.take())
 
-struct sqrrl__TempKeepAlives(Movable):
+struct sqrrl___TempKeepAlives(Movable):
     var Employee: List[sqrrl__Employee]
     var Person: List[sqrrl__Person]
 
@@ -353,7 +353,7 @@ struct sqrrl__TempKeepAlives(Movable):
         self.Employee = List[sqrrl__Employee]()
         self.Person = List[sqrrl__Person]()
 
-def sqrrl__world_to_json(world: sqrrl__World) -> String:
+def sqrrl___world_to_json(world: sqrrl___World) -> String:
     var out = String("{")
     out += '"Employee":'
     out += sqrrl__Employee_all_to_json(world.Employee)
@@ -363,7 +363,7 @@ def sqrrl__world_to_json(world: sqrrl__World) -> String:
     out += "}"
     return out^
 
-def sqrrl__world_from_json(mut world: sqrrl__World, mut sc: sqrrl__JsonScanner, mut temp: sqrrl__TempKeepAlives) raises:
+def sqrrl___world_from_json(mut world: sqrrl___World, mut sc: sqrrl___JsonScanner, mut temp: sqrrl___TempKeepAlives) raises:
     sc.expect_byte(UInt8(ord("{")))
     if not sc.try_consume_byte(UInt8(ord("}"))):
         while True:
@@ -379,17 +379,17 @@ def sqrrl__world_from_json(mut world: sqrrl__World, mut sc: sqrrl__JsonScanner, 
                 break
         sc.expect_byte(UInt8(ord("}")))
 
-def sqrrl__begin_init_from_json(mut world: sqrrl__World, json: String) raises -> sqrrl__TempKeepAlives:
+def sqrrl___begin_init_from_json(mut world: sqrrl___World, json: String) raises -> sqrrl___TempKeepAlives:
     world.sqrrl__check_no_leaks()
-    world = sqrrl__init()
-    var sc = sqrrl__JsonScanner(json)
-    var temp = sqrrl__TempKeepAlives()
-    sqrrl__world_from_json(world, sc, temp)
+    world = sqrrl___init()
+    var sc = sqrrl___JsonScanner(json)
+    var temp = sqrrl___TempKeepAlives()
+    sqrrl___world_from_json(world, sc, temp)
     return temp^
 
-def sqrrl__end_init_from_json(var temp: sqrrl__TempKeepAlives):
+def sqrrl___end_init_from_json(var temp: sqrrl___TempKeepAlives):
     pass
 
-def sqrrl__init_from_json(mut world: sqrrl__World, json: String) raises:
-    var temp = sqrrl__begin_init_from_json(world, json)
-    sqrrl__end_init_from_json(temp^)
+def sqrrl___init_from_json(mut world: sqrrl___World, json: String) raises:
+    var temp = sqrrl___begin_init_from_json(world, json)
+    sqrrl___end_init_from_json(temp^)

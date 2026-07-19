@@ -11,6 +11,7 @@ from squirrel_compiler.codegen.helpers import (
     container_wrapper_of,
     container_element_of,
     encode_container_type,
+    scan_entity_return_shape,
 )
 from squirrel_compiler.codegen.entity import emit_entity_inner, emit_entity
 from squirrel_compiler.codegen.table import emit_indexes, emit_table

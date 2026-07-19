@@ -64,7 +64,7 @@ def topo_sort_structs(
 ) raises -> List[DiscoveredStruct]:
     """Every struct ordered so it comes after every struct its own relation
     fields target -- what JSON reconstruction needs (`handle_for(id)` only
-    works once the target id is already live) and `sqrrl__world_to_json`
+    works once the target id is already live) and `sqrrl___world_to_json`
     reuses too, so a dump's own top-level key order is always safe to
     reload directly (M5's whole-world JSON, `driver/json_module.mojo`).
     Plain postorder DFS over the project-wide relation graph --

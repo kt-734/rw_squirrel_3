@@ -1,12 +1,12 @@
 from squirrel_runtime.entity_storage import EntityStorage
 from squirrel_runtime.index import PlainIndex, UniqueIndex, MultiIndex, OrderedIndex
-from squirrel_runtime.json import sqrrl__JsonSerializable
+from squirrel_runtime.json import sqrrl___JsonSerializable
 from std.memory import ArcPointer
 from std.hashlib import Hasher
 from std.collections import Set
 from std.os import abort
-from sqrrl__world import sqrrl__init, sqrrl__World
-from sqrrl__json import sqrrl__begin_init_from_json, sqrrl__end_init_from_json, sqrrl__init_from_json, sqrrl__world_to_json
+from sqrrl__world import sqrrl___init, sqrrl___World
+from sqrrl__json import sqrrl___begin_init_from_json, sqrrl___end_init_from_json, sqrrl___init_from_json, sqrrl___world_to_json
 
 
 from ring_module import Ring, sqrrl__Ring_json_to_list, sqrrl__Ring_json_from_list
@@ -33,7 +33,7 @@ struct sqrrl__EmployeeInner(Movable, ImplicitlyDeletable):
         return self._name
 
 
-struct sqrrl__Employee(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable, sqrrl__JsonSerializable):
+struct sqrrl__Employee(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable, sqrrl___JsonSerializable):
     var _inner: ArcPointer[sqrrl__EmployeeInner]
 
     def __init__(out self, var inner: sqrrl__EmployeeInner):
@@ -206,7 +206,7 @@ struct sqrrl__DepartmentInner(Movable, ImplicitlyDeletable):
         return self._grid
 
 
-struct sqrrl__Department(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable, sqrrl__JsonSerializable):
+struct sqrrl__Department(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable, sqrrl___JsonSerializable):
     var _inner: ArcPointer[sqrrl__DepartmentInner]
 
     def __init__(out self, var inner: sqrrl__DepartmentInner):
@@ -287,16 +287,16 @@ struct sqrrl__DepartmentTable(Movable):
         return out^
 
 def main() raises:
-    var sqrrl__world = sqrrl__init()
+    var sqrrl___world = sqrrl___init()
     try:
-        var sqrrl__alice = sqrrl__world.Employee.create(name = "Alice")
-        var sqrrl__bob = sqrrl__world.Employee.create(name = "Bob")
+        var sqrrl__alice = sqrrl___world.Employee.create(name = "Alice")
+        var sqrrl__bob = sqrrl___world.Employee.create(name = "Bob")
         var scores_dict = Dict[sqrrl__Employee, String]()
         scores_dict[sqrrl__alice] = "lead"
         scores_dict[sqrrl__bob] = "member"
         var leads_dict = Dict[String, sqrrl__Employee]()
         leads_dict["primary"] = sqrrl__alice
-        var sqrrl__eng = sqrrl__world.Department.create(name = "Engineering", sqrrl__members = [sqrrl__alice, sqrrl__bob], sqrrl__backup = Set(sqrrl__alice), sqrrl__lead = Optional(sqrrl__alice), tags = ["urgent", "core"], sqrrl__scores = scores_dict^, leads = leads_dict^, groups = [["a", "b"], ["c"]], ring = Ring[String](items=["x", "y"]), grid = Grid[String, Int](pairs=[("p", 1), ("q", 2)]))
+        var sqrrl__eng = sqrrl___world.Department.create(name = "Engineering", sqrrl__members = [sqrrl__alice, sqrrl__bob], sqrrl__backup = Set(sqrrl__alice), sqrrl__lead = Optional(sqrrl__alice), tags = ["urgent", "core"], sqrrl__scores = scores_dict^, leads = leads_dict^, groups = [["a", "b"], ["c"]], ring = Ring[String](items=["x", "y"]), grid = Grid[String, Int](pairs=[("p", 1), ("q", 2)]))
 
         print(sqrrl__eng._inner[]._sqrrl__members[0]._inner[]._name)
         print(sqrrl__eng._inner[]._sqrrl__members[1]._inner[]._name)
@@ -313,17 +313,17 @@ def main() raises:
         sqrrl__eng._inner[]._sqrrl__members[0]._inner[].set_name("Alicia");
         print(sqrrl__eng._inner[]._sqrrl__members[0]._inner[]._name)
 
-        var dump = sqrrl__world_to_json(sqrrl__world)
+        var dump = sqrrl___world_to_json(sqrrl___world)
         print("dump:", dump)
 
         var alice_id = sqrrl__alice.id()
         var bob_id = sqrrl__bob.id()
         var eng_id = sqrrl__eng.id()
 
-        var sqrrl__temp_keep_alives = sqrrl__begin_init_from_json(sqrrl__world, dump)
-        var sqrrl__alice2 = sqrrl__world.Employee.for_name("Alicia")
-        var sqrrl__bob2 = sqrrl__world.Employee.for_name("Bob")
-        var sqrrl__eng2 = sqrrl__world.Department.for_name("Engineering")
+        var sqrrl___temp_keep_alives = sqrrl___begin_init_from_json(sqrrl___world, dump)
+        var sqrrl__alice2 = sqrrl___world.Employee.for_name("Alicia")
+        var sqrrl__bob2 = sqrrl___world.Employee.for_name("Bob")
+        var sqrrl__eng2 = sqrrl___world.Department.for_name("Engineering")
 
         if sqrrl__alice2.id() != alice_id:
             raise Error("id mismatch: alice")
@@ -347,6 +347,6 @@ def main() raises:
             "reload OK: List/Set/Optional/Dict relations (key or value position), a nested"
             " List, and custom one- and two-argument containers all preserved"
         )
-        sqrrl__end_init_from_json(sqrrl__temp_keep_alives^)
+        sqrrl___end_init_from_json(sqrrl___temp_keep_alives^)
     finally:
-        sqrrl__world.sqrrl__check_no_leaks()
+        sqrrl___world.sqrrl__check_no_leaks()

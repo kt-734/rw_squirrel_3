@@ -185,7 +185,7 @@ struct FieldAccess(Copyable, Movable):
 
     `entity_marked_world` is true when `entity` was reached via `@@@`
     (three `@`s) rather than plain `@@` -- the M3 addendum's marker for
-    "this reference needs `sqrrl__world`". The scanner can't yet tell
+    "this reference needs `sqrrl___world`". The scanner can't yet tell
     whether `entity` is a bound variable (requiring plain `@@`) or a
     struct type name doing a table-level call (requiring `@@@`) -- that's
     resolved later in `rewrite_field_access.mojo`, which validates this

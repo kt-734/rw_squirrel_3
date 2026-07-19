@@ -4,7 +4,7 @@ from std.memory import ArcPointer
 from std.hashlib import Hasher
 from std.collections import Set
 from std.os import abort
-from sqrrl__world import sqrrl__init, sqrrl__World
+from sqrrl__world import sqrrl___init, sqrrl___World
 from schema.department import sqrrl__Department
 
 
@@ -126,17 +126,17 @@ struct sqrrl__EmployeeTable(Movable):
         return out^
 
 def main() raises:
-    var sqrrl__world = sqrrl__init()
+    var sqrrl___world = sqrrl___init()
     try:
-        var sqrrl__eng = sqrrl__world.Department.create(name = "Engineering")
-        var sqrrl__alice = sqrrl__world.Employee.create(name = "alice", sqrrl__dept = sqrrl__eng)
-        var sqrrl__bob = sqrrl__world.Employee.create(name = "bob", sqrrl__dept = sqrrl__eng)
+        var sqrrl__eng = sqrrl___world.Department.create(name = "Engineering")
+        var sqrrl__alice = sqrrl___world.Employee.create(name = "alice", sqrrl__dept = sqrrl__eng)
+        var sqrrl__bob = sqrrl___world.Employee.create(name = "bob", sqrrl__dept = sqrrl__eng)
 
         print(sqrrl__alice._inner[]._name, sqrrl__alice._inner[]._sqrrl__dept._inner[]._name)
 
-        var sqrrl__matches = sqrrl__world.Employee.for_name("alice")
+        var sqrrl__matches = sqrrl___world.Employee.for_name("alice")
         print("found by index:", len(sqrrl__matches))
 
-        print("count:", sqrrl__world.Employee.count(), sqrrl__alice._inner[]._name, sqrrl__bob._inner[]._name)
+        print("count:", sqrrl___world.Employee.count(), sqrrl__alice._inner[]._name, sqrrl__bob._inner[]._name)
     finally:
-        sqrrl__world.sqrrl__check_no_leaks()
+        sqrrl___world.sqrrl__check_no_leaks()

@@ -88,12 +88,12 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
             if ctx.world_declared:
                 raise sc.err(
                     "InvalidSquirrelSyntax: '@@:' already opened in"
-                    " this function -- 'sqrrl__world' only needs declaring"
+                    " this function -- 'sqrrl___world' only needs declaring"
                     " once"
                 )
             var scope_indent = indent_of(source, marker_start)
             var scope_end = sc.parse_world_scope()
-            out += "var sqrrl__world = sqrrl__init()\n" + scope_indent + "try:"
+            out += "var sqrrl___world = sqrrl___init()\n" + scope_indent + "try:"
             ctx.world_declared = True
             pending_world_scope_end = scope_end
             pending_world_scope_indent = scope_indent
@@ -107,7 +107,7 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
                     "InvalidSquirrelSyntax: '@@init()' needs '@@:'"
                     " opened first in this function"
                 )
-            out += "sqrrl__world.sqrrl__check_no_leaks(); sqrrl__world = sqrrl__init()"
+            out += "sqrrl___world.sqrrl__check_no_leaks(); sqrrl___world = sqrrl___init()"
             pending_decl = None
             pending_for_loop_decl = None
 
@@ -115,7 +115,7 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
             if not ctx.world_declared:
                 raise sc.err(
                     "InvalidSquirrelSyntax: '@@@begin_init_from_json(...)'"
-                    " needs 'sqrrl__world' -- open @@@: or add '@@' to this"
+                    " needs 'sqrrl___world' -- open @@@: or add '@@' to this"
                     " function's own parameters first"
                 )
             if ctx.temp_keep_alives_declared:
@@ -125,7 +125,7 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
                     " '@@@end_init_from_json()' first"
                 )
             var begin_json_expr = sc.parse_begin_init_from_json()
-            out += "var sqrrl__temp_keep_alives = sqrrl__begin_init_from_json(sqrrl__world, " + begin_json_expr + ")"
+            out += "var sqrrl___temp_keep_alives = sqrrl___begin_init_from_json(sqrrl___world, " + begin_json_expr + ")"
             ctx.temp_keep_alives_declared = True
             pending_decl = None
             pending_for_loop_decl = None
@@ -134,11 +134,11 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
             if not ctx.world_declared:
                 raise sc.err(
                     "InvalidSquirrelSyntax: '@@@init_from_json(...)' needs"
-                    " 'sqrrl__world' -- open @@@: or add '@@' to this"
+                    " 'sqrrl___world' -- open @@@: or add '@@' to this"
                     " function's own parameters first"
                 )
             var init_json_expr = sc.parse_init_from_json()
-            out += "sqrrl__init_from_json(sqrrl__world, " + init_json_expr + ")"
+            out += "sqrrl___init_from_json(sqrrl___world, " + init_json_expr + ")"
             pending_decl = None
             pending_for_loop_decl = None
 
@@ -150,7 +150,7 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
                     " function"
                 )
             sc.parse_end_init_from_json()
-            # Moves (not reassigns) sqrrl__temp_keep_alives into a real
+            # Moves (not reassigns) sqrrl___temp_keep_alives into a real
             # function call -- a hard call boundary, not a bare assignment
             # the caller's own dataflow could reorder relative to earlier
             # statements. Verified with a standalone spike before wiring
@@ -158,7 +158,7 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
             # destroys x exactly at the call, never earlier (the same fix
             # rw_squirrel_2's own world_module.mojo doc comment records for
             # the identical failure mode).
-            out += "sqrrl__end_init_from_json(sqrrl__temp_keep_alives^)"
+            out += "sqrrl___end_init_from_json(sqrrl___temp_keep_alives^)"
             ctx.temp_keep_alives_declared = False
             pending_decl = None
             pending_for_loop_decl = None
@@ -167,11 +167,11 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
             if not ctx.world_declared:
                 raise sc.err(
                     "InvalidSquirrelSyntax: '@@@to_json()' needs"
-                    " 'sqrrl__world' -- open @@@: or add '@@' to this"
+                    " 'sqrrl___world' -- open @@@: or add '@@' to this"
                     " function's own parameters first"
                 )
             sc.parse_to_json()
-            out += "sqrrl__world_to_json(sqrrl__world)"
+            out += "sqrrl___world_to_json(sqrrl___world)"
             pending_decl = None
             pending_for_loop_decl = None
 
@@ -234,7 +234,7 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
                 raise sc.err(
                     "InvalidSquirrelSyntax: constructing '@@"
                     + c.type_name
-                    + "' needs 'sqrrl__world' -- open @@: or add"
+                    + "' needs 'sqrrl___world' -- open @@: or add"
                     " '@@' to this function's own parameters first"
                 )
             out += build_create_call(source, marker_start, c.type_name, c.fields, ctx)
@@ -245,7 +245,16 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
 
         elif kind == MarkerKind.FOR_ENTITY_LOOP:
             var name = sc.parse_for_entity_loop()
-            out += sqrrl_prefixed(name) + " in "
+            # `parse_for_entity_loop` consumes through `in` but not the
+            # whitespace after it -- no trailing space hardcoded here
+            # either (cosmetic double-space bug, confirmed via a real
+            # compile: `for sqrrl__m in  sqrrl__d.get_team():`), so the
+            # source's own original space between `in` and the iterated
+            # expression is left for the outer loop's ordinary "between
+            # text" copy to reproduce verbatim, same fix as `scan_entity_
+            # param_type_text`'s own missing-space-before-`=` bug, just
+            # the opposite direction (double emission, not zero).
+            out += sqrrl_prefixed(name) + " in"
             pending_decl = None
             # `for @@x in @@get_list(...):`/`for @@x in @@@get_list(...):`
             # -- mandatory-marking milestone: any function returning a
@@ -280,7 +289,7 @@ def _splice_pending_world_scope_close(
 ) -> String:
     """If `pending_world_scope_end` falls inside `chunk` (an ordinary
     plain-text span the main loop is about to copy through unchanged),
-    splits it there and inserts `finally: sqrrl__world.sqrrl__check_no_leaks()`."""
+    splits it there and inserts `finally: sqrrl___world.sqrrl__check_no_leaks()`."""
     if not pending_world_scope_end:
         return chunk
     var end = pending_world_scope_end.value()
@@ -294,6 +303,6 @@ def _splice_pending_world_scope_close(
         + pending_world_scope_indent
         + "finally:\n"
         + pending_world_scope_indent
-        + "    sqrrl__world.sqrrl__check_no_leaks()\n"
+        + "    sqrrl___world.sqrrl__check_no_leaks()\n"
         + after
     )

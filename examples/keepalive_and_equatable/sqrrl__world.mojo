@@ -3,7 +3,7 @@ from company import sqrrl__PersonTable
 from std.os import abort
 
 
-struct sqrrl__World(Movable):
+struct sqrrl___World(Movable):
     var Project: sqrrl__ProjectTable
     var Person: sqrrl__PersonTable
 
@@ -15,14 +15,14 @@ struct sqrrl__World(Movable):
         self.Project.storage[].keepalive_clear()
         var sqrrl__leaked_Project = len(self.Project.all())
         if sqrrl__leaked_Project > 0:
-            abort("LeakedEntities: 'Project' still has " + String(sqrrl__leaked_Project) + " live entities outside sqrrl__world -- something external still references them")
+            abort("LeakedEntities: 'Project' still has " + String(sqrrl__leaked_Project) + " live entities outside sqrrl___world -- something external still references them")
         var sqrrl__leaked_Person = len(self.Person.all())
         if sqrrl__leaked_Person > 0:
-            abort("LeakedEntities: 'Person' still has " + String(sqrrl__leaked_Person) + " live entities outside sqrrl__world -- something external still references them")
+            abort("LeakedEntities: 'Person' still has " + String(sqrrl__leaked_Person) + " live entities outside sqrrl___world -- something external still references them")
 
     def __del__(deinit self):
         self.sqrrl__check_no_leaks()
 
 
-def sqrrl__init() -> sqrrl__World:
-    return sqrrl__World()
+def sqrrl___init() -> sqrrl___World:
+    return sqrrl___World()

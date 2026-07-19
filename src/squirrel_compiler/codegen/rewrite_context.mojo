@@ -21,7 +21,14 @@ struct RewriteContext(Copyable, Movable):
     names of its `@@@`-marked methods (see `codegen/methods.mojo`'s
     `world_marked_method_names`/`discovery.mojo`'s `build_world_methods`),
     letting instance-call dispatch tell whether calling a spliced user
-    method needs `sqrrl__world` threaded as its own first argument.
+    method needs `sqrrl___world` threaded as its own first argument.
+    `method_returns` (mandatory-marking extended to methods) is `function_
+    returns`'s per-struct parallel -- struct name -> method name -> its
+    `@@`-marked return's encoded shape (`codegen/methods.mojo`'s `method_
+    return_shapes`/`discovery.mojo`'s `build_method_returns`), letting
+    instance-call dispatch (`_handle_instance_call`) treat a marked
+    method call as a real marker position the same way `function_returns`
+    already lets `handle_func_call_marker` treat a marked function call.
     `stats_fields` (M4) lets table-level-call dispatch recognize
     `sum_<field>`/`avg_<field>` (need `is_stats`, unlike `min_`/`max_`/
     `median_`, which an `ordered` field earns for free -- see
@@ -51,6 +58,7 @@ struct RewriteContext(Copyable, Movable):
     var multi_fields: Dict[String, List[String]]
     var ordered_fields: Dict[String, List[String]]
     var world_methods: Dict[String, List[String]]
+    var method_returns: Dict[String, Dict[String, String]]
     var stats_fields: Dict[String, List[String]]
     var plain_struct_names: Dict[String, Bool]
     var plain_value_fields: Dict[String, Dict[String, String]]
@@ -76,6 +84,7 @@ struct RewriteContext(Copyable, Movable):
             multi_fields=self.multi_fields.copy(),
             ordered_fields=self.ordered_fields.copy(),
             world_methods=self.world_methods.copy(),
+            method_returns=self.method_returns.copy(),
             stats_fields=self.stats_fields.copy(),
             plain_struct_names=self.plain_struct_names.copy(),
             plain_value_fields=self.plain_value_fields.copy(),

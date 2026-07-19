@@ -4,7 +4,7 @@ from std.memory import ArcPointer
 from std.hashlib import Hasher
 from std.collections import Set
 from std.os import abort
-from sqrrl__world import sqrrl__init, sqrrl__World
+from sqrrl__world import sqrrl___init, sqrrl___World
 
 
 # Every combination of "does this name need @@ marking?" for a struct
@@ -215,37 +215,40 @@ struct sqrrl__Department(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDele
         return self._inner[]._sqrrl__lead._inner[]._name
 
     def contains(self, sqrrl__e: sqrrl__Employee) -> Bool:
-        for sqrrl__m in  self._inner[]._sqrrl__team:
+        for sqrrl__m in self._inner[]._sqrrl__team:
             if sqrrl__m == sqrrl__e:
                 return True
         return False
 
     def greet_team(self, sqrrl__extra: List[sqrrl__Employee]) -> String:
         var out = String("")
-        for sqrrl__m in  self._inner[]._sqrrl__team:
+        for sqrrl__m in self._inner[]._sqrrl__team:
             out += sqrrl__m._inner[]._name + " "
-        for sqrrl__m in  sqrrl__extra:
+        for sqrrl__m in sqrrl__extra:
             out += sqrrl__m._inner[]._name + " "
         return String(out.strip())
 
-    # -- methods: a method's own name is never '@@'-marked, even when it
-    # returns a relation -- only top-level functions/var-decls/fields get
-    # the "single @@ vs @@@" mandatory-marking treatment; a method stays
-    # bare unless it genuinely needs sqrrl__world, in which case it's
-    # '@@@' the same way a top-level function is. A method's own return
-    # value also isn't registered as an entity anywhere (unlike a
-    # top-level function's, which now is) -- calling one and discarding
-    # the result, or querying back through an already-tracked field, are
-    # the two shapes that work; binding it to a fresh '@@'-marked local
-    # is a separate, unaddressed gap this example doesn't exercise.
     def promote_to_lead(self, sqrrl__e: sqrrl__Employee):
         self._inner[].set_sqrrl__lead(sqrrl__e);
 
-    def headcount(self, mut sqrrl__world: sqrrl__World) raises -> String:
-        return self._inner[]._name + ": " + String(sqrrl__world.Employee.count())
+    # -- methods: mandatory marking applies here too -- a method whose
+    # return type is directly entity-iterable must mark its own name,
+    # '@@' if it doesn't also need sqrrl___world, '@@@' if it does (the
+    # exact same rule a top-level function's own name already follows).
+    # Its call site is then a real marker position, same as a marked
+    # function's -- bind-then-use, direct for-loop, and direct chain all
+    # work off it, no intermediate variable required (see main() below).
+    def team_lead(self) -> sqrrl__Employee:
+        return self._inner[]._sqrrl__lead
 
-    def rename(self, mut sqrrl__world: sqrrl__World, new_name: String) raises:
-        if sqrrl__world.Department.count() > 0:
+    def roster(self) -> List[sqrrl__Employee]:
+        return self._inner[]._sqrrl__team.copy()
+
+    def headcount(self, mut sqrrl___world: sqrrl___World) raises -> String:
+        return self._inner[]._name + ": " + String(sqrrl___world.Employee.count())
+
+    def rename(self, mut sqrrl___world: sqrrl___World, new_name: String) raises:
+        if sqrrl___world.Department.count() > 0:
             self._inner[].set_name(new_name);
 
 
@@ -320,7 +323,7 @@ def scores_for(sqrrl__d: sqrrl__Department) -> Dict[String, sqrrl__Employee]:
 
 
 def sqrrl__get_lead(sqrrl__d: sqrrl__Department) -> sqrrl__Employee:
-    # bare relation return -- needs marking, but not sqrrl__world (only
+    # bare relation return -- needs marking, but not sqrrl___world (only
     # hops through an existing relation, never constructs one)
     return sqrrl__d._inner[]._sqrrl__lead
 
@@ -330,18 +333,18 @@ def sqrrl__get_team(sqrrl__d: sqrrl__Department) -> List[sqrrl__Employee]:
     return sqrrl__d._inner[]._sqrrl__team.copy()
 
 
-def sqrrl__make_employee(mut sqrrl__world: sqrrl__World, name: String) raises -> sqrrl__Employee:
-    # constructs an entity -- genuinely needs sqrrl__world
-    var sqrrl__e = sqrrl__world.Employee.create(name = name)
+def sqrrl__make_employee(mut sqrrl___world: sqrrl___World, name: String) raises -> sqrrl__Employee:
+    # constructs an entity -- genuinely needs sqrrl___world
+    var sqrrl__e = sqrrl___world.Employee.create(name = name)
     return sqrrl__e
 
 
 def main() raises:
-    var sqrrl__world = sqrrl__init()
+    var sqrrl___world = sqrrl___init()
     try:
-        var sqrrl__alice = sqrrl__world.Employee.create(name = "Alice")
-        var sqrrl__bob = sqrrl__world.Employee.create(name = "Bob")
-        var sqrrl__carol = sqrrl__world.Employee.create(name = "Carol")
+        var sqrrl__alice = sqrrl___world.Employee.create(name = "Alice")
+        var sqrrl__bob = sqrrl___world.Employee.create(name = "Bob")
+        var sqrrl__carol = sqrrl___world.Employee.create(name = "Carol")
 
         var scores_dict = Dict[String, sqrrl__Employee]()
         scores_dict["senior"] = sqrrl__alice
@@ -350,10 +353,10 @@ def main() raises:
         var ranks_dict = Dict[sqrrl__Employee, String]()
         ranks_dict[sqrrl__alice] = "principal"
 
-        var sqrrl__eng = sqrrl__world.Department.create(name = "Engineering", sqrrl__lead = sqrrl__alice, sqrrl__team = [sqrrl__alice, sqrrl__bob], sqrrl__ranks = ranks_dict^, sqrrl__groups = [[sqrrl__alice], [sqrrl__bob]], scores = scores_dict^, rosters = rosters_list^)
+        var sqrrl__eng = sqrrl___world.Department.create(name = "Engineering", sqrrl__lead = sqrrl__alice, sqrrl__team = [sqrrl__alice, sqrrl__bob], sqrrl__ranks = ranks_dict^, sqrrl__groups = [[sqrrl__alice], [sqrrl__bob]], scores = scores_dict^, rosters = rosters_list^)
 
         print(shout("quiet"))
-        var sqrrl__senior: sqrrl__Employee= scores_for(sqrrl__eng)["senior"]
+        var sqrrl__senior: sqrrl__Employee = scores_for(sqrrl__eng)["senior"]
         print(sqrrl__senior._inner[]._name)
 
         # bind a marked function's return, then use it
@@ -361,7 +364,7 @@ def main() raises:
         print(sqrrl__lead._inner[]._name)
 
         # direct for-loop over a marked function's return, no binding
-        for sqrrl__m in  sqrrl__get_team(sqrrl__eng):
+        for sqrrl__m in sqrrl__get_team(sqrrl__eng):
             print("team member:", sqrrl__m._inner[]._name)
 
         # direct access-chain off a marked function's return, no
@@ -372,19 +375,31 @@ def main() raises:
         print("contains bob:", sqrrl__eng.contains(sqrrl__bob))
         print(sqrrl__eng.greet_team([sqrrl__carol]))
 
-        for sqrrl__e in  sqrrl__eng._inner[]._sqrrl__ranks:
+        # a method's own name follows the exact same mandatory-marking
+        # rule a top-level function's does -- bind-then-use, direct
+        # for-loop, and direct chain all work off a marked method's own
+        # call, no intermediate variable required
+        var sqrrl__teamlead = sqrrl__eng.team_lead()
+        print(sqrrl__teamlead._inner[]._name)
+
+        for sqrrl__m in sqrrl__eng.roster():
+            print("roster member:", sqrrl__m._inner[]._name)
+
+        print(sqrrl__eng.team_lead()._inner[]._name)
+
+        for sqrrl__e in sqrrl__eng._inner[]._sqrrl__ranks:
             print("ranked:", sqrrl__e._inner[]._name)
-        var sqrrl__senior2: sqrrl__Employee= sqrrl__eng._inner[]._rosters[0]["senior"]
+        var sqrrl__senior2: sqrrl__Employee = sqrrl__eng._inner[]._rosters[0]["senior"]
         print(sqrrl__senior2._inner[]._name)
 
         sqrrl__eng.promote_to_lead(sqrrl__bob)
         print("new lead:", sqrrl__eng.lead_name())
 
-        print(sqrrl__eng.headcount(sqrrl__world))
-        sqrrl__eng.rename(sqrrl__world, "Platform Engineering")
+        print(sqrrl__eng.headcount(sqrrl___world))
+        sqrrl__eng.rename(sqrrl___world, "Platform Engineering")
         print(sqrrl__eng._inner[]._name)
 
-        var sqrrl__dana = sqrrl__make_employee(sqrrl__world, "Dana")
+        var sqrrl__dana = sqrrl__make_employee(sqrrl___world, "Dana")
         print(sqrrl__dana._inner[]._name)
     finally:
-        sqrrl__world.sqrrl__check_no_leaks()
+        sqrrl___world.sqrrl__check_no_leaks()

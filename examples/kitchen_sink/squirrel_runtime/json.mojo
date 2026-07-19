@@ -40,7 +40,7 @@ def sqrrl__movable_rebind[Src: Movable & ImplicitlyDeletable, Dst: Movable & Imp
     return buf.pop()
 
 
-trait sqrrl__JsonSerializable:
+trait sqrrl___JsonSerializable:
     """Conformance marker for a generated entity wrapper (`sqrrl__<Name>`,
     added to its trait list by `codegen/entity.mojo`'s `emit_entity`) --
     `sqrrl__to_json(self)` is always just the row's own bare id (the row
@@ -56,7 +56,7 @@ def sqrrl__escape_json_string(s: String) -> String:
     """Escapes '"'/'\\' and the control characters JSON requires escaped
     (newline/tab/carriage-return) -- deliberately narrow, matching this
     module's own known limitation (no `\\uXXXX` support on the parse side
-    either, see `sqrrl__JsonScanner.parse_json_string`'s own doc comment):
+    either, see `sqrrl___JsonScanner.parse_json_string`'s own doc comment):
     any other control byte passes through unescaped rather than being
     silently misrepresented."""
     var out = String()
@@ -101,9 +101,9 @@ def _is_json_digit(b: UInt8) -> Bool:
     return b >= UInt8(ord("0")) and b <= UInt8(ord("9"))
 
 
-struct sqrrl__JsonScanner(Movable):
+struct sqrrl___JsonScanner(Movable):
     """A cursor over a whole-world JSON dump's source text -- `sqrrl__<Name>
-    _from_json_with_id`/`sqrrl__world_from_json` (generated, `sqrrl__json.
+    _from_json_with_id`/`sqrrl___world_from_json` (generated, `sqrrl__json.
     mojo`) drive it directly rather than through any parsed intermediate
     tree, mirroring the DSL parser's own `Scanner` (`squirrel_compiler.
     parser.scanner`) in spirit -- a purpose-built cursor over exactly the
@@ -271,7 +271,7 @@ struct sqrrl__JsonScanner(Movable):
 
 def sqrrl__to_json_default[T: AnyType](value: T) -> String:
     """Generic, reflection-based JSON serializer for *any* value -- a leaf
-    scalar, a real entity wrapper (`conforms_to(T, sqrrl__JsonSerializable)`
+    scalar, a real entity wrapper (`conforms_to(T, sqrrl___JsonSerializable)`
     -- always just its own bare id, the row itself dumped once, separately,
     by its own table), or (plain-structs milestone) a plain struct at any
     nesting depth, discovered by the compiler or not: `reflect[T]` walks its
@@ -327,7 +327,7 @@ def sqrrl__to_json_default[T: AnyType](value: T) -> String:
         return String(rebind[Float64](value))
     elif T == Float32:
         return String(rebind[Float32](value))
-    elif conforms_to(T, sqrrl__JsonSerializable):
+    elif conforms_to(T, sqrrl___JsonSerializable):
         return rebind[T](value).sqrrl__to_json()
     else:
         comptime r = reflect[T]
@@ -346,7 +346,7 @@ def sqrrl__to_json_default[T: AnyType](value: T) -> String:
         return out^
 
 
-def sqrrl__from_json_default[T: Movable & ImplicitlyDeletable](mut sc: sqrrl__JsonScanner) raises -> T:
+def sqrrl__from_json_default[T: Movable & ImplicitlyDeletable](mut sc: sqrrl___JsonScanner) raises -> T:
     """The reload-direction counterpart to `sqrrl__to_json_default` -- but
     with no reflect-based fallback at all: writing a value back into a
     reflected field requires `Ti` to prove `Movable` as an explicit type

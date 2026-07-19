@@ -5,6 +5,7 @@ from squirrel_compiler.parser import (
     is_wrapped_relation_type,
     is_directly_entity_iterable,
     TypeExpr,
+    Scanner,
 )
 
 
@@ -293,3 +294,57 @@ def encode_container_type(wrapper: String, type_name: String) -> String:
     """`entity_to_type`'s encoding for a container-tracked `@@` variable --
     stores `"Wrapper[Type]"` as a plain string."""
     return wrapper + "[" + type_name + "]"
+
+
+def scan_entity_return_shape(text: String) raises -> Optional[String]:
+    """Scans `text` -- everything from right after a def's/method's own
+    name through its header line's end, arrow included or not (e.g.
+    `(x: Int) -> @@Employee:` for a top-level function, or `self, x: Int)
+    -> List[List[@@Employee]]:` for a method, whose own name/opening `(`
+    were already split off separately) -- for a `-> <ReturnType>` and, if
+    found, hands the raw return-type text to `is_directly_entity_
+    iterable`/`render_relation_stripped` (the same canonical predicate and
+    encoding every other `@@`-marking-symmetry check in this codebase
+    already uses -- struct fields, hand-written plain struct fields, def/
+    var entity-params) rather than re-deriving a parallel, one-level-only
+    scan: recurses through first-argument position at *any* depth
+    (`List[List[@@Employee]]`), not just one wrapper deep, and correctly
+    stays unmarked for a relation confined to a *non-first* argument
+    position (`Dict[String, @@Employee]`, the value) -- exactly `is_
+    directly_entity_iterable`'s own "a @@type in a non-first position
+    does not make a @@container" rule.
+
+    Returns None if there's no arrow, or the return type isn't directly
+    entity-iterable at all.
+
+    The arrow-search itself is a linear byte-by-byte scan for the `->`
+    substring, with no depth-awareness of the parameter list it passes
+    through first (inherited limitation from `driver/misc_builders.mojo`'s
+    own original scan: a parameter's own default value containing a
+    literal `->` would misfire, considered out of scope) -- but once past
+    the arrow, the return type's own text is captured via `Scanner.scan_
+    bracket_depth_aware_span` (the same shared, depth-aware span-scan
+    `scan_type`/`scan_entity_param_type_text` use, terminated by `:` here
+    instead of `,`/`)`/`='), so an arbitrarily nested return type's full
+    text is captured intact for `parse_type_expr` to parse for real,
+    rather than inspected byte-by-byte itself.
+
+    Shared by `build_function_returns` (top-level defs, mandatory-marking's
+    original milestone) and `codegen/methods.mojo`'s `_parse_method_span`
+    (struct methods, mandatory-marking extended to them) -- the scan
+    itself is identical once positioned right after the name, whether
+    that's a top-level function or a method."""
+    var sc = Scanner(text)
+    var found_arrow = False
+    while not sc.at_end():
+        if sc.try_consume("->"):
+            found_arrow = True
+            break
+        sc.pos += 1
+    if not found_arrow:
+        return None
+    sc.skip_trivia()
+    var type_text = sc.scan_bracket_depth_aware_span(":")
+    if type_text.byte_length() == 0 or not is_directly_entity_iterable(type_text):
+        return None
+    return Optional[String](parse_type_expr(type_text).render_relation_stripped())

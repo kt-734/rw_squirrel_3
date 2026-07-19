@@ -4,7 +4,7 @@ from std.memory import ArcPointer
 from std.hashlib import Hasher
 from std.collections import Set
 from std.os import abort
-from sqrrl__world import sqrrl__init, sqrrl__World
+from sqrrl__world import sqrrl___init, sqrrl___World
 
 
 @fieldwise_init
@@ -196,22 +196,22 @@ struct sqrrl__PersonTable(Movable):
         return self.storage[].live_count()
 
 def main() raises:
-    var sqrrl__world = sqrrl__init()
+    var sqrrl___world = sqrrl___init()
     try:
-        _ = sqrrl__world.Project.create(name = "Website Revamp")
-        _ = sqrrl__world.Project.create(name = "Onboarding Redesign")
-        print("all projects:", len(sqrrl__world.Project.all()))
+        _ = sqrrl___world.Project.create(name = "Website Revamp")
+        _ = sqrrl___world.Project.create(name = "Onboarding Redesign")
+        print("all projects:", len(sqrrl___world.Project.all()))
 
-        var sqrrl__handle = sqrrl__world.Project.for_name("Website Revamp")
+        var sqrrl__handle = sqrrl___world.Project.for_name("Website Revamp")
         var released = sqrrl__handle.dont_keepalive()
         print("released website revamp:", released)
 
-        var sqrrl__alice = sqrrl__world.Person.create(name = "alice", age = 30)
-        var sqrrl__alice_twin = sqrrl__world.Person.create(name = "alice", age = 30)
-        var sqrrl__bob = sqrrl__world.Person.create(name = "bob", age = 25)
+        var sqrrl__alice = sqrrl___world.Person.create(name = "alice", age = 30)
+        var sqrrl__alice_twin = sqrrl___world.Person.create(name = "alice", age = 30)
+        var sqrrl__bob = sqrrl___world.Person.create(name = "bob", age = 25)
 
         print("alice equals alice_twin (value):", sqrrl__alice.value_eq(sqrrl__alice_twin))
         print("alice equals bob (value):", sqrrl__alice.value_eq(sqrrl__bob))
         print("alice equals alice_twin (identity):", sqrrl__alice == sqrrl__alice_twin)
     finally:
-        sqrrl__world.sqrrl__check_no_leaks()
+        sqrrl___world.sqrrl__check_no_leaks()

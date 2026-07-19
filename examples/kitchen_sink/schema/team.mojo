@@ -1,6 +1,6 @@
 from squirrel_runtime.entity_storage import EntityStorage
 from squirrel_runtime.index import PlainIndex, UniqueIndex, MultiIndex, OrderedIndex
-from squirrel_runtime.json import sqrrl__JsonSerializable
+from squirrel_runtime.json import sqrrl___JsonSerializable
 from std.memory import ArcPointer
 from std.hashlib import Hasher
 from std.collections import Set
@@ -52,7 +52,7 @@ struct sqrrl__TeamInner(Movable, ImplicitlyDeletable):
         return self._sqrrl__advisor
 
 
-struct sqrrl__Team(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable, sqrrl__JsonSerializable):
+struct sqrrl__Team(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable, sqrrl___JsonSerializable):
     var _inner: ArcPointer[sqrrl__TeamInner]
 
     def __init__(out self, var inner: sqrrl__TeamInner):

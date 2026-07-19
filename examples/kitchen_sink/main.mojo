@@ -1,12 +1,12 @@
 from squirrel_runtime.entity_storage import EntityStorage
 from squirrel_runtime.index import PlainIndex, UniqueIndex, MultiIndex, OrderedIndex
-from squirrel_runtime.json import sqrrl__JsonSerializable
+from squirrel_runtime.json import sqrrl___JsonSerializable
 from std.memory import ArcPointer
 from std.hashlib import Hasher
 from std.collections import Set
 from std.os import abort
-from sqrrl__world import sqrrl__init, sqrrl__World
-from sqrrl__json import sqrrl__begin_init_from_json, sqrrl__end_init_from_json, sqrrl__init_from_json, sqrrl__world_to_json
+from sqrrl__world import sqrrl___init, sqrrl___World
+from sqrrl__json import sqrrl___begin_init_from_json, sqrrl___end_init_from_json, sqrrl___init_from_json, sqrrl___world_to_json
 from schema.address import Address
 from schema.assignment import Assignment
 from schema.box import Box
@@ -35,7 +35,7 @@ def sqrrl__promote(sqrrl__e: sqrrl__Employee, new_title: String) -> sqrrl__Emplo
 
 
 def main() raises:
-    # `@@:` brings `sqrrl__world` into scope, already a real, empty world --
+    # `@@:` brings `sqrrl___world` into scope, already a real, empty world --
     # everything indented under it runs inside a `try:`, closed by an
     # implicit `finally:` at the end of that indented block (which checks
     # nothing is still alive before the function returns -- a workaround for
@@ -43,24 +43,24 @@ def main() raises:
     # README's "Known limitation"). `@@init()`/`@@@begin_init_from_json(...)`
     # may still be called any number of times afterward, in any control-flow
     # shape (`if restoring: @@@begin_init_from_json(dump); else: @@init();`),
-    # each one just replacing whatever `sqrrl__world` currently holds.
-    var sqrrl__world = sqrrl__init()
+    # each one just replacing whatever `sqrrl___world` currently holds.
+    var sqrrl___world = sqrrl___init()
     try:
         # ---- deep dependency chain: Vendor -> Project -> Department -> Employee -> Person -> Team ----
-        var sqrrl__acme = sqrrl__make_vendor(sqrrl__world, "Acme Supplies")
-        var sqrrl__globex = sqrrl__make_vendor(sqrrl__world, "Globex Corp")
+        var sqrrl__acme = sqrrl__make_vendor(sqrrl___world, "Acme Supplies")
+        var sqrrl__globex = sqrrl__make_vendor(sqrrl___world, "Globex Corp")
 
-        var sqrrl__website = sqrrl__make_project(sqrrl__world, "Website Revamp", 3, sqrrl__acme, 500000)
-        var sqrrl__onboarding = sqrrl__make_project(sqrrl__world, "Onboarding Redesign", 1, sqrrl__globex, 250000)
+        var sqrrl__website = sqrrl__make_project(sqrrl___world, "Website Revamp", 3, sqrrl__acme, 500000)
+        var sqrrl__onboarding = sqrrl__make_project(sqrrl___world, "Onboarding Redesign", 1, sqrrl__globex, 250000)
 
-        var sqrrl__eng = sqrrl__make_department(sqrrl__world, "Engineering")
-        var sqrrl__sales = sqrrl__make_department(sqrrl__world, "Sales")
+        var sqrrl__eng = sqrrl__make_department(sqrrl___world, "Engineering")
+        var sqrrl__sales = sqrrl__make_department(sqrrl___world, "Sales")
 
         _ = sqrrl__eng._inner[].add_to_sqrrl__projects(sqrrl__website)
         _ = sqrrl__eng._inner[].add_to_sqrrl__projects(sqrrl__onboarding)
         _ = sqrrl__sales._inner[].add_to_sqrrl__projects(sqrrl__onboarding)
         print("eng project count:", len(sqrrl__eng._inner[]._sqrrl__projects))
-        print("departments running onboarding:", len(sqrrl__world.Department.for_sqrrl__projects(sqrrl__onboarding)))
+        print("departments running onboarding:", len(sqrrl___world.Department.for_sqrrl__projects(sqrrl__onboarding)))
 
         # Set-wrapped *ordinary* relation field (not `multi`) -- a whole Set
         # assigned/read at once, unlike `multi`'s one-member-at-a-time API.
@@ -74,24 +74,24 @@ def main() raises:
         _ = sqrrl__eng._inner[].add_to_skills("mojo")
         _ = sqrrl__eng._inner[].add_to_skills("distributed-systems")
         print("eng skills:", len(sqrrl__eng._inner[]._skills))
-        print("departments with mojo skill:", len(sqrrl__world.Department.for_skills("mojo")))
+        print("departments with mojo skill:", len(sqrrl___world.Department.for_skills("mojo")))
 
-        var sqrrl__alice_emp = sqrrl__hire(sqrrl__world, "Alice", "alice@example.com", "Engineer", 5, 85000.0, sqrrl__eng)
-        var sqrrl__bob_emp = sqrrl__hire(sqrrl__world, "Bob", "bob@example.com", "Sales Rep", 2, 60000.0, sqrrl__sales)
+        var sqrrl__alice_emp = sqrrl__hire(sqrrl___world, "Alice", "alice@example.com", "Engineer", 5, 85000.0, sqrrl__eng)
+        var sqrrl__bob_emp = sqrrl__hire(sqrrl___world, "Bob", "bob@example.com", "Sales Rep", 2, 60000.0, sqrrl__sales)
 
-        var sqrrl__alice = sqrrl__world.Person.create(name = "Alice", home = Address("1 Elm St", "Springfield"), sqrrl__job = sqrrl__alice_emp)
-        var sqrrl__bob = sqrrl__world.Person.create(name = "Bob", home = Address("2 Oak St", "Shelbyville"), sqrrl__job = sqrrl__bob_emp)
+        var sqrrl__alice = sqrrl___world.Person.create(name = "Alice", home = Address("1 Elm St", "Springfield"), sqrrl__job = sqrrl__alice_emp)
+        var sqrrl__bob = sqrrl___world.Person.create(name = "Bob", home = Address("2 Oak St", "Shelbyville"), sqrrl__job = sqrrl__bob_emp)
 
         # Multi-hop chain, four levels deep: Person -> Employee -> Department -> Project.
         print("alice works in:", sqrrl__alice._inner[]._sqrrl__job._inner[]._sqrrl__dept._inner[]._name)
 
         # unique field's own for_<field> -- raises variant.
-        var sqrrl__found_by_email = sqrrl__world.Employee.for_email("bob@example.com")
+        var sqrrl__found_by_email = sqrrl___world.Employee.for_email("bob@example.com")
         print("found by email, title:", sqrrl__found_by_email._inner[]._title)
 
-        var sqrrl__eng_team = sqrrl__world.Employee.for_sqrrl__dept(sqrrl__eng)
+        var sqrrl__eng_team = sqrrl___world.Employee.for_sqrrl__dept(sqrrl__eng)
         print("eng team size (via for_dept):", len(sqrrl__eng_team))
-        for sqrrl__member in  sqrrl__eng_team:
+        for sqrrl__member in sqrrl__eng_team:
             print("a member's title before promotion:", sqrrl__member._inner[]._title)
             sqrrl__member._inner[].set_title("Staff Engineer");
             print("that member's title after writing through the loop variable:", sqrrl__member._inner[]._title)
@@ -100,25 +100,25 @@ def main() raises:
         var names = List[String]()
         names.append("Carol")
         names.append("Dave")
-        var sqrrl__sales_team = sqrrl__hire_team(sqrrl__world, names, "@example.com", 3, 55000.0, sqrrl__sales)
+        var sqrrl__sales_team = sqrrl__hire_team(sqrrl___world, names, "@example.com", 3, 55000.0, sqrrl__sales)
         print("sales team size (via hire_team):", len(sqrrl__sales_team))
 
         # `count()` -- whole table, O(1), without building a handle for
         # every entity just to len() them.
-        print("employee count (via count()):", sqrrl__world.Employee.count())
+        print("employee count (via count()):", sqrrl___world.Employee.count())
 
         # `count_<field>` -- cheaper than len(for_dept(...)), and the one
         # non-raising way to ask a `unique` field "is this value taken".
-        print("employees in sales (via count_dept):", sqrrl__world.Employee.count_sqrrl__dept(sqrrl__sales))
+        print("employees in sales (via count_dept):", sqrrl___world.Employee.count_sqrrl__dept(sqrrl__sales))
 
         # `group_by_<field>`/`count_by_<field>`/`distinct_<field>` -- every
         # value at once, keyed by the relation field's own target type
         # (tracked the same way `for_<field>`/`all()` are).
-        for sqrrl__d in  sqrrl__world.Employee.group_by_sqrrl__dept():
+        for sqrrl__d in sqrrl___world.Employee.group_by_sqrrl__dept():
             print("department has employees:", sqrrl__d._inner[]._name)
-        for entry in sqrrl__world.Employee.count_by_sqrrl__dept().items():
+        for entry in sqrrl___world.Employee.count_by_sqrrl__dept().items():
             print("department employee count:", entry.value)
-        for sqrrl__d in  sqrrl__world.Employee.distinct_sqrrl__dept():
+        for sqrrl__d in sqrrl___world.Employee.distinct_sqrrl__dept():
             print("department in use:", sqrrl__d._inner[]._name)
 
         # `value_eq` -- field-by-field, deliberately different from `==`
@@ -138,30 +138,30 @@ def main() raises:
 
         # `stats salary` -- whole-table, `_by_<field>`, and `_for_<field>`
         # aggregate siblings, all three shapes.
-        print("total salary (whole table):", sqrrl__world.Employee.sum_salary())
-        print("average salary (whole table):", sqrrl__world.Employee.avg_salary())
-        print("lowest salary (whole table):", sqrrl__world.Employee.min_salary())
-        print("highest salary (whole table):", sqrrl__world.Employee.max_salary())
-        for sqrrl__d in  sqrrl__world.Employee.sum_salary_by_sqrrl__dept():
+        print("total salary (whole table):", sqrrl___world.Employee.sum_salary())
+        print("average salary (whole table):", sqrrl___world.Employee.avg_salary())
+        print("lowest salary (whole table):", sqrrl___world.Employee.min_salary())
+        print("highest salary (whole table):", sqrrl___world.Employee.max_salary())
+        for sqrrl__d in sqrrl___world.Employee.sum_salary_by_sqrrl__dept():
             print("department salary total:", sqrrl__d._inner[]._name)
-        print("average sales salary (via avg_salary_for_dept):", sqrrl__world.Employee.avg_salary_for_sqrrl__dept(sqrrl__sales))
+        print("average sales salary (via avg_salary_for_dept):", sqrrl___world.Employee.avg_salary_for_sqrrl__dept(sqrrl__sales))
 
         # `ordered` alone (no `stats`) already earns `min_<field>`/
         # `max_<field>` for free -- it already proves `Comparable` for its
         # own range queries above; only `sum_`/`avg_` need `stats` too.
-        print("fewest years employed:", sqrrl__world.Employee.min_years_employed())
-        print("most years employed:", sqrrl__world.Employee.max_years_employed())
+        print("fewest years employed:", sqrrl___world.Employee.min_years_employed())
+        print("most years employed:", sqrrl___world.Employee.max_years_employed())
 
         # ordered field on Employee.
-        print("more than 3 years:", len(sqrrl__world.Employee.for_years_employed_greater_than(3)))
-        print("at least 3 years:", len(sqrrl__world.Employee.for_years_employed_at_least(3)))
-        print("less than 3 years:", len(sqrrl__world.Employee.for_years_employed_less_than(3)))
-        print("3 to 4 years inclusive:", len(sqrrl__world.Employee.for_years_employed_between(3, 4)))
+        print("more than 3 years:", len(sqrrl___world.Employee.for_years_employed_greater_than(3)))
+        print("at least 3 years:", len(sqrrl___world.Employee.for_years_employed_at_least(3)))
+        print("less than 3 years:", len(sqrrl___world.Employee.for_years_employed_less_than(3)))
+        print("3 to 4 years inclusive:", len(sqrrl___world.Employee.for_years_employed_between(3, 4)))
 
         # ordered field on Project too -- the same modifier on a completely
         # different struct's own numeric field.
-        print("projects with priority >= 2:", len(sqrrl__world.Project.for_priority_at_least(2)))
-        for sqrrl__p in  sqrrl__world.Project.for_priority_between(1, 3):
+        print("projects with priority >= 2:", len(sqrrl___world.Project.for_priority_at_least(2)))
+        for sqrrl__p in sqrrl___world.Project.for_priority_between(1, 3):
             print("project in priority range:", sqrrl__p._inner[]._name)
 
         var sqrrl__promoted_bob = sqrrl__promote(sqrrl__bob_emp, "Senior Sales Rep")
@@ -178,7 +178,7 @@ def main() raises:
 
         # A team: plain struct embedding a relation (`Assignment.@@person`),
         # an ordinary List-wrapped relation field, and an Optional-wrapped one.
-        var sqrrl__platform_team = sqrrl__make_team(sqrrl__world, "Platform", sqrrl__alice, "Tech Lead")
+        var sqrrl__platform_team = sqrrl__make_team(sqrrl___world, "Platform", sqrrl__alice, "Tech Lead")
         var members = List[sqrrl__Person]()
         members.append(sqrrl__alice)
         members.append(sqrrl__bob)
@@ -195,7 +195,7 @@ def main() raises:
         # Iterating a relation field's own read result directly (not a
         # bound variable, not a table-level `for_<field>`/`all()` call)
         # binds the loop variable the same way either of those already do.
-        for sqrrl__m in  sqrrl__platform_team._inner[]._sqrrl__members:
+        for sqrrl__m in sqrrl__platform_team._inner[]._sqrrl__members:
             print("platform team member:", sqrrl__m._inner[]._name)
 
         # A plain struct's own relation field, read through a fully
@@ -214,11 +214,11 @@ def main() raises:
 
         # keepalive: AuditLog entities survive with no local var and no
         # relation field pointing at them, purely via `keepalive`.
-        sqrrl__log(sqrrl__world, "started")
-        sqrrl__log(sqrrl__world, "did a thing")
-        sqrrl__log(sqrrl__world, "finished")
-        print("audit log entries kept alive:", len(sqrrl__world.AuditLog.all()))
-        for sqrrl__entry in  sqrrl__world.AuditLog.all():
+        sqrrl__log(sqrrl___world, "started")
+        sqrrl__log(sqrrl___world, "did a thing")
+        sqrrl__log(sqrrl___world, "finished")
+        print("audit log entries kept alive:", len(sqrrl___world.AuditLog.all()))
+        for sqrrl__entry in sqrrl___world.AuditLog.all():
             print("audit log entry:", sqrrl__entry._inner[]._message)
 
         # ---- deep plain-struct nesting + generics, through Employee.profile ----
@@ -255,21 +255,21 @@ def main() raises:
         print("alice's first boxed rating:", got_profile.boxed_ratings[0].value)
 
         # ---- per-entity JSON round trip ----
-        # ---- whole-world JSON round trip, reusing `sqrrl__world` itself --
+        # ---- whole-world JSON round trip, reusing `sqrrl___world` itself --
         # the dump has to happen *before* every entity built above has its
         # actual last mention (the "keep alive" print just below): Mojo's own
         # ASAP destruction drops a local var right after its last textual use,
         # regardless of what unrelated statements come later in the function,
-        # so `sqrrl__world.to_json()` called *after* that print would see an
+        # so `sqrrl___world.to_json()` called *after* that print would see an
         # empty world -- confirmed empirically (every count read back as 0
         # until this was reordered). Once the dump is taken and "keep alive"
         # has run, nothing is left referencing the current world, so
         # `@@@begin_init_from_json(...)` can safely replace it in place -- no
         # need to hand-thread a second, independent `sqrrl__World`.
-        # `sqrrl__world.to_json()` is still the one unavoidably
+        # `sqrrl___world.to_json()` is still the one unavoidably
         # `sqrrl__`-prefixed call here -- there's no `@@`-marked sugar for
         # "dump the current world," only for the reload half.
-        var world_json = sqrrl__world_to_json(sqrrl__world)
+        var world_json = sqrrl___world_to_json(sqrrl___world)
         print("whole world byte length:", world_json.byte_length())
 
         print(
@@ -281,13 +281,13 @@ def main() raises:
             sqrrl__platform_team._inner[]._name,
         )
 
-        var sqrrl__temp_keep_alives = sqrrl__begin_init_from_json(sqrrl__world, world_json)
-        print("reloaded department count:", len(sqrrl__world.Department.all()))
-        print("reloaded employee count:", len(sqrrl__world.Employee.all()))
-        var sqrrl__reloaded_alice = sqrrl__world.Employee.for_email("alice@example.com")
+        var sqrrl___temp_keep_alives = sqrrl___begin_init_from_json(sqrrl___world, world_json)
+        print("reloaded department count:", len(sqrrl___world.Department.all()))
+        print("reloaded employee count:", len(sqrrl___world.Employee.all()))
+        var sqrrl__reloaded_alice = sqrrl___world.Employee.for_email("alice@example.com")
         print("reloaded alice's dept:", sqrrl__reloaded_alice._inner[]._sqrrl__dept._inner[]._name)
         print("reloaded alice's rating survived:", sqrrl__reloaded_alice._inner[]._profile.rating.value)
-        print("reloaded audit log count:", len(sqrrl__world.AuditLog.all()))
+        print("reloaded audit log count:", len(sqrrl___world.AuditLog.all()))
 
         # `@@reloaded_alice` is a real, independently-held handle now --
         # everything else `@@@begin_init_from_json(...)` only retained
@@ -297,9 +297,9 @@ def main() raises:
         # references) goes with the drop; `eng` survives, kept alive
         # transitively through `@@reloaded_alice`'s own `dept` relation
         # field, since she's referenced again below.
-        print("reloaded department count before finalize:", len(sqrrl__world.Department.all()))
-        sqrrl__end_init_from_json(sqrrl__temp_keep_alives^)
-        print("reloaded department count after finalize:", len(sqrrl__world.Department.all()))
+        print("reloaded department count before finalize:", len(sqrrl___world.Department.all()))
+        sqrrl___end_init_from_json(sqrrl___temp_keep_alives^)
+        print("reloaded department count after finalize:", len(sqrrl___world.Department.all()))
         print("reloaded alice's title survives finalize:", sqrrl__reloaded_alice._inner[]._title)
     finally:
-        sqrrl__world.sqrrl__check_no_leaks()
+        sqrrl___world.sqrrl__check_no_leaks()

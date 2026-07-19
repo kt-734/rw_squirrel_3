@@ -172,7 +172,7 @@ def build_create_call(
     fields: List[ConstructField],
     mut ctx: RewriteContext,
 ) raises -> String:
-    """Builds `sqrrl__world.TypeName.create(name = value, ...)`, validating
+    """Builds `sqrrl___world.TypeName.create(name = value, ...)`, validating
     each field's `@@` marking against `relation_schema[type_name]` and
     recursively rewriting every field's value through `rewrite_markers`.
     `create` still lives on the table (point 6 of the plan -- no existing
@@ -250,4 +250,4 @@ def build_create_call(
             args += ", "
         args += param_name_for_construct_field(f.name, f.is_relation) + " = " + value
         first = False
-    return String("sqrrl__world." + type_name + ".create(" + args + ")")
+    return String("sqrrl___world." + type_name + ".create(" + args + ")")

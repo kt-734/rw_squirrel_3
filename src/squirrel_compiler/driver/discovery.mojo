@@ -9,7 +9,7 @@ from squirrel_compiler.parser import (
 )
 from squirrel_compiler.driver.file_paths import module_path_for
 from squirrel_compiler.codegen import sqrrl_prefixed
-from squirrel_compiler.codegen.methods import world_marked_method_names
+from squirrel_compiler.codegen.methods import world_marked_method_names, method_return_shapes
 
 
 struct DiscoveredStruct(Copyable, Movable, ImplicitlyDeletable):
@@ -310,7 +310,7 @@ def build_world_methods(discovery: DiscoveryResult) raises -> Dict[String, List[
     `@@struct` declared project-wide (`ds.parsed.method_body`, captured
     verbatim by the parser regardless of milestone) -- lets the rewrite
     engine's instance-call dispatch (`rewrite_field_access.mojo`) tell
-    whether calling a spliced user method needs `sqrrl__world` threaded as
+    whether calling a spliced user method needs `sqrrl___world` threaded as
     its own first argument, even when the call site is in a different file
     than the one declaring the method (same cross-file reasoning M2's
     relation-schema resolution already needs)."""
@@ -318,6 +318,23 @@ def build_world_methods(discovery: DiscoveryResult) raises -> Dict[String, List[
     for ds in discovery.structs:
         world_methods[ds.parsed.name] = world_marked_method_names(ds.parsed.method_body, ds.parsed.name)
     return world_methods^
+
+
+def build_method_returns(discovery: DiscoveryResult) raises -> Dict[String, Dict[String, String]]:
+    """Struct name -> method name -> its `@@`-marked return's encoded
+    shape, for every `@@struct` declared project-wide -- mandatory-marking
+    extended to methods (mirrors `build_world_methods`'s own project-wide
+    scan): lets the rewrite engine's instance-call dispatch (`rewrite_
+    field_access.mojo`'s `_handle_instance_call`) treat a marked method
+    call as a real marker position, the same way `function_returns`
+    already lets `handle_func_call_marker` treat a marked top-level
+    function's call, even when the call site is in a different file than
+    the one declaring the method (same cross-file reasoning `world_
+    methods` already needs)."""
+    var method_returns = Dict[String, Dict[String, String]]()
+    for ds in discovery.structs:
+        method_returns[ds.parsed.name] = method_return_shapes(ds.parsed.method_body, ds.parsed.name)
+    return method_returns^
 
 
 def build_stats_fields(discovery: DiscoveryResult) -> Dict[String, List[String]]:

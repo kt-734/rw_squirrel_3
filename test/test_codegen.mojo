@@ -47,15 +47,15 @@ def test_transform_plain_struct_and_script() raises:
     assert_true("def get_name(self) -> ref [self._name] String:" in out)
 
     # Script rewriting.
-    assert_true("var sqrrl__world = sqrrl__init()" in out)
-    assert_true('sqrrl__world.Person.create(name = "alice", age = 30)' in out)
-    # Non-indexed write -- plain field assignment, no sqrrl__world.
+    assert_true("var sqrrl___world = sqrrl___init()" in out)
+    assert_true('sqrrl___world.Person.create(name = "alice", age = 30)' in out)
+    # Non-indexed write -- plain field assignment, no sqrrl___world.
     assert_true("sqrrl__alice._inner[].set_age(31);" in out)
     # Reads -- direct field access.
     assert_true("sqrrl__alice._inner[]._name" in out)
     assert_true("sqrrl__alice._inner[]._age" in out)
     assert_true("finally:" in out)
-    assert_true("sqrrl__world.sqrrl__check_no_leaks()" in out)
+    assert_true("sqrrl___world.sqrrl__check_no_leaks()" in out)
 
 
 def test_transform_relation_field_read_and_write() raises:
@@ -102,7 +102,7 @@ def test_transform_relation_field_read_and_write() raises:
     # keyword, both carry sqrrl__ too -- the prefix mirrors @@-marking with
     # no exceptions, construction sites included.
     assert_true("def create(mut self, *, title: String, sqrrl__dept: sqrrl__Department)" in out)
-    assert_true('sqrrl__world.Employee.create(title = "Engineer", sqrrl__dept = sqrrl__eng)' in out)
+    assert_true('sqrrl___world.Employee.create(title = "Engineer", sqrrl__dept = sqrrl__eng)' in out)
     # A write to a relation field calls the matching sqrrl__-prefixed
     # set_<field>, same as the definition side emits.
     assert_true("sqrrl__alice._inner[].set_sqrrl__dept(sqrrl__ops);" in out)
@@ -219,15 +219,15 @@ def test_transform_multi_field() raises:
     # and its own generated name carries sqrrl__ too.
     assert_true("def for_sqrrl__projects(self, value: sqrrl__Project) -> Set[sqrrl__Department]:" in out)
 
-    # Script rewriting: instance calls need no sqrrl__world at all, and the
+    # Script rewriting: instance calls need no sqrrl___world at all, and the
     # DSL's own "@@"-marked "add_to_@@projects"/"for_@@projects" surface
     # syntax (the field-name suffix is @@-marked, same convention as
     # `.@@dept`, since `projects` is a relation field) gets rewritten to the
     # sqrrl__-prefixed generated method name.
     assert_true("sqrrl__eng._inner[].add_to_sqrrl__projects(sqrrl__website)" in out)
     assert_true("sqrrl__eng._inner[].remove_from_sqrrl__projects(sqrrl__website)" in out)
-    # Table-level for_<field> still routes through sqrrl__world.
-    assert_true("sqrrl__world.Department.for_sqrrl__projects(sqrrl__website)" in out)
+    # Table-level for_<field> still routes through sqrrl___world.
+    assert_true("sqrrl___world.Department.for_sqrrl__projects(sqrrl__website)" in out)
 
 
 def test_transform_multi_field_wholesale_write() raises:
@@ -354,7 +354,7 @@ def test_transform_multi_field_inline_construction() raises:
     # The embedded @@website/@@app markers inside Set(...) get rewritten the
     # same generic way any other construct-field value's markers do.
     assert_true(
-        'sqrrl__world.Department.create(name = "Engineering", sqrrl__projects = Set(sqrrl__website, sqrrl__app))'
+        'sqrrl___world.Department.create(name = "Engineering", sqrrl__projects = Set(sqrrl__website, sqrrl__app))'
         in out
     )
 
@@ -439,17 +439,17 @@ def test_transform_ordered_field_range_query_call_sites() raises:
     var out = transform_source(
         src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields, multi_fields, ordered_fields
     )
-    assert_true("sqrrl__world.Employee.for_years_employed_greater_than(3)" in out)
-    assert_true("sqrrl__world.Employee.for_years_employed_between(3, 4)" in out)
-    assert_true("sqrrl__world.Employee.for_years_employed(3)" in out)
+    assert_true("sqrrl___world.Employee.for_years_employed_greater_than(3)" in out)
+    assert_true("sqrrl___world.Employee.for_years_employed_between(3, 4)" in out)
+    assert_true("sqrrl___world.Employee.for_years_employed(3)" in out)
 
 
 def test_transform_method_without_world_marking() raises:
-    """A method with no `@@@`-marking compiles with no `sqrrl__world`
+    """A method with no `@@@`-marking compiles with no `sqrrl___world`
     parameter at all -- `self.field` is ordinary bound-variable field
     access (M3 addendum, point 3; `self` is auto-`@@`-marked by
     `_mark_self_field_access` before the ordinary `@@entity.field`
-    machinery ever sees it), needing no more `sqrrl__world` than any other
+    machinery ever sees it), needing no more `sqrrl___world` than any other
     field read does."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
@@ -470,12 +470,12 @@ def test_transform_method_without_world_marking() raises:
     )
     assert_true("def greeting(self) -> String:" in out)
     assert_true('return "Hello, " + self._inner[]._name' in out)
-    assert_false("sqrrl__world" in out)
+    assert_false("sqrrl___world" in out)
 
 
 def test_transform_entity_func_return_registers_variable_type() raises:
     """An `@@`-marked (not `@@@` -- mandatory-marking milestone: it only
-    ever hops through an existing relation, needing no `sqrrl__world` at
+    ever hops through an existing relation, needing no `sqrrl___world` at
     all) function's registered return type (`function_returns`) is
     looked up when its call is the right-hand side of `var @@x = ...`,
     via `MarkerKind.ENTITY_FUNC`/`handle_func_call_marker`, the same way
@@ -542,7 +542,7 @@ def test_transform_entity_func_direct_chain_without_binding() raises:
 def test_build_function_returns_recognizes_entity_marked_signature() raises:
     """`build_function_returns` scans a `def @@funcName(...) -> @@Type:`
     (mandatory-marking milestone: `@@`, not `@@@` -- this function never
-    needs `sqrrl__world`) the same way it already scanned a world-marked
+    needs `sqrrl___world`) the same way it already scanned a world-marked
     one, covering both a bare-entity and a container return type."""
     var path = String("/tmp/test_build_function_returns_entity_marked.mojo.sqrrl")
     var f = open(path, "w")
@@ -645,11 +645,11 @@ def test_transform_method_self_write_and_relation_hop_and_word_boundary() raises
     # "myself" must survive untouched -- not mistaken for the receiver.
     assert_true("var myself = 1" in out)
     assert_true("print(myself)" in out)
-    assert_false("sqrrl__world" in out)
+    assert_false("sqrrl___world" in out)
 
 
 def test_transform_method_world_marked_threads_world() raises:
-    """A `@@@`-marked method gets `mut sqrrl__world: sqrrl__World` spliced
+    """A `@@@`-marked method gets `mut sqrrl___world: sqrrl___World` spliced
     in right after `self`, and can call a table-level method
     (`@@@Type.count()`) using it -- the same threading `MarkerKind.
     WORLD_FUNC` already does for top-level functions."""
@@ -670,13 +670,13 @@ def test_transform_method_world_marked_threads_world() raises:
     var out = transform_source(
         src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
     )
-    assert_true("def headcount(self, mut sqrrl__world: sqrrl__World) -> Int:" in out)
-    assert_true("return sqrrl__world.Person.count()" in out)
+    assert_true("def headcount(self, mut sqrrl___world: sqrrl___World) -> Int:" in out)
+    assert_true("return sqrrl___world.Person.count()" in out)
 
 
 def test_transform_method_table_level_call_without_world_marking_rejected() raises:
     """A method that isn't `@@@`-marked can't make a table-level call --
-    same 'needs sqrrl__world' rejection `MarkerKind.WORLD_FUNC` already
+    same 'needs sqrrl___world' rejection `MarkerKind.WORLD_FUNC` already
     raises for a plain top-level function."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
@@ -704,7 +704,7 @@ def test_transform_method_table_level_call_without_world_marking_rejected() rais
 
 def test_transform_calling_spliced_methods_from_script() raises:
     """Calling a spliced user method directly from a script works both for
-    a plain method (`@@alice.entity_id()`, no `sqrrl__world` threaded, no
+    a plain method (`@@alice.entity_id()`, no `sqrrl___world` threaded, no
     marking at the call site either) and a `@@@`-marked one
     (`@@alice.@@@greeting()`, threaded as the call's own first argument) --
     call-site symmetry with the method's own declaration marking.
@@ -743,7 +743,7 @@ def test_transform_calling_spliced_methods_from_script() raises:
         multi_fields, ordered_fields, world_methods
     )
     assert_true("sqrrl__alice.entity_id()" in out)
-    assert_true("sqrrl__alice.greeting(sqrrl__world)" in out)
+    assert_true("sqrrl__alice.greeting(sqrrl___world)" in out)
 
 
 def test_transform_world_method_call_site_keeps_string_literal_argument() raises:
@@ -755,7 +755,7 @@ def test_transform_world_method_call_site_keeps_string_literal_argument() raises
     separator called `skip_trivia` (which treats a string literal the
     same as a comment -- both "non-code" to skip over) without restoring
     `sc.pos` afterward, so the outer rewrite loop resumed scanning *past*
-    the literal instead of copying it through -- `rename(sqrrl__world)`,
+    the literal instead of copying it through -- `rename(sqrrl___world)`,
     the argument gone entirely, not even a leftover `""`."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
@@ -785,7 +785,7 @@ def test_transform_world_method_call_site_keeps_string_literal_argument() raises
         src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields,
         multi_fields, ordered_fields, world_methods
     )
-    assert_true('sqrrl__alice.rename(sqrrl__world, "Renamed")' in out)
+    assert_true('sqrrl__alice.rename(sqrrl___world, "Renamed")' in out)
 
 
 def test_transform_spliced_method_call_site_marking_mismatch_rejected() raises:
@@ -855,6 +855,398 @@ def test_transform_spliced_method_call_site_marking_mismatch_rejected() raises:
     assert_true(raised_extra)
 
 
+def test_transform_method_bare_entity_return_rejected() raises:
+    """Mandatory-marking extended to methods: a bare method returning an
+    `@@`-marked value is now rejected, the same way a bare top-level
+    function already is (`build_function_returns`) -- previously silently
+    allowed, but with no way to bind/loop/chain off its result at the call
+    site (a real, documented gap: a method's own return value was never
+    registered as an entity anywhere)."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Employee"] = True
+    struct_names["Department"] = True
+    var function_returns = Dict[String, String]()
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+
+    var src = String(
+        "@@struct @@Department:\n"
+        + "    unique name: String\n"
+        + "\n"
+        + "    def get_lead(self) -> @@Employee:\n"
+        + "        return self.name\n"
+    )
+    var raised = False
+    try:
+        _ = transform_source(
+            src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        )
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_transform_method_entity_marked_without_entity_return_rejected() raises:
+    """The over-marked direction: a method marked `@@` whose return type
+    isn't `@@`-shaped at all is rejected -- `@@` only marks a method that
+    actually returns an entity, mirroring `build_function_returns`'s own
+    over-marked check for top-level functions."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Person"] = True
+    var function_returns = Dict[String, String]()
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+
+    var src = String(
+        "@@struct @@Person:\n"
+        + "    unique name: String\n"
+        + "\n"
+        + "    def @@greet(self) -> String:\n"
+        + "        return self.name\n"
+    )
+    var raised = False
+    try:
+        _ = transform_source(
+            src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        )
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_transform_entity_marked_method_call_binds_and_reads() raises:
+    """An `@@`-marked (no `sqrrl___world` needed) method's call site is a
+    real marker position -- `var @@x = @@d.@@get_lead()` registers `@@x`'s
+    type from `ctx.method_returns`, the method-call parallel of a marked
+    top-level function's own call-site registration
+    (`handle_func_call_marker`)."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    relation_schema["Department"] = Dict[String, String]()
+    relation_schema["Department"]["lead"] = "Employee"
+    var struct_names = Dict[String, Bool]()
+    struct_names["Employee"] = True
+    struct_names["Department"] = True
+    var function_returns = Dict[String, String]()
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+    var multi_fields = Dict[String, List[String]]()
+    var ordered_fields = Dict[String, List[String]]()
+    var world_methods = Dict[String, List[String]]()
+    var method_returns = Dict[String, Dict[String, String]]()
+    method_returns["Department"] = Dict[String, String]()
+    method_returns["Department"]["get_lead"] = "Employee"
+
+    var src = String(
+        "@@struct @@Employee:\n"
+        + "    unique name: String\n"
+        + "\n"
+        + "@@struct @@Department:\n"
+        + "    unique name: String\n"
+        + "    @@lead: @@Employee\n"
+        + "\n"
+        + "    def @@get_lead(self) -> @@Employee:\n"
+        + "        return self.@@lead\n"
+        + "\n"
+        + "def foo(@@d: @@Department) raises:\n"
+        + "    var @@x = @@d.@@get_lead()\n"
+        + "    print(@@x.name)\n"
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields,
+        multi_fields, ordered_fields, world_methods, method_returns=method_returns
+    )
+    assert_true("def get_lead(self) -> sqrrl__Employee:" in out)
+    assert_true("var sqrrl__x = sqrrl__d.get_lead()" in out)
+    assert_true("print(sqrrl__x._inner[]._name)" in out)
+
+
+def test_transform_entity_marked_method_call_direct_chain() raises:
+    """The method-call parallel of `test_transform_entity_func_direct_
+    chain_without_binding`: a *direct* access-chain off an `@@`-marked
+    method's own return value, no intermediate variable, no `for` loop --
+    `@@d.@@get_lead().name`."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    relation_schema["Department"] = Dict[String, String]()
+    relation_schema["Department"]["lead"] = "Employee"
+    var struct_names = Dict[String, Bool]()
+    struct_names["Employee"] = True
+    struct_names["Department"] = True
+    var function_returns = Dict[String, String]()
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+    var multi_fields = Dict[String, List[String]]()
+    var ordered_fields = Dict[String, List[String]]()
+    var world_methods = Dict[String, List[String]]()
+    var method_returns = Dict[String, Dict[String, String]]()
+    method_returns["Department"] = Dict[String, String]()
+    method_returns["Department"]["get_lead"] = "Employee"
+
+    var src = String(
+        "@@struct @@Employee:\n"
+        + "    unique name: String\n"
+        + "\n"
+        + "@@struct @@Department:\n"
+        + "    unique name: String\n"
+        + "    @@lead: @@Employee\n"
+        + "\n"
+        + "    def @@get_lead(self) -> @@Employee:\n"
+        + "        return self.@@lead\n"
+        + "\n"
+        + "def foo(@@d: @@Department) raises:\n"
+        + "    print(@@d.@@get_lead().name)\n"
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields,
+        multi_fields, ordered_fields, world_methods, method_returns=method_returns
+    )
+    assert_true("print(sqrrl__d.get_lead()._inner[]._name)" in out)
+
+
+def test_transform_entity_marked_method_call_for_loop_registers_element_type() raises:
+    """A direct `for @@x in @@d.@@get_team():` (no intermediate binding)
+    over an `@@`-marked method's own `List[@@Employee]` return registers
+    the loop variable's element type, the same way a marked top-level
+    function's own container-returning call already does."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    relation_schema["Department"] = Dict[String, String]()
+    relation_schema["Department"]["team"] = "List[Employee]"
+    var struct_names = Dict[String, Bool]()
+    struct_names["Employee"] = True
+    struct_names["Department"] = True
+    var function_returns = Dict[String, String]()
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+    var multi_fields = Dict[String, List[String]]()
+    var ordered_fields = Dict[String, List[String]]()
+    var world_methods = Dict[String, List[String]]()
+    var method_returns = Dict[String, Dict[String, String]]()
+    method_returns["Department"] = Dict[String, String]()
+    method_returns["Department"]["get_team"] = "List[Employee]"
+
+    var src = String(
+        "@@struct @@Employee:\n"
+        + "    unique name: String\n"
+        + "\n"
+        + "@@struct @@Department:\n"
+        + "    unique name: String\n"
+        + "    @@team: List[@@Employee]\n"
+        + "\n"
+        + "    def @@get_team(self) -> List[@@Employee]:\n"
+        + "        return self.@@team.copy()\n"
+        + "\n"
+        + "def foo(@@d: @@Department) raises:\n"
+        + "    for @@m in @@d.@@get_team():\n"
+        + "        print(@@m.name)\n"
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields,
+        multi_fields, ordered_fields, world_methods, method_returns=method_returns
+    )
+    assert_true("for sqrrl__m in sqrrl__d.get_team():" in out)
+    assert_true("print(sqrrl__m._inner[]._name)" in out)
+
+
+def test_transform_entity_method_call_site_marking_mismatch_rejected() raises:
+    """Both directions of call-site/declaration marking mismatch for an
+    entity-returning method: calling it without `@@`, and marking a plain
+    (non-entity-returning) method's call site with `@@` it doesn't need --
+    the method-call parallel of `test_transform_spliced_method_call_site_
+    marking_mismatch_rejected` (which covers the `@@@`/world direction)."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    relation_schema["Department"] = Dict[String, String]()
+    relation_schema["Department"]["lead"] = "Employee"
+    var struct_names = Dict[String, Bool]()
+    struct_names["Employee"] = True
+    struct_names["Department"] = True
+    var function_returns = Dict[String, String]()
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+    var multi_fields = Dict[String, List[String]]()
+    var ordered_fields = Dict[String, List[String]]()
+    var world_methods = Dict[String, List[String]]()
+    var method_returns = Dict[String, Dict[String, String]]()
+    method_returns["Department"] = Dict[String, String]()
+    method_returns["Department"]["get_lead"] = "Employee"
+
+    var missing_marker_src = String(
+        "@@struct @@Employee:\n"
+        + "    unique name: String\n"
+        + "\n"
+        + "@@struct @@Department:\n"
+        + "    unique name: String\n"
+        + "    @@lead: @@Employee\n"
+        + "\n"
+        + "    def @@get_lead(self) -> @@Employee:\n"
+        + "        return self.@@lead\n"
+        + "\n"
+        + "    def entity_id(self) -> UInt32:\n"
+        + "        return self.id()\n"
+        + "\n"
+        + "def foo(@@d: @@Department) raises:\n"
+        + "    var @@x = @@d.get_lead()\n"
+        + "    print(@@x.name)\n"
+    )
+    var raised_missing = False
+    try:
+        _ = transform_source(
+            missing_marker_src, relation_schema, struct_names, function_returns, unique_fields,
+            indexed_fields, multi_fields, ordered_fields, world_methods, method_returns=method_returns
+        )
+    except:
+        raised_missing = True
+    assert_true(raised_missing)
+
+    var extra_marker_src = String(
+        "@@struct @@Employee:\n"
+        + "    unique name: String\n"
+        + "\n"
+        + "@@struct @@Department:\n"
+        + "    unique name: String\n"
+        + "    @@lead: @@Employee\n"
+        + "\n"
+        + "    def @@get_lead(self) -> @@Employee:\n"
+        + "        return self.@@lead\n"
+        + "\n"
+        + "    def entity_id(self) -> UInt32:\n"
+        + "        return self.id()\n"
+        + "\n"
+        + "def foo(@@d: @@Department) raises:\n"
+        + "    print(@@d.@@entity_id())\n"
+    )
+    var raised_extra = False
+    try:
+        _ = transform_source(
+            extra_marker_src, relation_schema, struct_names, function_returns, unique_fields,
+            indexed_fields, multi_fields, ordered_fields, world_methods, method_returns=method_returns
+        )
+    except:
+        raised_extra = True
+    assert_true(raised_extra)
+
+
+def test_transform_world_and_entity_marked_method_threads_world_and_registers_type() raises:
+    """A `@@@`-marked method can *also* return an `@@`-marked value --
+    `@@@` alone covers both "needs sqrrl___world" and "registers a return
+    type for the call site", never doubling up with a separate `@@`.
+    `sqrrl___world` is threaded as the call's own first argument, and the
+    call site is still a real marker position (bind, here)."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Employee"] = True
+    struct_names["Department"] = True
+    var function_returns = Dict[String, String]()
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+    var multi_fields = Dict[String, List[String]]()
+    var ordered_fields = Dict[String, List[String]]()
+    var world_methods = Dict[String, List[String]]()
+    world_methods["Department"] = List[String]()
+    world_methods["Department"].append("make_employee")
+    var method_returns = Dict[String, Dict[String, String]]()
+    method_returns["Department"] = Dict[String, String]()
+    method_returns["Department"]["make_employee"] = "Employee"
+
+    var src = String(
+        "@@struct @@Employee:\n"
+        + "    unique name: String\n"
+        + "\n"
+        + "@@struct @@Department:\n"
+        + "    unique name: String\n"
+        + "\n"
+        + "    def @@@make_employee(self, name: String) raises -> @@Employee:\n"
+        + "        var @@e = @@@Employee { .name = name }\n"
+        + "        return @@e\n"
+        + "\n"
+        + "def foo(@@d: @@Department) raises:\n"
+        + "    @@@:\n"
+        + "        var @@x = @@d.@@@make_employee(\"Dana\")\n"
+        + "        print(@@x.name)\n"
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields,
+        multi_fields, ordered_fields, world_methods, method_returns=method_returns
+    )
+    assert_true(
+        "def make_employee(self, mut sqrrl___world: sqrrl___World, name: String) raises -> sqrrl__Employee:" in out
+    )
+    assert_true('var sqrrl__x = sqrrl__d.make_employee(sqrrl___world, "Dana")' in out)
+    assert_true("print(sqrrl__x._inner[]._name)" in out)
+
+
+def test_transform_method_entity_return_recurses_through_nested_container() raises:
+    """`scan_entity_return_shape` recurses through first-argument position
+    at any depth (`List[List[@@Employee]]`), not just one wrapper deep --
+    same rule `is_directly_entity_iterable` already applies everywhere
+    else `@@`-marking symmetry is decided. A bare method returning this
+    nested shape is rejected (under-marked) exactly like a single-level
+    container return already is."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Employee"] = True
+    struct_names["Department"] = True
+    var function_returns = Dict[String, String]()
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+
+    var bare_src = String(
+        "@@struct @@Department:\n"
+        + "    unique name: String\n"
+        + "\n"
+        + "    def get_groups(self) -> List[List[@@Employee]]:\n"
+        + "        return List[List[sqrrl__Employee]]()\n"
+    )
+    var raised = False
+    try:
+        _ = transform_source(
+            bare_src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        )
+    except:
+        raised = True
+    assert_true(raised)
+
+    var marked_src = String(
+        "@@struct @@Department:\n"
+        + "    unique name: String\n"
+        + "\n"
+        + "    def @@get_groups(self) -> List[List[@@Employee]]:\n"
+        + "        return List[List[sqrrl__Employee]]()\n"
+    )
+    var out = transform_source(
+        marked_src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+    )
+    assert_true("def get_groups(self) -> List[List[sqrrl__Employee]]:" in out)
+
+
+def test_transform_method_value_position_relation_return_stays_unmarked() raises:
+    """A relation confined to a container's *non-first* argument position
+    (`Dict[String, @@Employee]`, the value) is never directly entity-
+    iterable -- a bare method returning this shape is *not* rejected
+    (unlike the directly-iterable cases above), the method-call parallel
+    of `is_directly_entity_iterable`'s own rule already applied to
+    top-level functions, struct fields, and def/var entity-params."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Employee"] = True
+    struct_names["Department"] = True
+    var function_returns = Dict[String, String]()
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+
+    var src = String(
+        "@@struct @@Department:\n"
+        + "    unique name: String\n"
+        + "\n"
+        + "    def scores(self) -> Dict[String, @@Employee]:\n"
+        + "        return Dict[String, sqrrl__Employee]()\n"
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+    )
+    assert_true("def scores(self) -> Dict[String, sqrrl__Employee]:" in out)
+
+
 def test_transform_trait_list_appears_on_wrapper() raises:
     """`trait_list` (already spliced into `emit_entity`'s trait list since
     M1) still appears on the generated wrapper now that method splicing is
@@ -885,7 +1277,7 @@ def test_transform_trait_list_appears_on_wrapper() raises:
 
 def test_transform_table_level_call_requires_world_marked_entity() raises:
     """A table-level call written with plain '@@' (not '@@@') is rejected --
-    construction/table-level calls always need 'sqrrl__world' now (M3
+    construction/table-level calls always need 'sqrrl___world' now (M3
     addendum), so the entity's own marking must match which case this is."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
@@ -918,7 +1310,7 @@ def test_transform_table_level_call_requires_world_marked_entity() raises:
 def test_transform_instance_access_rejects_world_marked_entity() raises:
     """The reverse mismatch: a bound variable marked with '@@@' (instead of
     plain '@@') is rejected too -- a bound-variable access never needs
-    'sqrrl__world'."""
+    'sqrrl___world'."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Person"] = True
@@ -951,7 +1343,7 @@ def test_transform_keepalive_struct() raises:
     not on the generated `Table` struct, since only `EntityStorage` is
     reachable from *both* the table and an instance -- see
     `entity_storage.mojo`'s own doc comment). `dont_keepalive` is an
-    *instance* method on the wrapper: it never needed `sqrrl__world`, only
+    *instance* method on the wrapper: it never needed `sqrrl___world`, only
     `self._inner[]._table[]`, reached the same way `add_to_<field>`/
     `remove_from_<field>` already reach shared table state from an
     instance."""
@@ -998,7 +1390,7 @@ def test_transform_non_keepalive_struct_has_no_keepalive_machinery() raises:
 
 def test_transform_equatable_struct() raises:
     """`value_eq` is an *instance* method on the wrapper (M4 correction: it
-    never needed `sqrrl__world`, it just reads two entities' own fields
+    never needed `sqrrl___world`, it just reads two entities' own fields
     directly), field-by-field via the already-generated `get_<field>`
     accessor on `Inner`, short-circuiting on the first mismatch. Deliberately
     distinct from `__eq__` (id-based, "same row")."""
@@ -1043,7 +1435,7 @@ def test_transform_non_equatable_struct_has_no_value_eq() raises:
 
 def test_transform_value_eq_and_dont_keepalive_called_as_instance_methods() raises:
     """`@@alice.value_eq(@@bob)`/`@@handle.dont_keepalive()` -- ordinary
-    instance calls, no `@@@` marking and no `sqrrl__world` threaded (M4
+    instance calls, no `@@@` marking and no `sqrrl___world` threaded (M4
     correction: neither ever needed it). Falls through the same M3
     spliced-method-call dispatch with zero new code -- `value_eq`/
     `dont_keepalive` just aren't in `ctx.world_methods`, same as any other
@@ -1078,8 +1470,8 @@ def test_transform_value_eq_and_dont_keepalive_called_as_instance_methods() rais
     )
     assert_true("sqrrl__handle.dont_keepalive()" in out)
     assert_true("sqrrl__alice.value_eq(sqrrl__bob)" in out)
-    assert_false("sqrrl__world.dont_keepalive" in out)
-    assert_false("sqrrl__world.value_eq" in out)
+    assert_false("sqrrl___world.dont_keepalive" in out)
+    assert_false("sqrrl___world.value_eq" in out)
 
 
 def test_transform_value_eq_as_table_level_call_rejected() raises:
@@ -1204,18 +1596,18 @@ def test_transform_grouping_query_call_sites() raises:
     var out = transform_source(
         src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
     )
-    assert_true('sqrrl__world.Employee.count_name("alice")' in out)
-    assert_true("sqrrl__world.Employee.group_by_name()" in out)
-    assert_true("sqrrl__world.Employee.count_by_name()" in out)
-    assert_true("sqrrl__world.Employee.distinct_name()" in out)
+    assert_true('sqrrl___world.Employee.count_name("alice")' in out)
+    assert_true("sqrrl___world.Employee.group_by_name()" in out)
+    assert_true("sqrrl___world.Employee.count_by_name()" in out)
+    assert_true("sqrrl___world.Employee.distinct_name()" in out)
     # distinct_@@dept (marked, relation) rewrites to the sqrrl__-prefixed
     # generated name, same convention every other relation-field-derived
     # call already follows.
-    assert_true("sqrrl__world.Employee.distinct_sqrrl__dept()" in out)
+    assert_true("sqrrl___world.Employee.distinct_sqrrl__dept()" in out)
     # The for-loop over a relation-keyed distinct_<field>() result binds
     # to the relation target type, proving the Dict-key-only
     # container_element_of fix threads through end to end.
-    assert_true("for sqrrl__d in  sqrrl__depts:" in out)
+    assert_true("for sqrrl__d in sqrrl__depts:" in out)
     assert_true("sqrrl__d._inner[]._name" in out)
 
 
@@ -1449,7 +1841,7 @@ def test_transform_multi_field_excluded_from_aggregation_but_still_groupable() r
 
 
 def test_transform_entity_gets_json_serializable_conformance() raises:
-    """Every generated entity wrapper conforms to sqrrl__JsonSerializable
+    """Every generated entity wrapper conforms to sqrrl___JsonSerializable
     (M5) and gets a trivial sqrrl__to_json returning its own bare id --
     the target row itself is serialized separately, once, as part of its
     own table's dump."""
@@ -1467,7 +1859,7 @@ def test_transform_entity_gets_json_serializable_conformance() raises:
     var out = transform_source(
         src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields, json_used=True
     )
-    assert_true("sqrrl__JsonSerializable" in out)
+    assert_true("sqrrl___JsonSerializable" in out)
     assert_true("def sqrrl__to_json(self) -> String:" in out)
     assert_true("return String(self.id())" in out)
 
@@ -1475,7 +1867,7 @@ def test_transform_entity_gets_json_serializable_conformance() raises:
 def test_transform_entity_omits_json_serializable_when_project_never_uses_json() raises:
     """The reverse of the test above (and the new default, matching
     `transform_source`'s own `json_used: Bool = False`): a project that
-    never touches JSON anywhere doesn't carry `sqrrl__JsonSerializable`
+    never touches JSON anywhere doesn't carry `sqrrl___JsonSerializable`
     conformance or its `sqrrl__to_json` method on any entity at all --
     the JSON-container-dispatch rearchitecture's own relation-dump special
     -casing (calling `.id()` directly wherever the compiler already knows
@@ -1497,7 +1889,7 @@ def test_transform_entity_omits_json_serializable_when_project_never_uses_json()
     var out = transform_source(
         src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
     )
-    assert_true("sqrrl__JsonSerializable" not in out)
+    assert_true("sqrrl___JsonSerializable" not in out)
     assert_true("sqrrl__to_json" not in out)
     assert_true(
         "struct sqrrl__Person(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable):" in out
@@ -1506,7 +1898,7 @@ def test_transform_entity_omits_json_serializable_when_project_never_uses_json()
 
 def test_transform_begin_and_end_init_from_json() raises:
     """`@@@begin_init_from_json(json_expr)` binds a local
-    `sqrrl__temp_keep_alives` via a call threading `sqrrl__world` (no `mut`
+    `sqrrl___temp_keep_alives` via a call threading `sqrrl___world` (no `mut`
     at the call site -- ordinary Mojo calling convention, ownership comes
     from the callee's own signature); `@@@end_init_from_json()` moves that
     local into a real function call (a hard call boundary for the
@@ -1528,9 +1920,9 @@ def test_transform_begin_and_end_init_from_json() raises:
         src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
     )
     assert_true(
-        "var sqrrl__temp_keep_alives = sqrrl__begin_init_from_json(sqrrl__world, dump)" in out
+        "var sqrrl___temp_keep_alives = sqrrl___begin_init_from_json(sqrrl___world, dump)" in out
     )
-    assert_true("sqrrl__end_init_from_json(sqrrl__temp_keep_alives^)" in out)
+    assert_true("sqrrl___end_init_from_json(sqrrl___temp_keep_alives^)" in out)
 
 
 def test_transform_init_from_json_and_to_json() raises:
@@ -1549,12 +1941,12 @@ def test_transform_init_from_json_and_to_json() raises:
     var out = transform_source(
         src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
     )
-    assert_true("sqrrl__world_to_json(sqrrl__world)" in out)
-    assert_true("sqrrl__init_from_json(sqrrl__world, dump)" in out)
+    assert_true("sqrrl___world_to_json(sqrrl___world)" in out)
+    assert_true("sqrrl___init_from_json(sqrrl___world, dump)" in out)
 
 
 def test_transform_json_markers_need_world() raises:
-    """Every JSON marker needs 'sqrrl__world' opened first, same rule every
+    """Every JSON marker needs 'sqrrl___world' opened first, same rule every
     other world-needing construct already enforces."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
@@ -1948,7 +2340,7 @@ def test_transform_real_plain_real_hop_chain_read_and_write() raises:
     # (Address isn't ImplicitlyCopyable) -- and, separately, an `@@`-marked
     # argument inside ordinary hand-written Mojo (`Address(..., owner =
     # @@bob)`) rewrites correctly with zero construct-specific handling.
-    assert_true('sqrrl__world.Person.create(name = "Alice", home = addr^)' in out)
+    assert_true('sqrrl___world.Person.create(name = "Alice", home = addr^)' in out)
     assert_true("Address(city = \"Springfield\", owner = sqrrl__bob)" in out)
     # Read chain: real -> plain (no deref) -> real (._inner[] again).
     assert_true("sqrrl__alice._inner[]._home.city" in out)
@@ -2341,7 +2733,7 @@ def test_emit_json_module_dict_field_relation_in_value_position_round_trips() ra
     # Dict's value position, not its key.
     assert_true(
         "def sqrrl__Department_from_json_with_id(table: sqrrl__DepartmentTable, sqrrl__tbl_Employee:"
-        " sqrrl__EmployeeTable, id: UInt32, mut sc: sqrrl__JsonScanner)"
+        " sqrrl__EmployeeTable, id: UInt32, mut sc: sqrrl___JsonScanner)"
         in out
     )
     assert_true("var nc1 = Dict[String, sqrrl__Employee]()" in out)
@@ -2371,7 +2763,7 @@ def test_emit_json_module_dict_field_relation_in_both_positions_round_trips() ra
     var out = emit_json_module(structs, structs)
     assert_true(
         "def sqrrl__Company_from_json_with_id(table: sqrrl__CompanyTable, sqrrl__tbl_Employee: sqrrl__EmployeeTable,"
-        " sqrrl__tbl_Department: sqrrl__DepartmentTable, id: UInt32, mut sc: sqrrl__JsonScanner)"
+        " sqrrl__tbl_Department: sqrrl__DepartmentTable, id: UInt32, mut sc: sqrrl___JsonScanner)"
         in out
     )
     assert_true("var nck1 = sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sc.parse_json_int())))" in out)
@@ -2555,7 +2947,7 @@ def test_emit_json_module_generic_plain_struct_relation_field_gets_monomorphized
     # The ordinary generic companion is still emitted, untouched -- it's
     # what any relation-free `Box[...]` instantiation still uses.
     assert_true(
-        "def sqrrl__Box_from_json[T: Copyable & ImplicitlyDeletable](mut sc: sqrrl__JsonScanner) raises -> Box[T]:"
+        "def sqrrl__Box_from_json[T: Copyable & ImplicitlyDeletable](mut sc: sqrrl___JsonScanner) raises -> Box[T]:"
         in out
     )
     assert_true("parsed_value = sqrrl__from_json[T](sc)" in out)
@@ -2563,7 +2955,7 @@ def test_emit_json_module_generic_plain_struct_relation_field_gets_monomorphized
     # sibling table threaded through its signature, `value` dispatched as
     # an ordinary relation field (no dispatch-table call at all).
     assert_true(
-        "def sqrrl__Box_Employee_from_json(sqrrl__tbl_Employee: sqrrl__EmployeeTable, mut sc: sqrrl__JsonScanner)"
+        "def sqrrl__Box_Employee_from_json(sqrrl__tbl_Employee: sqrrl__EmployeeTable, mut sc: sqrrl___JsonScanner)"
         " raises -> Box[sqrrl__Employee]:"
         in out
     )

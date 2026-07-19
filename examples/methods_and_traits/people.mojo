@@ -4,7 +4,7 @@ from std.memory import ArcPointer
 from std.hashlib import Hasher
 from std.collections import Set
 from std.os import abort
-from sqrrl__world import sqrrl__init, sqrrl__World
+from sqrrl__world import sqrrl___init, sqrrl___World
 
 
 trait HasId:
@@ -16,9 +16,9 @@ def print_entity_id[T: HasId](x: T):
     print("id:", x.entity_id())
 
 
-def sqrrl__greet_everyone(mut sqrrl__world: sqrrl__World) raises -> String:
+def sqrrl__greet_everyone(mut sqrrl___world: sqrrl___World) raises -> String:
     var out = String("")
-    for sqrrl__p in  sqrrl__world.Person.all():
+    for sqrrl__p in sqrrl___world.Person.all():
         out += sqrrl__p._inner[]._name + " "
     return out
 
@@ -69,8 +69,8 @@ struct sqrrl__Person(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletabl
     def entity_id(self) -> UInt32:
         return self.id()
 
-    def greeting(self, mut sqrrl__world: sqrrl__World) -> String:
-        return "Hello, " + self._inner[]._name + "! Total people: " + String(sqrrl__world.Person.count())
+    def greeting(self, mut sqrrl___world: sqrrl___World) -> String:
+        return "Hello, " + self._inner[]._name + "! Total people: " + String(sqrrl___world.Person.count())
 
 
 
@@ -102,19 +102,19 @@ struct sqrrl__PersonTable(Movable):
         return self.storage[].live_count()
 
 def main() raises:
-    var sqrrl__world = sqrrl__init()
+    var sqrrl___world = sqrrl___init()
     try:
-        var sqrrl__alice = sqrrl__world.Person.create(name = "alice")
-        var sqrrl__bob = sqrrl__world.Person.create(name = "bob")
+        var sqrrl__alice = sqrrl___world.Person.create(name = "alice")
+        var sqrrl__bob = sqrrl___world.Person.create(name = "bob")
 
-        print(sqrrl__alice.greeting(sqrrl__world))
-        print(sqrrl__bob.greeting(sqrrl__world))
+        print(sqrrl__alice.greeting(sqrrl___world))
+        print(sqrrl__bob.greeting(sqrrl___world))
 
         print("direct call:", sqrrl__alice.entity_id())
         print_entity_id(sqrrl__alice)
         print_entity_id(sqrrl__bob)
 
-        print("top-level @@@ function:", sqrrl__greet_everyone(sqrrl__world))
-        print("count:", sqrrl__world.Person.count(), sqrrl__alice._inner[]._name, sqrrl__bob._inner[]._name)
+        print("top-level @@@ function:", sqrrl__greet_everyone(sqrrl___world))
+        print("count:", sqrrl___world.Person.count(), sqrrl__alice._inner[]._name, sqrrl__bob._inner[]._name)
     finally:
-        sqrrl__world.sqrrl__check_no_leaks()
+        sqrrl___world.sqrrl__check_no_leaks()

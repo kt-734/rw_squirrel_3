@@ -1,19 +1,19 @@
 from std.testing import assert_equal, assert_true, assert_false, TestSuite
 
 from squirrel_runtime.json import (
-    sqrrl__JsonScanner,
+    sqrrl___JsonScanner,
     sqrrl__escape_json_string,
     sqrrl__json_string_literal,
     sqrrl__json_bool_literal,
     sqrrl__to_json_default,
-    sqrrl__JsonSerializable,
+    sqrrl___JsonSerializable,
 )
 
 
 @fieldwise_init
-struct _FakeEntity(sqrrl__JsonSerializable, Movable, ImplicitlyDeletable):
+struct _FakeEntity(sqrrl___JsonSerializable, Movable, ImplicitlyDeletable):
     """Stands in for a generated entity wrapper -- conforms to
-    `sqrrl__JsonSerializable` directly, same as `codegen/entity.mojo`'s
+    `sqrrl___JsonSerializable` directly, same as `codegen/entity.mojo`'s
     `emit_entity` adds to every real one, to exercise `sqrrl__to_json[T]`'s
     `conforms_to` branch without needing a whole generated table/world."""
 
@@ -53,14 +53,14 @@ def test_json_bool_literal_is_lowercase() raises:
 
 
 def test_scanner_parses_string_with_standard_escapes() raises:
-    var sc = sqrrl__JsonScanner('"he said \\"hi\\"\\nnext\\tline\\\\end"')
+    var sc = sqrrl___JsonScanner('"he said \\"hi\\"\\nnext\\tline\\\\end"')
     assert_equal(sc.parse_json_string(), 'he said "hi"\nnext\tline\\end')
     assert_true(sc.at_end())
 
 
 def test_scanner_parses_string_rejects_unicode_escape() raises:
     """Known, documented limitation -- no `\\uXXXX` support."""
-    var sc = sqrrl__JsonScanner('"\\u0041"')
+    var sc = sqrrl___JsonScanner('"\\u0041"')
     var raised = False
     try:
         _ = sc.parse_json_string()
@@ -70,26 +70,26 @@ def test_scanner_parses_string_rejects_unicode_escape() raises:
 
 
 def test_scanner_parses_int_positive_and_negative() raises:
-    var sc = sqrrl__JsonScanner("42")
+    var sc = sqrrl___JsonScanner("42")
     assert_equal(sc.parse_json_int(), 42)
-    var sc2 = sqrrl__JsonScanner("-17")
+    var sc2 = sqrrl___JsonScanner("-17")
     assert_equal(sc2.parse_json_int(), -17)
 
 
 def test_scanner_parses_float() raises:
-    var sc = sqrrl__JsonScanner("-3.5")
+    var sc = sqrrl___JsonScanner("-3.5")
     assert_equal(sc.parse_json_float(), -3.5)
 
 
 def test_scanner_parses_bool() raises:
-    var sc = sqrrl__JsonScanner("true")
+    var sc = sqrrl___JsonScanner("true")
     assert_true(sc.parse_json_bool())
-    var sc2 = sqrrl__JsonScanner("false")
+    var sc2 = sqrrl___JsonScanner("false")
     assert_false(sc2.parse_json_bool())
 
 
 def test_scanner_bool_rejects_other_text() raises:
-    var sc = sqrrl__JsonScanner("nope")
+    var sc = sqrrl___JsonScanner("nope")
     var raised = False
     try:
         _ = sc.parse_json_bool()
@@ -99,7 +99,7 @@ def test_scanner_bool_rejects_other_text() raises:
 
 
 def test_scanner_structural_bytes_skip_whitespace() raises:
-    var sc = sqrrl__JsonScanner('  {  "a"  :  1  ,  "b" : 2 }')
+    var sc = sqrrl___JsonScanner('  {  "a"  :  1  ,  "b" : 2 }')
     sc.expect_byte(UInt8(ord("{")))
     assert_equal(sc.parse_json_string(), "a")
     sc.expect_byte(UInt8(ord(":")))
@@ -114,7 +114,7 @@ def test_scanner_structural_bytes_skip_whitespace() raises:
 
 
 def test_scanner_expect_byte_raises_on_mismatch() raises:
-    var sc = sqrrl__JsonScanner("[")
+    var sc = sqrrl___JsonScanner("[")
     var raised = False
     try:
         sc.expect_byte(UInt8(ord("{")))
@@ -126,7 +126,7 @@ def test_scanner_expect_byte_raises_on_mismatch() raises:
 def test_round_trip_through_literal_helpers_and_scanner() raises:
     var original = 'quote " and backslash \\ and newline\n'
     var literal = sqrrl__json_string_literal(original)
-    var sc = sqrrl__JsonScanner(literal)
+    var sc = sqrrl___JsonScanner(literal)
     assert_equal(sc.parse_json_string(), original)
 
 
@@ -143,7 +143,7 @@ def test_sqrrl_to_json_dispatches_json_serializable_conformance_to_bare_id() rai
     """A real entity wrapper's own value is always just its bare id (the
     row itself is dumped once, separately, as part of its own table's own
     dump) -- `sqrrl__to_json[T]` picks this branch via `conforms_to(T,
-    sqrrl__JsonSerializable)`, never the `reflect[T]` fallback, for
+    sqrrl___JsonSerializable)`, never the `reflect[T]` fallback, for
     anything that conforms."""
     var e = _FakeEntity(row_id=9)
     assert_equal(sqrrl__to_json_default(e), "9")
@@ -151,7 +151,7 @@ def test_sqrrl_to_json_dispatches_json_serializable_conformance_to_bare_id() rai
 
 def test_sqrrl_to_json_reflects_nested_plain_struct_at_any_depth() raises:
     """The `reflect[T]` fallback -- anything that's neither a known leaf
-    nor `sqrrl__JsonSerializable` -- walks field names/types/offsets at
+    nor `sqrrl___JsonSerializable` -- walks field names/types/offsets at
     comptime and recurses back into `sqrrl__to_json` per field, so this
     needs no generated code and no DSL-side declaration at all (plan's
     §7), including through a struct nested inside another one."""

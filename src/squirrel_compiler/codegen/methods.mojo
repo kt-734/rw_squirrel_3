@@ -1,5 +1,6 @@
 from squirrel_compiler.parser import Scanner, is_ident_char
 from squirrel_compiler.codegen.rewrite_context import RewriteContext
+from squirrel_compiler.codegen.helpers import scan_entity_return_shape
 
 
 def _leading_indent(text: String) -> String:
@@ -54,21 +55,38 @@ def _split_method_spans(method_body: String) -> List[String]:
 struct _MethodHeader(Copyable, Movable):
     """One method's own parsed signature line, split from its body.
     `after_paren` is everything on the header line right after the method
-    name's own `(` -- e.g. `self, x: Int) -> String:`."""
+    name's own `(` -- e.g. `self, x: Int) -> String:`. `return_shape` is
+    the method's `@@`-marked return type's own encoded shape (see
+    `scan_entity_return_shape`), if it has one -- mandatory-marking
+    extended to methods: `is_entity_marked`/`is_world_marked` are cross-
+    validated against it exactly like `driver/misc_builders.mojo`'s
+    `build_function_returns` already does for top-level functions."""
 
     var indent: String
     var keyword: String
     var is_world_marked: Bool
+    var is_entity_marked: Bool
     var method_name: String
     var after_paren: String
     var body: String
+    var return_shape: Optional[String]
 
 
 def _parse_method_span(span: String, struct_name: String) raises -> _MethodHeader:
     """Splits one method's own `span` (as sliced by `_split_method_spans`)
     into its signature pieces, without rewriting anything -- shared by
-    `world_marked_method_names` (which only needs the name/marking) and
-    `rewrite_method_body` (which needs the rest too)."""
+    `world_marked_method_names`/`method_return_shapes` (which only need
+    the name/marking/return shape) and `rewrite_method_body` (which needs
+    the rest too).
+
+    Mandatory-marking extended to methods (mirrors `driver/misc_builders.
+    mojo`'s `build_function_returns` for top-level functions): a method
+    whose return type is directly entity-iterable must mark its own name,
+    `@@` if it doesn't also need `sqrrl___world`, `@@@` if it does -- a
+    bare method returning an `@@`-marked value (previously silently
+    allowed, but with no way to bind/loop/chain off its result -- a real,
+    documented gap) is now rejected here, the same way a bare top-level
+    function already is."""
     var bytes = span.as_bytes()
     var n = len(bytes)
     var header_end = 0
@@ -94,18 +112,12 @@ def _parse_method_span(span: String, struct_name: String) raises -> _MethodHeade
     rest = String(rest[byte = keyword.byte_length() : rest.byte_length()])
 
     var is_world_marked = rest.startswith("@@@")
+    var is_entity_marked = False
     if is_world_marked:
         rest = String(rest[byte = 3 : rest.byte_length()])
     elif rest.startswith("@@"):
-        raise Error(
-            "InvalidSquirrelSyntax: method '"
-            + rest
-            + "' on '@@struct @@"
-            + struct_name
-            + "' -- a spliced method that needs 'sqrrl__world' is marked"
-            " '@@@', not plain '@@' (a method's own name is never"
-            " '@@'-marked otherwise)"
-        )
+        is_entity_marked = True
+        rest = String(rest[byte = 2 : rest.byte_length()])
 
     var paren = rest.find("(")
     if paren < 0:
@@ -116,13 +128,37 @@ def _parse_method_span(span: String, struct_name: String) raises -> _MethodHeade
     var method_name = String(rest[byte = 0 : paren])
     var after_paren = String(rest[byte = paren + 1 : rest.byte_length()])
 
+    var return_shape = scan_entity_return_shape(after_paren)
+
+    if is_entity_marked and not return_shape:
+        raise Error(
+            "InvalidSquirrelSyntax: method '@@"
+            + method_name
+            + "' on '@@struct @@"
+            + struct_name
+            + "' is marked '@@' but doesn't return an '@@'-marked value --"
+            " '@@' only marks a method that does; remove the '@@' marking"
+        )
+    if not is_world_marked and not is_entity_marked and return_shape:
+        raise Error(
+            "InvalidSquirrelSyntax: method '"
+            + method_name
+            + "' on '@@struct @@"
+            + struct_name
+            + "' returns an '@@'-marked value but isn't itself marked --"
+            " write '@@" + method_name + "(...)' (or '@@@" + method_name
+            + "(...)' if it also needs 'sqrrl___world')"
+        )
+
     return _MethodHeader(
         indent=indent,
         keyword=keyword,
         is_world_marked=is_world_marked,
+        is_entity_marked=is_entity_marked,
         method_name=method_name,
         after_paren=after_paren,
         body=body,
+        return_shape=return_shape,
     )
 
 
@@ -170,7 +206,7 @@ def world_marked_method_names(method_body: String, struct_name: String) raises -
     what `build_world_methods` (`driver/discovery.mojo`) scans project-wide,
     so the rewrite engine's instance-call dispatch
     (`rewrite_field_access.mojo`) can tell whether calling a spliced user
-    method needs `sqrrl__world` threaded as its own first argument, without
+    method needs `sqrrl___world` threaded as its own first argument, without
     needing to see the declaring file itself (same cross-file reasoning as
     M2's relation-schema resolution)."""
     var out = List[String]()
@@ -183,6 +219,25 @@ def world_marked_method_names(method_body: String, struct_name: String) raises -
     return out^
 
 
+def method_return_shapes(method_body: String, struct_name: String) raises -> Dict[String, String]:
+    """Method name -> its `@@`-marked return's encoded shape, for every
+    entity-returning method declared in `method_body` -- what `build_
+    method_returns` (`driver/discovery.mojo`) scans project-wide, so the
+    rewrite engine's instance-call dispatch (`rewrite_field_access.mojo`'s
+    `_handle_instance_call`) can treat a marked method call as a real
+    marker position, the same way `handle_func_call_marker` already does
+    for a marked top-level function's call -- bind/loop/chain off its
+    return value, no intermediate variable required."""
+    var out = Dict[String, String]()
+    if method_body.strip().byte_length() == 0:
+        return out^
+    for span in _split_method_spans(method_body):
+        var header = _parse_method_span(span, struct_name)
+        if header.return_shape:
+            out[header.method_name] = header.return_shape.value()
+    return out^
+
+
 def rewrite_method_body(method_body: String, struct_name: String, ctx: RewriteContext) raises -> String:
     """Splits `method_body` into per-method spans, rewrites each through
     the ordinary `rewrite_markers` machinery with its own fresh scope
@@ -190,7 +245,7 @@ def rewrite_method_body(method_body: String, struct_name: String, ctx: RewriteCo
     `self.field`/`self.@@dept.name` resolve exactly like any other
     bound-variable access once `_mark_self_field_access` inserts the `@@`
     marker `self` itself is never written with), and splices `mut
-    sqrrl__world: sqrrl__World` into any method whose own name was
+    sqrrl___world: sqrrl___World` into any method whose own name was
     `@@@`-marked (mirrors `MarkerKind.WORLD_FUNC`'s own def-signature
     insertion). A method's own name is never `sqrrl__`-prefixed -- only the
     `@@@` marker itself is stripped -- since it has to match exactly for
@@ -221,14 +276,14 @@ def rewrite_method_body(method_body: String, struct_name: String, ctx: RewriteCo
                     + "' on '@@struct @@"
                     + struct_name
                     + "' needs 'self' as its first parameter to use"
-                    " 'sqrrl__world'"
+                    " 'sqrrl___world'"
                 )
             var after_self = String(header.after_paren[byte = 4 : header.after_paren.byte_length()])
             var asb = after_self.as_bytes()
             var k = 0
             while k < len(asb) and (asb[k] == UInt8(ord(" ")) or asb[k] == UInt8(ord("\t"))):
                 k += 1
-            new_header += "self, mut sqrrl__world: sqrrl__World"
+            new_header += "self, mut sqrrl___world: sqrrl___World"
             if k < len(asb) and asb[k] == UInt8(ord(",")):
                 var k2 = k + 1
                 while k2 < len(asb) and (asb[k2] == UInt8(ord(" ")) or asb[k2] == UInt8(ord("\t"))):

@@ -1,15 +1,15 @@
 from squirrel_compiler.parser import Scanner
-from squirrel_compiler.codegen import encode_container_type
+from squirrel_compiler.codegen import scan_entity_return_shape
 
 
 def build_function_returns(sqrrl_files: List[String]) raises -> Dict[String, String]:
     """Function name -> the `@@Type` (or `Container[@@Type]`, encoded via
-    `encode_container_type`) it returns, for *every* top-level `def
+    `scan_entity_return_shape`) it returns, for *every* top-level `def
     funcName(...) -> <ReturnType>:` signature project-wide (a def's own
     signature is assumed to fit on one line) -- mandatory-marking
     milestone: any function whose return type involves an `@@`-marked
     value must mark its own name too, `@@` if it doesn't also need
-    `sqrrl__world`, `@@@` if it does (never both) -- so this scans and
+    `sqrrl___world`, `@@@` if it does (never both) -- so this scans and
     cross-validates *every* marking of a top-level `def`, not just
     world-marked ones, raising a real `InvalidSquirrelSyntax` the moment a
     mismatch is found (over-marked: `@@`-marked but doesn't actually
@@ -27,7 +27,7 @@ def build_function_returns(sqrrl_files: List[String]) raises -> Dict[String, Str
     of how this map were built.
 
     A `def @@@funcName(...)` (three `@`s) is call-site/method-splicing's
-    own `WORLD_FUNC` shape (needs `sqrrl__world`); `def @@funcName(...)`
+    own `WORLD_FUNC` shape (needs `sqrrl___world`); `def @@funcName(...)`
     (exactly two `@`s) is `ENTITY_FUNC`'s (doesn't); a fully bare `def
     funcName(...)` must return a plain, non-`@@` value, or this raises.
 
@@ -60,40 +60,9 @@ def build_function_returns(sqrrl_files: List[String]) raises -> Dict[String, Str
                 elif is_entity_marked:
                     _ = line_sc.try_consume("@@")
                 var func_name = line_sc.scan_ident()
-                var found_arrow = False
-                while not line_sc.at_end():
-                    if line_sc.try_consume("->"):
-                        found_arrow = True
-                        break
-                    line_sc.pos += 1
-                var shaped_type: Optional[String] = None
-                if found_arrow:
-                    line_sc.skip_trivia()
-                    if line_sc.try_consume("@@"):
-                        var ret_type = line_sc.scan_ident()
-                        if ret_type.byte_length() > 0:
-                            shaped_type = Optional[String](ret_type)
-                    else:
-                        var wrapper = line_sc.scan_ident()
-                        line_sc.skip_trivia()
-                        if wrapper.byte_length() > 0 and line_sc.try_consume("["):
-                            line_sc.skip_trivia()
-                            if line_sc.try_consume("@@"):
-                                var ret_type = line_sc.scan_ident()
-                                line_sc.skip_trivia()
-                                if ret_type.byte_length() > 0:
-                                    if line_sc.try_consume("]"):
-                                        shaped_type = Optional[String](encode_container_type(wrapper, ret_type))
-                                    elif line_sc.try_consume(","):
-                                        var depth = 1
-                                        while depth > 0 and not line_sc.at_end():
-                                            if line_sc.peek() == UInt8(ord("[")):
-                                                depth += 1
-                                            elif line_sc.peek() == UInt8(ord("]")):
-                                                depth -= 1
-                                            line_sc.pos += 1
-                                        if depth == 0:
-                                            shaped_type = Optional[String](encode_container_type(wrapper, ret_type))
+                var shaped_type = scan_entity_return_shape(
+                    String(line_sc.source[byte = line_sc.pos : line_sc.source.byte_length()])
+                )
                 if func_name.byte_length() > 0:
                     if is_entity_marked and not shaped_type:
                         raise Error(
@@ -116,7 +85,7 @@ def build_function_returns(sqrrl_files: List[String]) raises -> Dict[String, Str
                             + func_name
                             + "(...)' (or '@@@"
                             + func_name
-                            + "(...)' if it also needs 'sqrrl__world')"
+                            + "(...)' if it also needs 'sqrrl___world')"
                         )
                     if shaped_type:
                         out[func_name] = shaped_type.value()
@@ -128,7 +97,7 @@ def build_function_returns(sqrrl_files: List[String]) raises -> Dict[String, Str
 
 def check_single_world_scope_call(sqrrl_files: List[String]) raises:
     """Rejects more than one `@@:` across the whole project -- `@@:` is the
-    single point that brings `sqrrl__world` into scope for a whole script.
+    single point that brings `sqrrl___world` into scope for a whole script.
 
     Verbatim port from rw_squirrel_2."""
     var declare_sites = List[String]()
@@ -162,9 +131,9 @@ def check_single_world_scope_call(sqrrl_files: List[String]) raises:
 def uses_json_entry_point(generated: String) -> Bool:
     """True if `generated` (a file's own already-*rewritten* Mojo output,
     from `emit_file`) actually calls one of the whole-world JSON entry
-    points -- checking the *rewritten* call-site text (`sqrrl__begin_init_
-    from_json(`/`sqrrl__init_from_json(`/`sqrrl__end_init_from_json(`/
-    `sqrrl__world_to_json(`, exactly what `codegen/rewrite.mojo`'s four
+    points -- checking the *rewritten* call-site text (`sqrrl___begin_init_
+    from_json(`/`sqrrl___init_from_json(`/`sqrrl___end_init_from_json(`/
+    `sqrrl___world_to_json(`, exactly what `codegen/rewrite.mojo`'s four
     JSON `MarkerKind` branches each emit) rather than scanning raw `.mojo.
     sqrrl` source for the `@@@`-marked spelling, so this is a precise
     per-file check with no risk of a false match inside a comment/string --
@@ -178,10 +147,10 @@ def uses_json_entry_point(generated: String) -> Bool:
     found and fixed after `@@container` support already made "every field
     must be JSON-parseable" a much easier restriction to hit by accident)."""
     return (
-        "sqrrl__begin_init_from_json(" in generated
-        or "sqrrl__init_from_json(" in generated
-        or "sqrrl__end_init_from_json(" in generated
-        or "sqrrl__world_to_json(" in generated
+        "sqrrl___begin_init_from_json(" in generated
+        or "sqrrl___init_from_json(" in generated
+        or "sqrrl___end_init_from_json(" in generated
+        or "sqrrl___world_to_json(" in generated
     )
 
 
@@ -197,7 +166,7 @@ def project_uses_json(sqrrl_files: List[String]) raises -> Bool:
     point` (which looks at each file's own already-*rewritten* text) --
     this one has to run *before* `emit_file`/`transform_source` do,
     because its own result (whether `codegen/entity.mojo`'s `emit_entity`
-    adds `sqrrl__JsonSerializable` conformance to a struct it's *currently
+    adds `sqrrl___JsonSerializable` conformance to a struct it's *currently
     emitting*) can't wait for `emit_file`'s own output to exist yet. A
     plain substring scan over raw source risks a false match inside a
     comment/string in principle, but the failure mode is only ever "the

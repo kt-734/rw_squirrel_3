@@ -1,4 +1,4 @@
-from squirrel_runtime.json import sqrrl__JsonScanner
+from squirrel_runtime.json import sqrrl___JsonScanner
 
 
 @fieldwise_init
@@ -15,7 +15,7 @@ struct ExternalCity(Copyable, Movable, ImplicitlyDeletable):
     var name: String
 
 
-def sqrrl__ExternalCity_from_json(mut sc: sqrrl__JsonScanner) raises -> ExternalCity:
+def sqrrl__ExternalCity_from_json(mut sc: sqrrl___JsonScanner) raises -> ExternalCity:
     """The from_json escape hatch `driver/json_module.mojo`'s
     `_leaf_from_json_expr` assumes exists for exactly this case -- called
     directly, by this exact name, with no declaration/registration needed

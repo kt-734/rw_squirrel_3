@@ -3,25 +3,38 @@ from squirrel_compiler.driver.discovery import DiscoveryResult
 
 
 def emit_world_module(discovery: DiscoveryResult) -> String:
-    """Emits `sqrrl__world.mojo`'s content: `sqrrl__World`, holding one
+    """Emits `sqrrl__world.mojo`'s content: `sqrrl___World`, holding one
     table per `@@struct` declared anywhere in the project, plus
-    `sqrrl__init()`, the factory `@@init()` calls to obtain it. Built
+    `sqrrl___init()`, the factory `@@init()` calls to obtain it. Built
     project-wide, in its own file, rather than per `.mojo.sqrrl` file --
     Mojo has no mutable global/static state, so this is the one shared
     place a script and a struct's own declaring file (which may differ)
     both reach it from.
 
-    Field names on `sqrrl__World` stay bare (`Person`, not `sqrrl__Person`)
+    Field names on `sqrrl___World` stay bare (`Person`, not `sqrrl__Person`)
     -- matching what the rewrite engine already emits at every table-level
-    call site (`sqrrl__world.Person.create(...)`, README-documented shape,
+    call site (`sqrrl___world.Person.create(...)`, README-documented shape,
     unchanged from rw_squirrel_2).
 
+    Every identifier reachable from (or adjacent to) hand-written DSL
+    code -- `sqrrl___world`/`sqrrl___init`/`sqrrl___World` here, plus the
+    JSON entry points/`sqrrl___temp_keep_alives`/`sqrrl___TempKeepAlives`
+    in `driver/json_module.mojo` -- is triple-underscore, not the usual
+    double: `sqrrl_prefixed`'s own `sqrrl__` +
+    name convention means a user's own `@@`-marked name could otherwise
+    collide with one of these (`@@world`/`@@init`/`@@World` are all
+    perfectly plausible entity/variable names). `sqrrl__check_no_leaks`/
+    `sqrrl__leaked_<name>` stay double -- neither ever appears in a scope
+    where hand-written DSL code coexists (only ever called from other
+    generated code), so there's nothing for them to actually collide
+    with.
+
     Slimmed from rw_squirrel_2's own `emit_world_module` for M1's scope:
-    no `TempKeepAlives`/`to_json`/`sqrrl__world_from_json`/
-    `sqrrl__init_from_json` (whole-world JSON serialization, M5) -- so no
+    no `TempKeepAlives`/`to_json`/`sqrrl___world_from_json`/
+    `sqrrl___init_from_json` (whole-world JSON serialization, M5) -- so no
     topological struct ordering needed either (that existed purely to
     give JSON reload a safe reconstruction order). `sqrrl__check_no_leaks`/
-    `__del__` are unchanged: `@@:` still builds a real, live `sqrrl__World`
+    `__del__` are unchanged: `@@:` still builds a real, live `sqrrl___World`
     immediately, so leak detection at scope-end is unaffected by anything
     else in this rewrite."""
     var out = String()
@@ -31,7 +44,7 @@ def emit_world_module(discovery: DiscoveryResult) -> String:
     out += "from std.os import abort\n"
 
     out += "\n\n"
-    out += "struct sqrrl__World(Movable):\n"
+    out += "struct sqrrl___World(Movable):\n"
     for ds in discovery.structs:
         var table_name = sqrrl_prefixed(ds.parsed.name) + "Table"
         out += "    var " + ds.parsed.name + ": " + table_name + "\n"
@@ -73,7 +86,7 @@ def emit_world_module(discovery: DiscoveryResult) -> String:
                 + ds.parsed.name
                 + "' still has \" + String("
                 + count_var
-                + ') + " live entities outside sqrrl__world -- something'
+                + ') + " live entities outside sqrrl___world -- something'
                 ' external still references them")\n'
             )
 
@@ -82,7 +95,7 @@ def emit_world_module(discovery: DiscoveryResult) -> String:
     out += "        self.sqrrl__check_no_leaks()\n"
 
     out += "\n\n"
-    out += "def sqrrl__init() -> sqrrl__World:\n"
-    out += "    return sqrrl__World()\n"
+    out += "def sqrrl___init() -> sqrrl___World:\n"
+    out += "    return sqrrl___World()\n"
 
     return out

@@ -54,17 +54,18 @@ def emit_file(
     plain_struct_names: Dict[String, Bool] = Dict[String, Bool](),
     plain_value_fields: Dict[String, Dict[String, String]] = Dict[String, Dict[String, String]](),
     json_used: Bool = False,
+    method_returns: Dict[String, Dict[String, String]] = Dict[String, Dict[String, String]](),
 ) raises -> String:
     """Emits the generated Mojo source for `path` (a single `.mojo.sqrrl`
     file), prefixed with the runtime imports, an import for every
     `cross_file_symbols` (`build_entity_symbols`) entry this file's own
     transformed text actually references and that isn't declared in this
     same file (`own_module_path`), and, if this file's script body touches
-    `sqrrl__world` at all, an import line for it.
+    `sqrrl___world` at all, an import line for it.
 
     `json_used` (`driver/misc_builders.mojo`'s `project_uses_json`,
     computed project-wide *before* any file gets transformed) gates both
-    the `sqrrl__JsonSerializable` import here and whether `emit_entity`
+    the `sqrrl___JsonSerializable` import here and whether `emit_entity`
     (via `transform_source`) adds the conformance/method at all -- a
     project that never touches JSON anywhere shouldn't carry either.
 
@@ -81,7 +82,8 @@ def emit_file(
     try:
         transformed = transform_source(
             source, relation_schema, struct_names, function_returns, unique_fields, indexed_fields, multi_fields,
-            ordered_fields, world_methods, stats_fields, plain_struct_names, plain_value_fields, json_used
+            ordered_fields, world_methods, stats_fields, plain_struct_names, plain_value_fields, json_used,
+            method_returns=method_returns
         )
     except e:
         raise Error(path + ": " + String(e))
@@ -98,13 +100,13 @@ def emit_file(
     # just moved, by checking codegen/entity.mojo's own generated method
     # body. The conformance itself is conditional too, same reason.
     if json_used:
-        out += "from squirrel_runtime.json import sqrrl__JsonSerializable\n"
+        out += "from squirrel_runtime.json import sqrrl___JsonSerializable\n"
     out += "from std.memory import ArcPointer\n"
     out += "from std.hashlib import Hasher\n"
     out += "from std.collections import Set\n"
     out += "from std.os import abort\n"
-    if "sqrrl__world" in transformed:
-        out += "from sqrrl__world import sqrrl__init, sqrrl__World\n"
+    if "sqrrl___world" in transformed:
+        out += "from sqrrl__world import sqrrl___init, sqrrl___World\n"
     # Only a file that actually calls a whole-world JSON entry point needs
     # this import -- `sqrrl__json.mojo` itself is only generated at all
     # when *some* file in the project does (`convert_directory.mojo`), so
@@ -112,8 +114,8 @@ def emit_file(
     # a file that might not exist.
     if uses_json_entry_point(transformed):
         out += (
-            "from sqrrl__json import sqrrl__begin_init_from_json,"
-            " sqrrl__end_init_from_json, sqrrl__init_from_json, sqrrl__world_to_json\n"
+            "from sqrrl__json import sqrrl___begin_init_from_json,"
+            " sqrrl___end_init_from_json, sqrrl___init_from_json, sqrrl___world_to_json\n"
         )
 
     # Sorted, not raw `Dict.keys()` iteration order -- otherwise this

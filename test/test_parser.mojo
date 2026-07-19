@@ -100,7 +100,7 @@ def test_find_next_marker_world_scope() raises:
 
 
 def test_find_next_marker_world_scope_rejects_plain_two_at() raises:
-    """`@@:` needs 'sqrrl__world' now (M3 addendum) -- only `@@@:` opens a
+    """`@@:` needs 'sqrrl___world' now (M3 addendum) -- only `@@@:` opens a
     world scope; the old two-`@` form is a hard parse error."""
     var s = Scanner("def main() raises:\n    @@:\n        pass\n")
     var raised = False
@@ -130,7 +130,7 @@ def test_find_next_marker_construct() raises:
 
 
 def test_find_next_marker_construct_rejects_plain_two_at() raises:
-    """Construction always needs 'sqrrl__world' (M3 addendum) -- a plain
+    """Construction always needs 'sqrrl___world' (M3 addendum) -- a plain
     `@@Person{...}` (two `@`s) is now a hard parse error; only
     `@@@Person{...}` is valid."""
     var s = Scanner('@@Person { .name = "alice" }')
@@ -399,12 +399,12 @@ def test_to_json_rejects_nonempty_args() raises:
 
 
 def test_begin_init_from_json_plain_two_at_is_rejected() raises:
-    """Every JSON marker needs 'sqrrl__world' (three `@`s), same rule every
+    """Every JSON marker needs 'sqrrl___world' (three `@`s), same rule every
     other M3-addendum construct/call/scope marker already enforces -- a
     plain `@@begin_init_from_json(...)` no longer raises at the scanner
     level (mandatory-marking milestone: plain `@@name(...)` is now a
     legitimate marker, `ENTITY_FUNC`, for a function that returns an
-    `@@`-marked value without needing `sqrrl__world` -- the scanner can't
+    `@@`-marked value without needing `sqrrl___world` -- the scanner can't
     yet tell `begin_init_from_json` isn't actually such a function, only
     `rewrite.mojo`'s own `handle_func_call_marker` can, once `ctx.
     function_returns` is available). This still surfaces as a real

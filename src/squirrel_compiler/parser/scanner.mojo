@@ -264,11 +264,37 @@ struct Scanner(Movable):
             raise self.err("InvalidSquirrelSyntax: unterminated '['")
         return String(self.source[byte = body_start : self.pos - 1])
 
-    def scan_type(mut self) -> String:
-        """Scans a field's type text: up to the next top-level `,` or `\\n`
-        (ignoring either nested inside `[]`/`()`/`{}`) or end of input."""
+    def scan_bracket_depth_aware_span(mut self, terminators: String) raises -> String:
+        """The shared depth-aware "scan a type text span" shape `scan_type`
+        (a `@@struct`/hand-written struct field's own type, terminated by
+        `,`/newline), `scan_entity_param_type_text` (a def parameter or
+        var-decl's own type, additionally terminated by `)`/`='), and
+        `codegen/helpers.mojo`'s `scan_entity_return_shape` (a def/
+        method's own return type, terminated by `:`) all share, instead
+        of three near-identical copies -- scans from `self.pos` up to the
+        first byte in `terminators` seen at top-level bracket depth
+        (ignoring one nested inside `[]`/`()`/`{}`; an unbalanced closer
+        at depth 0 belongs to an *enclosing* context, e.g. a def's own
+        closing `)` right after its last parameter, and also ends the
+        scan), skipping over comments/string literals via `skip_non_code`
+        the same way every other scan in this codebase does.
+
+        Leaves `self.pos` right after the scanned text's own last non-
+        whitespace byte -- *not* at the terminator itself, and not
+        through any trailing whitespace before it -- so the original
+        source's own spacing between the type and whatever comes next is
+        left unconsumed for a caller that splices generated output
+        straight from source spacing (`scan_entity_param_type_text`'s own
+        caller does -- confirmed missing via a real end-to-end compile:
+        `sqrrl__senior: sqrrl__Employee= value`, the space before `=`
+        gone; `scan_type`'s own caller never needs to, a struct field's
+        declaration is always regenerated fresh, never copied through --
+        but behaving the same way here regardless keeps all three
+        callers consistent instead of leaving one a latent, currently-
+        unhit special case)."""
         var start = self.pos
         var depth = 0
+        var terminator_bytes = terminators.as_bytes()
         while not self.at_end():
             var before = self.pos
             self.skip_non_code()
@@ -278,14 +304,32 @@ struct Scanner(Movable):
             if b == UInt8(ord("[")) or b == UInt8(ord("(")) or b == UInt8(ord("{")):
                 depth += 1
             elif b == UInt8(ord("]")) or b == UInt8(ord(")")) or b == UInt8(ord("}")):
+                if depth == 0:
+                    break  # this closer belongs to an enclosing context
                 depth -= 1
-            elif b == UInt8(ord(",")) and depth == 0:
-                break
-            elif b == UInt8(ord("\n")) and depth == 0:
-                break
+            elif depth == 0:
+                var is_terminator = False
+                for t in terminator_bytes:
+                    if b == t:
+                        is_terminator = True
+                        break
+                if is_terminator:
+                    break
             self.pos += 1
-        var raw = String(self.source[byte = start : self.pos])
-        return String(raw.strip())
+        var end = self.pos
+        while end > start and (
+            self.byte_at(end - 1) == UInt8(ord(" "))
+            or self.byte_at(end - 1) == UInt8(ord("\t"))
+            or self.byte_at(end - 1) == UInt8(ord("\r"))
+        ):
+            end -= 1
+        self.pos = end
+        return String(self.source[byte = start : end])
+
+    def scan_type(mut self) raises -> String:
+        """Scans a field's type text: up to the next top-level `,` or `\\n`
+        (ignoring either nested inside `[]`/`()`/`{}`) or end of input."""
+        return self.scan_bracket_depth_aware_span(",\n")
 
     def parse_trait_list(mut self) raises -> List[String]:
         """Requires `self.pos` at the `(` of an optional `@@struct
@@ -566,7 +610,7 @@ struct Scanner(Movable):
         `@@@` (three `@`s) is checked before plain `@@` (longest-match-first,
         same reasoning as the earlier `add_to_@@field` scanner change) --
         it's the M3 addendum's marker for "this reference needs
-        `sqrrl__world`": world-scope (`@@@:`), a top-level function
+        `sqrrl___world`": world-scope (`@@@:`), a top-level function
         definition/call (`@@@func(...)`), construction (`@@@Type{...}`), and
         a table-level call (`@@@Type.method(...)`, folded into
         `FIELD_ACCESS` same as a bound-variable field access -- the scanner
@@ -603,7 +647,7 @@ struct Scanner(Movable):
                         " identifier -- a type name for construction"
                         " ('@@@Type{...}') or a table-level call"
                         " ('@@@Type.method(...)'), or a function name that"
-                        " needs 'sqrrl__world' ('@@@func(...)'), or ':' to"
+                        " needs 'sqrrl___world' ('@@@func(...)'), or ':' to"
                         " open a world scope ('@@@:')"
                     )
                 # M5's four JSON markers -- matched on identifier text
@@ -655,10 +699,10 @@ struct Scanner(Movable):
                 var marker_start = self.pos
                 self.pos += 2
                 if self.peek() == UInt8(ord(":")):
-                    # A bare `@@:` -- world-scope now needs `sqrrl__world`
+                    # A bare `@@:` -- world-scope now needs `sqrrl___world`
                     # marked explicitly via `@@@:`, no silent two-`@` form.
                     raise self.err(
-                        "InvalidSquirrelSyntax: '@@:' needs 'sqrrl__world'"
+                        "InvalidSquirrelSyntax: '@@:' needs 'sqrrl___world'"
                         " -- write '@@@:'"
                     )
                 var ident_start = self.pos
@@ -678,7 +722,7 @@ struct Scanner(Movable):
                     raise self.err(
                         "InvalidSquirrelSyntax: constructing '@@"
                         + ident
-                        + "' needs 'sqrrl__world' -- write '@@@"
+                        + "' needs 'sqrrl___world' -- write '@@@"
                         + ident
                         + "{...}'"
                     )
@@ -687,10 +731,10 @@ struct Scanner(Movable):
                 elif self.peek() == UInt8(ord("(")):
                     # `@@ident(...)` -- a function (definition or call site)
                     # that returns an '@@'-marked value but needs no
-                    # 'sqrrl__world' of its own (mandatory marking: any
+                    # 'sqrrl___world' of its own (mandatory marking: any
                     # function whose return type involves an '@@'-marked
                     # value must be marked, plain '@@' if it doesn't also
-                    # need 'sqrrl__world', '@@@' -- never both -- if it
+                    # need 'sqrrl___world', '@@@' -- never both -- if it
                     # does). The scanner can't yet tell whether `ident`
                     # actually returns such a value at all (that needs
                     # `function_returns`, a project-wide, build-time-only
@@ -759,9 +803,8 @@ struct Scanner(Movable):
         """Scans an entity param's (or a hand-written struct's own field
         declaration's) raw type text -- from `self.pos` up to the next
         top-level `,`/`)`/`='/newline (ignoring any nested inside `[]`/
-        `()`/`{}`), or end of input -- same general, depth-aware shape
-        `scan_type` already uses for a `@@struct`'s own field
-        declarations, just with a wider terminator set (a `@@struct`
+        `()`/`{}`), or end of input -- `scan_bracket_depth_aware_span`
+        with a wider terminator set than `scan_type`'s own (a `@@struct`
         field is only ever terminated by `,`/newline; an entity param can
         also be the last one before a def's closing `)`, or a var-decl's
         own `= value`). `@@` markers, at any depth, are left exactly as
@@ -770,27 +813,7 @@ struct Scanner(Movable):
         through) resolve the whole shape uniformly downstream, arbitrary
         nesting and argument count included; this scan's only job is
         finding where the type text *ends*."""
-        var start = self.pos
-        var depth = 0
-        while not self.at_end():
-            var before = self.pos
-            self.skip_non_code()
-            if self.pos != before:
-                continue
-            var b = self.peek()
-            if b == UInt8(ord("[")) or b == UInt8(ord("(")) or b == UInt8(ord("{")):
-                depth += 1
-            elif b == UInt8(ord("]")) or b == UInt8(ord(")")) or b == UInt8(ord("}")):
-                if depth == 0:
-                    break  # this closer belongs to an enclosing context
-                depth -= 1
-            elif depth == 0 and (
-                b == UInt8(ord(",")) or b == UInt8(ord("=")) or b == UInt8(ord("\n"))
-            ):
-                break
-            self.pos += 1
-        var raw = String(self.source[byte = start : self.pos])
-        return String(raw.strip())
+        return self.scan_bracket_depth_aware_span(",)=\n")
 
     def parse_entity_param(mut self) raises -> EntityParam:
         """Requires `self.pos` at the `@@` of `@@name: <type>` -- `<type>`
@@ -843,7 +866,7 @@ struct Scanner(Movable):
 
     def parse_construct(mut self) raises -> Construct:
         """Requires `self.pos` at the `@@@` of a `@@@TypeName { ... }`
-        construct -- construction always needs `sqrrl__world` (M3 addendum),
+        construct -- construction always needs `sqrrl___world` (M3 addendum),
         so this is the one marker family entry point that only ever accepts
         the three-`@` form; a plain `@@TypeName{...}` never reaches here
         (`find_next_marker` raises before returning `MarkerKind.CONSTRUCT`
@@ -895,7 +918,7 @@ struct Scanner(Movable):
         """Requires `self.pos` at the `@@` or `@@@` of `@@entity.field` (or
         an arbitrary chain of `.field`/`[index]` steps, `@@entity.@@dept.
         @@members[0].name`, ...) -- `@@@` marks a table-level call
-        (`@@@Type.method(...)`, needs `sqrrl__world`); plain `@@` marks a
+        (`@@@Type.method(...)`, needs `sqrrl___world`); plain `@@` marks a
         bound-variable access (a relation hop chain, an instance method
         call, a container index). The scanner can't yet tell those two
         cases apart (that needs `entity_to_type`, only available once
@@ -967,7 +990,7 @@ struct Scanner(Movable):
             self.skip_trivia()
             if self.try_consume("@@@"):
                 # `.@@@name` -- call-site symmetry with a spliced method's
-                # own `@@@`-marked declaration (needs `sqrrl__world`).
+                # own `@@@`-marked declaration (needs `sqrrl___world`).
                 # Always terminal -- a world-marked call never continues
                 # into a further step.
                 var wf = self.scan_ident()
@@ -1067,7 +1090,7 @@ struct Scanner(Movable):
 
     def parse_world_func(mut self) raises -> String:
         """Requires `self.pos` at the `@@@` of `@@@name(` -- a top-level
-        function that needs `sqrrl__world`, whether this is its own
+        function that needs `sqrrl___world`, whether this is its own
         definition or a call site. Consumes through the opening `(` and
         returns `name`."""
         if not self.try_consume("@@@"):
@@ -1084,7 +1107,7 @@ struct Scanner(Movable):
         """Requires `self.pos` at the `@@` (exactly two `@`s -- `@@@` is
         `parse_world_func`'s own case) of `@@name(` -- a top-level
         function that returns an `@@`-marked value but needs no
-        `sqrrl__world` of its own (mandatory-marking milestone), whether
+        `sqrrl___world` of its own (mandatory-marking milestone), whether
         this is its own definition or a call site. Consumes through the
         opening `(` and returns `name`. Mirrors `parse_world_func`
         exactly, minus the third `@`."""

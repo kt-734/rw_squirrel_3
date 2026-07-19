@@ -41,7 +41,7 @@ def handle_field_access(
     = value;` assignment (a plain-struct owner), or `container[index] =
     value;` when the terminal step is itself an `INDEX`. Table-level calls
     (`create`/`all`/`count`/`for_<field>`/...) and a spliced user method
-    that's `@@@`-marked still need `sqrrl__world`; `fa.entity_marked_world`
+    that's `@@@`-marked still need `sqrrl___world`; `fa.entity_marked_world`
     is validated against which case this actually is (a bound variable
     always needs plain `@@`, a table-level call always needs `@@@`).
 
@@ -90,7 +90,7 @@ def handle_field_access(
                 + fa.entity
                 + "."
                 + fa.steps[0].name
-                + "(...)' is a table-level call -- needs 'sqrrl__world',"
+                + "(...)' is a table-level call -- needs 'sqrrl___world',"
                 " write '@@@"
                 + fa.entity
                 + "."
@@ -103,7 +103,7 @@ def handle_field_access(
                 + fa.entity
                 + "."
                 + fa.steps[0].name
-                + "(...)' needs 'sqrrl__world' -- open @@: or"
+                + "(...)' needs 'sqrrl___world' -- open @@: or"
                 " add '@@' to this function's own parameters first"
             )
         _handle_table_level_call(sc, fa, ctx, pending_decl, pending_for_loop_decl, out)
@@ -237,7 +237,7 @@ def _walk_access_chain(
                 prev_end_pos = step.end_pos
                 continue
             # A FIELD step directly on a container-bound value -- a call on
-            # the container itself (`.append(...)`, needs no sqrrl__world,
+            # the container itself (`.append(...)`, needs no sqrrl___world,
             # no `._inner[]`), or an invalid non-indexed, non-iterated
             # field access.
             if is_last and is_call and step.name != "":
@@ -287,7 +287,10 @@ def _walk_access_chain(
             return
 
         if is_last and is_call:
-            _handle_instance_call(sc, step, current_type, owner_is_real, expr, ctx, pending_decl, pending_for_loop_decl, out)
+            _handle_instance_call(
+                sc, source, marker_start, step, current_type, owner_is_real, expr, entity_label,
+                ctx, pending_decl, pending_for_loop_decl, out
+            )
             return
 
         var is_relation = current_type in ctx.relation_schema and step.name in ctx.relation_schema[current_type]
@@ -447,7 +450,7 @@ def handle_func_call_marker(
 
     Mandatory-marking milestone: any function whose return type involves
     an `@@`-marked value must mark its own name (`@@` if it doesn't also
-    need `sqrrl__world`, `@@@` if it does -- never both; `build_function_
+    need `sqrrl___world`, `@@@` if it does -- never both; `build_function_
     returns` enforces this project-wide, at signature-scan time, so by the
     time rewriting reaches a call site here `ctx.function_returns` is
     already the full, validated truth). This is what makes a *direct*
@@ -459,7 +462,7 @@ def handle_func_call_marker(
     could.
 
     A definition's own signature is rewritten exactly as before (`WORLD_
-    FUNC`'s pre-existing `self`/`mut sqrrl__world` injection, verbatim --
+    FUNC`'s pre-existing `self`/`mut sqrrl___world` injection, verbatim --
     an `ENTITY_FUNC` definition needs none of that, just its own name
     rewritten). A call site now consumes its *entire* argument list
     synchronously (`scan_call_args_to_close`, recursively re-run through
@@ -480,7 +483,7 @@ def handle_func_call_marker(
             var has_more_args = sc.peek() != UInt8(ord(")"))
             if starts_with_self:
                 sc.pos += 4  # consume "self"
-                out += sqrrl_prefixed(func_name) + "(self, mut sqrrl__world: sqrrl__World"
+                out += sqrrl_prefixed(func_name) + "(self, mut sqrrl___world: sqrrl___World"
                 sc.skip_trivia()
                 if sc.try_consume(","):
                     out += ", "
@@ -488,7 +491,7 @@ def handle_func_call_marker(
                 pending_decl = None
                 pending_for_loop_decl = None
                 return
-            out += sqrrl_prefixed(func_name) + "(mut sqrrl__world: sqrrl__World"
+            out += sqrrl_prefixed(func_name) + "(mut sqrrl___world: sqrrl___World"
             ctx.world_declared = True
             if has_more_args:
                 out += ", "
@@ -503,7 +506,7 @@ def handle_func_call_marker(
         raise sc.err(
             "InvalidSquirrelSyntax: calling '@@@"
             + func_name
-            + "(...)' needs 'sqrrl__world' -- open @@:"
+            + "(...)' needs 'sqrrl___world' -- open @@:"
             " or mark this function's own name with '@@@' too"
         )
     var arg_text = sc.scan_call_args_to_close()
@@ -526,7 +529,7 @@ def handle_func_call_marker(
     var call_text: String
     if is_world:
         call_text = (
-            sqrrl_prefixed(func_name) + "(sqrrl__world"
+            sqrrl_prefixed(func_name) + "(sqrrl___world"
             + (", " + rewritten_args if arg_text.strip().byte_length() > 0 else "")
             + ")"
         )
@@ -573,10 +576,13 @@ def handle_func_call_marker(
 
 def _handle_instance_call(
     mut sc: Scanner,
+    source: String,
+    marker_start: Int,
     step: AccessStep,
     current_type: String,
     owner_is_real: Bool,
     expr: String,
+    entity_label: String,
     mut ctx: RewriteContext,
     mut pending_decl: Optional[String],
     mut pending_for_loop_decl: Optional[String],
@@ -591,7 +597,17 @@ def _handle_instance_call(
     <field>`/`remove_from_<field>` (a `multi` field's own instance
     mutation, M2) or a spliced user method (M3), re-keyed to the walked
     `current_type` instead of always assuming the chain's own root type --
-    the general access-chain redesign's whole point."""
+    the general access-chain redesign's whole point.
+
+    `source`/`marker_start`/`entity_label` are only needed for the entity-
+    returning-method branch below (mandatory-marking extended to methods)
+    -- `source`/`marker_start` to recurse into `_walk_access_chain` for a
+    trailing chain off the call's own return value, `entity_label` purely
+    for that recursive call's own error messages, same as `handle_func_
+    call_marker`'s own call to `_walk_access_chain` already does for a
+    marked *function* call."""
+    from squirrel_compiler.codegen.rewrite import rewrite_markers
+
     if not owner_is_real:
         if step.marked or step.marked_world:
             raise sc.err(
@@ -655,29 +671,25 @@ def _handle_instance_call(
 
     # A spliced user method (M3) -- lives directly on the wrapper, not
     # Inner, so `expr` (already wrapper-typed after walking any prior
-    # steps) needs no `._inner[]`. `step.marked` (plain `.@@name`) never
-    # applies to a method call -- a method is never a relation field.
-    # `step.marked_world` (`.@@@name`) is call-site symmetry with the
-    # method's own `@@@`-marked declaration, validated against `ctx.
-    # world_methods` (mismatch in either direction rejected, same shape as
-    # `entity_marked_world`'s own validation).
-    if step.marked:
-        raise sc.err(
-            "InvalidSquirrelSyntax: '"
-            + step.name
-            + "' isn't a relation field -- '@@"
-            + step.name
-            + "' marks a relation; a method call is never '@@'-marked"
-            " at its own call site"
-        )
+    # steps) needs no `._inner[]`. `step.marked` (plain `.@@name`) is
+    # call-site symmetry with an *entity-returning* method's own `@@`-
+    # marked declaration (mandatory-marking extended to methods --
+    # `ctx.method_returns`), the method-call parallel of `handle_func_
+    # call_marker`'s own `ENTITY_FUNC`; `step.marked_world` (`.@@@name`)
+    # is the same symmetry for a method that needs `sqrrl___world`
+    # (`ctx.world_methods`) -- a method can be neither, either, or (an
+    # entity-returning method that also needs `sqrrl___world`) the world
+    # one alone, `@@@` covering both at once, same as a top-level
+    # function's own marking never doubles up either.
     var is_world_method = current_type in ctx.world_methods and _contains(ctx.world_methods[current_type], step.name)
+    var is_entity_method = current_type in ctx.method_returns and step.name in ctx.method_returns[current_type]
     if is_world_method and not step.marked_world:
         raise sc.err(
             "InvalidSquirrelSyntax: '"
             + step.name
             + "' on '"
             + current_type
-            + "' needs 'sqrrl__world' -- write '@@@"
+            + "' needs 'sqrrl___world' -- write '@@@"
             + step.name
             + "(...)', not '"
             + step.name
@@ -689,23 +701,91 @@ def _handle_instance_call(
             + step.name
             + "' on '"
             + current_type
-            + "' doesn't need 'sqrrl__world' -- write '"
+            + "' doesn't need 'sqrrl___world' -- write '"
             + step.name
             + "(...)', not '@@@"
             + step.name
             + "(...)'"
         )
+    if is_entity_method and not is_world_method and not step.marked:
+        raise sc.err(
+            "InvalidSquirrelSyntax: '"
+            + step.name
+            + "' on '"
+            + current_type
+            + "' returns an '@@'-marked value -- write '@@"
+            + step.name
+            + "(...)', not '"
+            + step.name
+            + "(...)'"
+        )
+    if step.marked and not is_entity_method:
+        raise sc.err(
+            "InvalidSquirrelSyntax: '"
+            + step.name
+            + "' isn't a relation field -- '@@"
+            + step.name
+            + "' marks a method that returns an '@@'-marked value; '"
+            + step.name
+            + "' on '"
+            + current_type
+            + "' doesn't, so call it as '"
+            + step.name
+            + "(...)' (no '@@')"
+        )
     if not sc.try_consume("("):
         raise sc.err("InvalidSquirrelSyntax: expected '(' after '" + step.name + "'")
-    if is_world_method:
-        if not ctx.world_declared:
-            raise sc.err(
-                "InvalidSquirrelSyntax: calling '"
-                + step.name
-                + "(...)' needs 'sqrrl__world' -- open @@: or add '@@'"
-                " to this function's own parameters first"
+    if is_world_method and not ctx.world_declared:
+        raise sc.err(
+            "InvalidSquirrelSyntax: calling '"
+            + step.name
+            + "(...)' needs 'sqrrl___world' -- open @@: or add '@@'"
+            " to this function's own parameters first"
+        )
+
+    if is_entity_method:
+        var registered_type = ctx.method_returns[current_type][step.name]
+        var arg_text = sc.scan_call_args_to_close()
+        var rewritten_args = rewrite_markers(arg_text, ctx)
+        var call_end_pos = sc.pos
+        var call_text = (
+            expr + "." + step.name + "(sqrrl___world"
+            + (", " + rewritten_args if arg_text.strip().byte_length() > 0 else "")
+            + ")"
+        ) if is_world_method else (
+            expr + "." + step.name + "(" + rewritten_args + ")"
+        )
+        if sc.peek_trailing_chain_follows():
+            var steps = sc.scan_access_steps()
+            var tail = sc.scan_call_or_write_tail()
+            _walk_access_chain(
+                sc,
+                source,
+                marker_start,
+                ctx,
+                steps,
+                tail.is_call,
+                tail.write_value,
+                registered_type,
+                call_text,
+                call_end_pos,
+                entity_label + "." + step.name + "(...)",
+                pending_decl,
+                pending_for_loop_decl,
+                out,
             )
-        out += expr + "." + step.name + "(sqrrl__world"
+            return
+        out += call_text
+        if pending_decl:
+            ctx.entity_to_type[pending_decl.value()] = registered_type
+        if pending_for_loop_decl and is_container_type(registered_type):
+            ctx.entity_to_type[pending_for_loop_decl.value()] = container_element_of(registered_type)
+        pending_decl = None
+        pending_for_loop_decl = None
+        return
+
+    if is_world_method:
+        out += expr + "." + step.name + "(sqrrl___world"
         # Pure lookahead, deciding whether a ", " separator is needed
         # before whatever (if anything) follows -- `skip_whitespace`
         # only, deliberately *not* `skip_trivia`/`skip_non_code`: those
@@ -716,7 +796,7 @@ def _handle_instance_call(
         # "Renamed")`) is real content, not trivia to see past; skipping
         # it here would make this peek think no more arguments follow
         # (next real byte is `)`) and skip the separator, producing
-        # `rename(sqrrl__world"Renamed")` -- confirmed via a real end-to-
+        # `rename(sqrrl___world"Renamed")` -- confirmed via a real end-to-
         # end compile, not assumed. `sc.pos` is restored either way
         # regardless (this is a peek, not a consume) -- unaffected.
         var lookahead = sc.pos
@@ -885,7 +965,7 @@ def _handle_table_level_call(
         )
     if is_list_returning and pending_for_loop_decl:
         ctx.entity_to_type[pending_for_loop_decl.value()] = container_element_of(registered_type)
-    out += "sqrrl__world." + fa.entity + "." + method_name
+    out += "sqrrl___world." + fa.entity + "." + method_name
     pending_decl = None
     pending_for_loop_decl = None
 

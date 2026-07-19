@@ -1,12 +1,12 @@
 from squirrel_runtime.entity_storage import EntityStorage
 from squirrel_runtime.index import PlainIndex, UniqueIndex, MultiIndex, OrderedIndex
-from squirrel_runtime.json import sqrrl__JsonSerializable
+from squirrel_runtime.json import sqrrl___JsonSerializable
 from std.memory import ArcPointer
 from std.hashlib import Hasher
 from std.collections import Set
 from std.os import abort
-from sqrrl__world import sqrrl__init, sqrrl__World
-from sqrrl__json import sqrrl__begin_init_from_json, sqrrl__end_init_from_json, sqrrl__init_from_json, sqrrl__world_to_json
+from sqrrl__world import sqrrl___init, sqrrl___World
+from sqrrl__json import sqrrl___begin_init_from_json, sqrrl___end_init_from_json, sqrrl___init_from_json, sqrrl___world_to_json
 
 
 from ext_module import ExternalCity, sqrrl__ExternalCity_from_json
@@ -58,7 +58,7 @@ struct sqrrl__EmployeeInner(Movable, ImplicitlyDeletable):
         return self._name
 
 
-struct sqrrl__Employee(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable, sqrrl__JsonSerializable):
+struct sqrrl__Employee(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable, sqrrl___JsonSerializable):
     var _inner: ArcPointer[sqrrl__EmployeeInner]
 
     def __init__(out self, var inner: sqrrl__EmployeeInner):
@@ -191,7 +191,7 @@ struct sqrrl__PersonInner(Movable, ImplicitlyDeletable):
         return self._sqrrl__box
 
 
-struct sqrrl__Person(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable, sqrrl__JsonSerializable):
+struct sqrrl__Person(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable, sqrrl___JsonSerializable):
     var _inner: ArcPointer[sqrrl__PersonInner]
 
     def __init__(out self, var inner: sqrrl__PersonInner):
@@ -272,12 +272,12 @@ struct sqrrl__PersonTable(Movable):
         return out^
 
 def main() raises:
-    var sqrrl__world = sqrrl__init()
+    var sqrrl___world = sqrrl___init()
     try:
-        var sqrrl__bob = sqrrl__world.Employee.create(name = "Bob")
+        var sqrrl__bob = sqrrl___world.Employee.create(name = "Bob")
         var addr = Address(city = "Springfield", owner = sqrrl__bob)
         var meta = Tagged[String](label = "vip", count = 1)
-        var sqrrl__alice = sqrrl__world.Person.create(name = "Alice", home = addr^, meta = meta^, hometown = ExternalCity(name = "Ogdenville"), sqrrl__box = Box(sqrrl__bob))
+        var sqrrl__alice = sqrrl___world.Person.create(name = "Alice", home = addr^, meta = meta^, hometown = ExternalCity(name = "Ogdenville"), sqrrl__box = Box(sqrrl__bob))
 
         print(sqrrl__alice._inner[]._home.city)
         print(sqrrl__alice._inner[]._home.owner._inner[]._name)
@@ -296,15 +296,15 @@ def main() raises:
         print(box_a.value)
         print(box_b.value)
 
-        var dump = sqrrl__world_to_json(sqrrl__world)
+        var dump = sqrrl___world_to_json(sqrrl___world)
         print("dump:", dump)
 
         var bob_id = sqrrl__bob.id()
         var alice_id = sqrrl__alice.id()
 
-        var sqrrl__temp_keep_alives = sqrrl__begin_init_from_json(sqrrl__world, dump)
-        var sqrrl__bob2 = sqrrl__world.Employee.for_name("Bob")
-        var sqrrl__alice2 = sqrrl__world.Person.for_name("Alice")
+        var sqrrl___temp_keep_alives = sqrrl___begin_init_from_json(sqrrl___world, dump)
+        var sqrrl__bob2 = sqrrl___world.Employee.for_name("Bob")
+        var sqrrl__alice2 = sqrrl___world.Person.for_name("Alice")
 
         if sqrrl__bob2.id() != bob_id:
             raise Error("id mismatch: bob")
@@ -321,6 +321,6 @@ def main() raises:
             " external plain-value field, and a generic plain-struct field whose own"
             " bare type parameter resolves to a relation, all preserved"
         )
-        sqrrl__end_init_from_json(sqrrl__temp_keep_alives^)
+        sqrrl___end_init_from_json(sqrrl___temp_keep_alives^)
     finally:
-        sqrrl__world.sqrrl__check_no_leaks()
+        sqrrl___world.sqrrl__check_no_leaks()
