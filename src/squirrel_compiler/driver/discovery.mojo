@@ -1,6 +1,14 @@
-from squirrel_compiler.parser import Scanner, ParsedStruct, Field, FieldModifier, parse_type_expr, TypeParam
+from squirrel_compiler.parser import (
+    Scanner,
+    ParsedStruct,
+    Field,
+    FieldModifier,
+    parse_type_expr,
+    TypeParam,
+    is_directly_entity_iterable,
+)
 from squirrel_compiler.driver.file_paths import module_path_for
-from squirrel_compiler.codegen import sqrrl_prefixed, is_relation_field
+from squirrel_compiler.codegen import sqrrl_prefixed
 from squirrel_compiler.codegen.methods import world_marked_method_names
 
 
@@ -65,17 +73,22 @@ def build_struct_names(discovery: DiscoveryResult) -> Dict[String, Bool]:
 def _relation_fields_of(fields: List[Field]) -> Dict[String, String]:
     """Field name -> target struct name (or, for a `@@container` field, its
     encoded container-of-target text, e.g. `"List[Employee]"` -- possibly
-    nested, e.g. `"List[List[Employee]]"`), for every relation field in
-    `fields` -- a `multi` field's own `type_str` is already the bare,
-    `@@`-marked element type (`multi @@projects: @@Project`'s is
-    `@@Project`, same shape a bare relation field's is), so it's registered
-    here identically, no separate case needed. Plain-structs milestone:
-    `is_relation_field`/`render_relation_stripped` now also recognize a
-    (possibly nested) container-wrapped relation field (`@@container`
-    support -- see the plan's Revision 3), not just a bare `@@Type`."""
+    nested, e.g. `"List[List[Employee]]"`), for every field whose own name
+    is `@@`-marked in `fields` -- a `multi` field's own `type_str` is
+    already the bare, `@@`-marked element type (`multi @@projects:
+    @@Project`'s is `@@Project`, same shape a bare relation field's is),
+    so it's registered here identically, no separate case needed.
+
+    `is_directly_entity_iterable`, not the broader `is_relation_field` --
+    a field's own *name* only ever ends up `@@`-marked when its type is
+    directly entity-iterable (`field_parsing.mojo`'s own marking-symmetry
+    check is the actual source of truth for this; a relation confined to
+    a `Dict`'s value position, or nested too deep, never earns marking,
+    so it's never a `relation_schema` entry -- it lands in `plain_value_
+    fields` below instead, consistent with how it was actually declared)."""
     var out = Dict[String, String]()
     for field in fields:
-        if is_relation_field(field):
+        if is_directly_entity_iterable(field.type_str):
             out[field.name] = parse_type_expr(field.type_str).render_relation_stripped()
     return out^
 
@@ -98,16 +111,24 @@ def build_relation_schema(
 
 
 def _plain_value_fields_of(fields: List[Field]) -> Dict[String, String]:
-    """Field name -> declared plain type, for every *non*-relation field in
-    `fields` -- `RewriteContext.plain_value_fields`'s own per-struct entry
-    (plain-structs milestone): the general access-chain walk's
+    """Field name -> declared plain type, for every field whose own name
+    is *not* `@@`-marked in `fields` (the `_relation_fields_of` complement
+    -- see its own doc comment for exactly which fields that now
+    excludes) -- `RewriteContext.plain_value_fields`'s own per-struct
+    entry (plain-structs milestone): the general access-chain walk's
     `owner_is_real`/`owner_is_plain` dispatch validates a FIELD step's
-    `marked` flag against `relation_schema`/`plain_value_fields` uniformly,
-    regardless of which kind of struct declares the field."""
+    `marked` flag against `relation_schema`/`plain_value_fields`
+    uniformly, regardless of which kind of struct declares the field.
+    Stored `@@`-stripped (`render_relation_stripped`), same as `_relation_
+    fields_of`'s own values -- a field can land here with a relation
+    still buried in a non-directly-iterable position (`Dict[String,
+    @@Employee]`), and every downstream consumer of this map expects a
+    bare, already-rewritable-as-is type string, never one with a
+    dangling `@@` a plain (unmarked) field could never otherwise have."""
     var out = Dict[String, String]()
     for field in fields:
-        if not is_relation_field(field):
-            out[field.name] = field.type_str
+        if not is_directly_entity_iterable(field.type_str):
+            out[field.name] = parse_type_expr(field.type_str).render_relation_stripped()
     return out^
 
 

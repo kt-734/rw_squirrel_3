@@ -21,6 +21,7 @@ from squirrel_compiler.parser.text_utils import (
     find_end_of_indented_block,
 )
 from squirrel_compiler.parser.field_parsing import parse_struct_body, parse_hand_written_struct_fields
+from squirrel_compiler.parser.relation_type_text import is_directly_entity_iterable
 
 
 def parse_construct_fields(body: String) raises -> List[ConstructField]:
@@ -729,11 +730,17 @@ struct Scanner(Movable):
                 return kind
             self.pos += 1
 
-    def at_wrapped_entity_param(mut self) -> Bool:
+    def at_wrapped_entity_param(mut self) raises -> Bool:
         """True if, from the current position, the text matches
-        `Ident[@@` -- a container-wrapped entity-param type
-        (`List[@@Person]`). Restores `self.pos` before returning either
-        way -- purely a lookahead."""
+        `Ident[...]` where the bracketed body contains an `@@`-marked
+        argument *somewhere* -- immediately (`List[@@Person]`), in a
+        non-first position of a multi-argument wrapper (`Dict[String,
+        @@Employee]`), or nested inside a further container (`List[Dict[
+        String, @@Employee]]`) -- not just `Ident[@@` (a single-wrapper,
+        single-argument-only lookahead, the old, narrower version of this
+        check). Restores `self.pos` before returning either way -- purely
+        a lookahead; a genuinely unterminated `[` still raises (a real
+        syntax error, not something a lookahead should silently swallow)."""
         var save = self.pos
         var wrapper = self.scan_ident()
         if wrapper.byte_length() == 0:
@@ -743,15 +750,68 @@ struct Scanner(Movable):
         if self.peek() != UInt8(ord("[")):
             self.pos = save
             return False
-        self.pos += 1
-        self.skip_trivia()
-        var result = self.starts_with("@@")
+        var body = self.scan_bracketed_span()
+        var result = "@@" in body
         self.pos = save
         return result
 
+    def scan_entity_param_type_text(mut self) raises -> String:
+        """Scans an entity param's (or a hand-written struct's own field
+        declaration's) raw type text -- from `self.pos` up to the next
+        top-level `,`/`)`/`='/newline (ignoring any nested inside `[]`/
+        `()`/`{}`), or end of input -- same general, depth-aware shape
+        `scan_type` already uses for a `@@struct`'s own field
+        declarations, just with a wider terminator set (a `@@struct`
+        field is only ever terminated by `,`/newline; an entity param can
+        also be the last one before a def's closing `)`, or a var-decl's
+        own `= value`). `@@` markers, at any depth, are left exactly as
+        written -- `parse_type_expr`/`rewritten_field_type` (the same
+        general machinery a struct field's own type already goes
+        through) resolve the whole shape uniformly downstream, arbitrary
+        nesting and argument count included; this scan's only job is
+        finding where the type text *ends*."""
+        var start = self.pos
+        var depth = 0
+        while not self.at_end():
+            var before = self.pos
+            self.skip_non_code()
+            if self.pos != before:
+                continue
+            var b = self.peek()
+            if b == UInt8(ord("[")) or b == UInt8(ord("(")) or b == UInt8(ord("{")):
+                depth += 1
+            elif b == UInt8(ord("]")) or b == UInt8(ord(")")) or b == UInt8(ord("}")):
+                if depth == 0:
+                    break  # this closer belongs to an enclosing context
+                depth -= 1
+            elif depth == 0 and (
+                b == UInt8(ord(",")) or b == UInt8(ord("=")) or b == UInt8(ord("\n"))
+            ):
+                break
+            self.pos += 1
+        var raw = String(self.source[byte = start : self.pos])
+        return String(raw.strip())
+
     def parse_entity_param(mut self) raises -> EntityParam:
-        """Requires `self.pos` at the `@@` of `@@name: @@Type` (or the
-        container form, `@@name: Container[@@Type]`)."""
+        """Requires `self.pos` at the `@@` of `@@name: <type>` -- `<type>`
+        may be a bare relation (`@@Type`) or any container/argument shape
+        a `@@struct`'s own field declaration already supports (`List[
+        @@Type]`, `Dict[String, @@Type]`, `List[Dict[String, @@Type]]`,
+        ...), scanned generally via `scan_entity_param_type_text` rather
+        than the old single-wrapper, single-argument-only grammar.
+
+        Marking symmetry (mandatory-marking-narrowing milestone, "or
+        methods or functions" -- the same rule `field_parsing.mojo`
+        already enforces for a struct's own fields applies equally to a
+        `def`'s own parameter and a `var`-decl's own explicit type): the
+        name is marked here by construction (the `@@` this method itself
+        just consumed), so the type must actually be `is_directly_entity_
+        iterable` too, or this raises -- `@@name: Dict[String, @@Type]`
+        (a relation confined to the value position) is exactly as invalid
+        here as an unmarked struct field naming a directly-iterable type
+        would be; write the plain, unmarked form (`name: Dict[String,
+        @@Type]`) instead, letting the embedded `@@Type` resolve via the
+        ordinary type-position rewrite."""
         if not self.try_consume("@@"):
             raise self.err("InvalidSquirrelSyntax: expected '@@'")
         var name = self.scan_ident()
@@ -761,30 +821,25 @@ struct Scanner(Movable):
         if not self.try_consume(":"):
             raise self.err("InvalidSquirrelSyntax: expected ':' after entity parameter name")
         self.skip_trivia()
-
-        var wrapper: Optional[String] = None
-        if not self.starts_with("@@"):
-            var w = self.scan_ident()
-            if w.byte_length() == 0:
-                raise self.err("InvalidSquirrelSyntax: expected '@@Type' or 'Container[@@Type]' after ':'")
-            self.skip_trivia()
-            if not self.try_consume("["):
-                raise self.err("InvalidSquirrelSyntax: expected '[' after '" + w + "'")
-            self.skip_trivia()
-            wrapper = w
-
-        if not self.try_consume("@@"):
-            raise self.err("InvalidSquirrelSyntax: expected '@@Type' after ':'")
-        var type_name = self.scan_ident()
-        if type_name.byte_length() == 0:
-            raise self.err("InvalidSquirrelSyntax: expected entity parameter type")
-
-        if wrapper:
-            self.skip_trivia()
-            if not self.try_consume("]"):
-                raise self.err("InvalidSquirrelSyntax: expected ']' after '" + wrapper.value() + "[@@" + type_name + "'")
-
-        return EntityParam(name=name, type_name=type_name, wrapper=wrapper)
+        var type_text = self.scan_entity_param_type_text()
+        if type_text.byte_length() == 0:
+            raise self.err("InvalidSquirrelSyntax: expected a type after ':'")
+        if not is_directly_entity_iterable(type_text):
+            raise self.err(
+                "InvalidSquirrelSyntax: '@@"
+                + name
+                + "' -- '"
+                + type_text
+                + "' isn't directly reachable as an entity (a relation"
+                " confined to a container's non-key/non-sole position, or"
+                " nested too deep, never earns '@@' marking on the name"
+                " itself) -- write '"
+                + name
+                + ": "
+                + type_text
+                + "' (no '@@' on the name)"
+            )
+        return EntityParam(name=name, type_text=type_text)
 
     def parse_construct(mut self) raises -> Construct:
         """Requires `self.pos` at the `@@@` of a `@@@TypeName { ... }`

@@ -223,14 +223,21 @@ struct NameRef(Copyable, Movable):
 
 @fieldwise_init
 struct EntityParam(Copyable, Movable):
-    """A `@@name: @@Type` declaration -- used in a `def`'s own parameter
-    list, or a local variable declaration whose right-hand side isn't
-    itself a bare `@@`-marked expression. `wrapper` is set instead for a
-    container form, `@@name: Container[@@Type]`."""
+    """A `@@name: <type>` declaration -- used in a `def`'s own parameter
+    list, a local variable declaration whose right-hand side isn't itself
+    a bare `@@`-marked expression, or (plain-structs milestone) a hand-
+    written struct's own field declaration. `type_text` is the full, raw
+    type text with `@@` markers still embedded exactly as written --
+    `@@Type`, `Container[@@Type]`, or (mandatory-marking-era generalized
+    scan, `Scanner.scan_entity_param_type_text`) any nested/multi-
+    argument shape a `@@struct`'s own field declaration already supports
+    (`Dict[String, @@Type]`, `List[Dict[String, @@Type]]`, ...). `parse_
+    type_expr`/`rewritten_field_type` (the same general machinery a
+    struct field's own type already goes through) resolve it, not a
+    bespoke single-wrapper-single-argument grammar of this struct's own."""
 
     var name: String
-    var type_name: String
-    var wrapper: Optional[String]
+    var type_text: String
 
 
 @fieldwise_init

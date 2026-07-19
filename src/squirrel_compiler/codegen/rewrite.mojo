@@ -1,7 +1,6 @@
-from squirrel_compiler.parser import Scanner, MarkerKind
+from squirrel_compiler.parser import Scanner, MarkerKind, parse_type_expr
 from squirrel_compiler.codegen.helpers import (
     sqrrl_prefixed,
-    encode_container_type,
     is_container_type,
     container_element_of,
     rewritten_field_type,
@@ -192,16 +191,12 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
                 is_var_decl = sc.at_assignment()
                 sc.pos = save
             if is_param or is_var_decl:
-                if ep.wrapper:
-                    out += sqrrl_prefixed(ep.name) + ": " + ep.wrapper.value() + "[" + sqrrl_prefixed(ep.type_name) + "]"
-                    ctx.entity_to_type[ep.name] = encode_container_type(ep.wrapper.value(), ep.type_name)
-                else:
-                    out += sqrrl_prefixed(ep.name) + ": " + sqrrl_prefixed(ep.type_name)
-                    ctx.entity_to_type[ep.name] = ep.type_name
+                out += sqrrl_prefixed(ep.name) + ": " + rewritten_field_type(ep.type_text, ctx.plain_struct_names)
+                ctx.entity_to_type[ep.name] = parse_type_expr(ep.type_text).render_relation_stripped()
             else:
                 # A hand-written plain struct's own field declaration
                 # (plain-structs milestone, the plan's §4) -- the only
-                # other shape `@@name: @@Type` can mean, now that it's not
+                # other shape `@@name: <type>` can mean, now that it's not
                 # a def parameter or a var-decl initializer. The name
                 # stays bare (matches "constructed with plain mojo":
                 # `Address(owner=@@alice)` needs a bare keyword parameter
@@ -211,29 +206,19 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
                 # to_type` registration here -- this isn't a local-variable
                 # binding, it's a struct field.
                 #
-                # A wrapped relation field (`@@members: List[@@Employee]`)
-                # renders the same way -- bare field name, wrapper kept
-                # as-is, only the relation-typed argument gets `sqrrl__`-
-                # prefixed -- mirroring the `is_param or is_var_decl`
-                # branch's own identical wrapped-type rendering just above
-                # (minus the name prefix, which never applies to a field).
-                # `parse_entity_param`'s own scanner only ever recognizes
-                # this single-wrapper, single-argument shape (`Wrapper[
-                # @@Type]`) -- a 2-argument wrapper (`Dict[@@K, V]`) or a
-                # relation nested inside a further container (`List[Dict[
-                # String, @@Employee]]`) on a *hand-written* struct's own
-                # field declaration stays genuinely unsupported (a
-                # separate, real parser limitation, not fixed here);
-                # `@@struct`'s own fields never went through this narrower
-                # marker-scanning path at all, so those already support
-                # every shape `parse_type_expr` does, unaffected.
-                if ep.wrapper:
-                    out += (
-                        ep.name + ": " + ep.wrapper.value() + "["
-                        + rewritten_field_type("@@" + ep.type_name, ctx.plain_struct_names) + "]"
-                    )
-                else:
-                    out += ep.name + ": " + rewritten_field_type("@@" + ep.type_name, ctx.plain_struct_names)
+                # `ep.type_text` (mandatory-marking milestone: `Scanner.
+                # scan_entity_param_type_text`) is the *whole* raw type
+                # text, arbitrary nesting/argument count included -- same
+                # general `rewritten_field_type` a `@@struct`'s own field
+                # declaration already goes through, not a bespoke single-
+                # wrapper, single-argument-only rendering of this branch's
+                # own. A relation in a `Dict`'s value position (`Dict[K,
+                # @@V]`) renders and JSON-round-trips correctly here same
+                # as everywhere else in the codebase, but inherits the
+                # same pre-existing, deliberate restriction as every other
+                # Dict-typed field: iterating it only ever yields keys,
+                # never values -- not a new gap this fix introduces.
+                out += ep.name + ": " + rewritten_field_type(ep.type_text, ctx.plain_struct_names)
             pending_decl = None
             pending_for_loop_decl = None
 

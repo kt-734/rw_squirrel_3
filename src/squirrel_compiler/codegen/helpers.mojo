@@ -1,4 +1,11 @@
-from squirrel_compiler.parser import Field, FieldModifier, parse_type_expr, is_wrapped_relation_type, TypeExpr
+from squirrel_compiler.parser import (
+    Field,
+    FieldModifier,
+    parse_type_expr,
+    is_wrapped_relation_type,
+    is_directly_entity_iterable,
+    TypeExpr,
+)
 
 
 def sqrrl_prefixed(name: String) -> String:
@@ -40,10 +47,17 @@ def storage_field_name(f: Field) -> String:
     """The generated field name on `sqrrl__<Name>Inner` -- point 4 of the
     plan: every field gets a leading `_` (private storage, matching `_id`/
     `_table`'s existing convention), with `sqrrl__` added on top only for a
-    relation field (point 3: mirrors the field's own `@@`-marked
-    declaration). `_name` for a plain field, `_sqrrl__dept` for a relation
-    one."""
-    if is_relation_field(f):
+    field whose own name is `@@`-marked (point 3: mirrors the field's own
+    declaration) -- `is_directly_entity_iterable`, not the broader `is_
+    relation_field` (mandatory-marking-narrowing milestone: a relation
+    confined to a `Dict`'s value position, or nested too deep to be
+    directly reachable through this field's own container-access surface,
+    never earns `@@`-marking on the field's own name in the first place,
+    so its storage name stays plain too -- consistent with `field_parsing.
+    mojo`'s own marking-symmetry check, which is the actual source of
+    truth for whether a given field ended up marked). `_name` for a plain
+    field, `_sqrrl__dept` for a marked one."""
+    if is_directly_entity_iterable(f.type_str):
         return "_" + sqrrl_prefixed(f.name)
     return "_" + f.name
 
@@ -65,8 +79,11 @@ def param_name(f: Field) -> String:
     and the field-derived suffix of a generated method name (`set_<field>`/
     `get_<field>`/`for_<field>`/`add_to_<field>`/`remove_from_<field>` ->
     `set_sqrrl__dept`/`for_sqrrl__projects`/...). A plain field's name
-    stays bare in both cases, matching its own unmarked declaration."""
-    if is_relation_field(f):
+    stays bare in both cases, matching its own unmarked declaration --
+    `is_directly_entity_iterable`, same narrowing `storage_field_name`
+    just above already uses, and for the same reason (consistency with
+    whichever way the field's own marking-symmetry check landed)."""
+    if is_directly_entity_iterable(f.type_str):
         return sqrrl_prefixed(f.name)
     return f.name
 

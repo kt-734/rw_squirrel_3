@@ -1,6 +1,6 @@
 from squirrel_compiler.parser.ast import Field, FieldModifier
 from squirrel_compiler.parser.text_utils import is_ident_char
-from squirrel_compiler.parser.relation_type_text import is_wrapped_relation_type
+from squirrel_compiler.parser.relation_type_text import is_directly_entity_iterable
 from squirrel_compiler.parser.scanner import Scanner
 
 
@@ -87,7 +87,7 @@ def parse_struct_body(body: String, mut fields: List[Field]) raises -> String:
         if type_str.byte_length() == 0:
             raise bs.err("InvalidSquirrelSyntax: empty field type")
 
-        var type_is_relation = type_str.startswith("@@") or is_wrapped_relation_type(type_str)
+        var type_is_relation = is_directly_entity_iterable(type_str)
         if name_is_marked != type_is_relation:
             raise bs.err(
                 "InvalidSquirrelSyntax: @@ marking must match between field"
@@ -158,7 +158,7 @@ def parse_hand_written_struct_fields(body: String, mut fields: List[Field]) rais
             raise bs.err("InvalidSquirrelSyntax: empty field type")
         if type_str.startswith("Self."):
             type_str = String(type_str[byte=5 : type_str.byte_length()])
-        var type_is_relation = type_str.startswith("@@") or is_wrapped_relation_type(type_str)
+        var type_is_relation = is_directly_entity_iterable(type_str)
         if name_is_marked != type_is_relation:
             raise bs.err(
                 "InvalidSquirrelSyntax: @@ marking must match between field"

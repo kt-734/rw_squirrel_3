@@ -706,9 +706,24 @@ def _handle_instance_call(
                 " to this function's own parameters first"
             )
         out += expr + "." + step.name + "(sqrrl__world"
-        sc.skip_trivia()
+        # Pure lookahead, deciding whether a ", " separator is needed
+        # before whatever (if anything) follows -- `skip_whitespace`
+        # only, deliberately *not* `skip_trivia`/`skip_non_code`: those
+        # treat a string literal as skippable "non-code" (the same rule
+        # a comment gets, so a `@@`/`,` sitting inside either never
+        # desyncs anything mid-chain), which is wrong here specifically --
+        # a string-literal argument right after `self` (`@@eng.@@@rename(
+        # "Renamed")`) is real content, not trivia to see past; skipping
+        # it here would make this peek think no more arguments follow
+        # (next real byte is `)`) and skip the separator, producing
+        # `rename(sqrrl__world"Renamed")` -- confirmed via a real end-to-
+        # end compile, not assumed. `sc.pos` is restored either way
+        # regardless (this is a peek, not a consume) -- unaffected.
+        var lookahead = sc.pos
+        sc.skip_whitespace()
         if sc.peek() != UInt8(ord(")")):
             out += ", "
+        sc.pos = lookahead
     else:
         out += expr + "." + step.name + "("
     pending_decl = None

@@ -746,6 +746,48 @@ def test_transform_calling_spliced_methods_from_script() raises:
     assert_true("sqrrl__alice.greeting(sqrrl__world)" in out)
 
 
+def test_transform_world_method_call_site_keeps_string_literal_argument() raises:
+    """A `@@@`-marked spliced method's own call site threads `sqrrl__
+    world` as the first argument, then any further ones the DSL author
+    wrote -- `@@alice.@@@rename("Renamed")` must keep `"Renamed"`, not
+    silently drop it. Confirmed broken via a real end-to-end compile
+    before this fix: the lookahead deciding whether to insert a `", "`
+    separator called `skip_trivia` (which treats a string literal the
+    same as a comment -- both "non-code" to skip over) without restoring
+    `sc.pos` afterward, so the outer rewrite loop resumed scanning *past*
+    the literal instead of copying it through -- `rename(sqrrl__world)`,
+    the argument gone entirely, not even a leftover `""`."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Person"] = True
+    var function_returns = Dict[String, String]()
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+    var multi_fields = Dict[String, List[String]]()
+    var ordered_fields = Dict[String, List[String]]()
+    var world_methods = Dict[String, List[String]]()
+    world_methods["Person"] = List[String]()
+    world_methods["Person"].append("rename")
+
+    var src = String(
+        "@@struct @@Person:\n"
+        + "    name: String\n"
+        + "\n"
+        + "    def @@@rename(self, new_name: String) raises:\n"
+        + "        self.name = new_name\n"
+        + "\n"
+        + "def main() raises:\n"
+        + "    @@@:\n"
+        + "        var @@alice = @@@Person { .name = \"alice\" }\n"
+        + "        @@alice.@@@rename(\"Renamed\")\n"
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields,
+        multi_fields, ordered_fields, world_methods
+    )
+    assert_true('sqrrl__alice.rename(sqrrl__world, "Renamed")' in out)
+
+
 def test_transform_spliced_method_call_site_marking_mismatch_rejected() raises:
     """Both directions of call-site/declaration marking mismatch are
     rejected: calling a `@@@`-marked method without `@@@` at the call site,
@@ -1630,12 +1672,11 @@ def test_transform_plain_struct_wrapped_relation_field_declaration_rewrites() ra
     relation-typed argument gets `sqrrl__`-prefixed -- mirroring the
     `ENTITY_PARAM` marker's own identical rendering for a function
     parameter/var-decl initializer, just without the name prefix (never
-    applies to a field). `parse_entity_param`'s own scanner still only
-    recognizes this single-wrapper, single-argument shape (`Wrapper[
-    @@Type]`) -- a 2-argument wrapper (`Dict[@@K, V]`) or a relation
-    nested inside a further container on a hand-written struct's own
-    field declaration stays genuinely unsupported, a separate, narrower
-    parser limitation this doesn't touch."""
+    applies to a field). `parse_entity_param`'s own scanner now scans the
+    full type text generally (`scan_entity_param_type_text`) -- a
+    2-argument wrapper (`Dict[@@K, V]`) or a relation nested inside a
+    further container works the same way, see the dedicated tests
+    below."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     var function_returns = Dict[String, String]()
@@ -1660,6 +1701,159 @@ def test_transform_plain_struct_wrapped_relation_field_declaration_rewrites() ra
     assert_true("var members: List[sqrrl__Employee]" in out)
     assert_false("@@members" in out)
     assert_false("@@Employee" in out)
+
+
+def test_transform_plain_struct_field_with_value_position_relation_stays_unmarked() raises:
+    """Mandatory-marking-narrowing milestone: a hand-written plain
+    struct's own field whose only relation is confined to a container's
+    non-first-argument position (`Dict[String, @@Employee]`, relation in
+    the *value* position) -- or nested even further (`List[Dict[String,
+    @@Employee]]`) -- is a *plain* (unmarked) field declaration, not an
+    `@@`-marked one: `is_directly_entity_iterable` only counts a relation
+    reachable through a wrapper's own first argument, recursively (Dict
+    iteration only ever yields keys). The type itself still resolves
+    `@@Employee` -> `sqrrl__Employee` correctly wherever it appears,
+    entirely independent of the field's own (unmarked) name -- this is
+    the original notes.md ask ('does it work in plain structs with
+    List[Dict[String, @@Employee]] fields'), now genuinely general rather
+    than a single-wrapper-only special case."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    var function_returns = Dict[String, String]()
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+    var plain_struct_names = Dict[String, Bool]()
+    plain_struct_names["Roster"] = True
+
+    var src = String(
+        "struct Roster(Movable, ImplicitlyDeletable):\n"
+        + "    var members: List[Dict[String, @@Employee]]\n"
+    )
+    var out = transform_source(
+        src,
+        relation_schema,
+        struct_names,
+        function_returns,
+        unique_fields,
+        indexed_fields,
+        plain_struct_names=plain_struct_names,
+    )
+    assert_true("var members: List[Dict[String, sqrrl__Employee]]" in out)
+    assert_false("@@" in out)
+
+
+def test_transform_plain_struct_field_marking_mismatch_value_position_rejected() raises:
+    """The over-marked direction of the same rule: `@@members: Dict[
+    String, @@Employee]` (marked name, but the relation is confined to
+    the value position) is a hard `InvalidSquirrelSyntax` -- `@@` only
+    marks a field whose type is directly entity-iterable."""
+    var plain_struct_names = Dict[String, Bool]()
+    plain_struct_names["Roster"] = True
+
+    var src = String(
+        "struct Roster(Movable, ImplicitlyDeletable):\n"
+        + "    var @@members: Dict[String, @@Employee]\n"
+    )
+    var raised = False
+    try:
+        _ = transform_source(
+            src,
+            Dict[String, Dict[String, String]](),
+            Dict[String, Bool](),
+            Dict[String, String](),
+            Dict[String, List[String]](),
+            Dict[String, List[String]](),
+            plain_struct_names=plain_struct_names,
+        )
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_transform_entity_param_dict_key_position_registers_type() raises:
+    """A def parameter marked `@@` whose type is `Dict[@@Type, V]` --
+    relation in the *key* position, the one Dict iteration actually
+    yields -- is directly entity-iterable, so the marking is accepted and
+    the parameter's own type registers normally (same as a bare `@@Type`
+    or `List[@@Type]` parameter already did)."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Employee"] = True
+    var function_returns = Dict[String, String]()
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+
+    var src = String(
+        "def foo(@@scores: Dict[@@Employee, String]) raises:\n"
+        + "    for @@e in @@scores:\n"
+        + "        print(@@e.name)\n"
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+    )
+    assert_true("def foo(sqrrl__scores: Dict[sqrrl__Employee, String]) raises:" in out)
+    assert_true("print(sqrrl__e._inner[]._name)" in out)
+
+
+def test_transform_entity_param_value_position_marking_mismatch_rejected() raises:
+    """The def-parameter/var-decl side of the same mandatory-marking-
+    narrowing rule ("or methods or functions"): `@@scores: Dict[String,
+    @@Employee]` (marked name, relation confined to the value position)
+    is a hard `InvalidSquirrelSyntax` -- write the plain, unmarked form
+    instead (`scores: Dict[String, @@Employee]`), letting the embedded
+    `@@Employee` resolve via the ordinary type-position rewrite."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Employee"] = True
+    var function_returns = Dict[String, String]()
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+
+    var src = String(
+        "def foo(@@scores: Dict[String, @@Employee]) raises:\n"
+        + "    pass\n"
+    )
+    var raised = False
+    try:
+        _ = transform_source(
+            src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        )
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_transform_method_entity_param_beyond_self_registers_type() raises:
+    """Methods weren't exempt from the mandatory-marking-narrowing rule
+    ("or methods or functions") -- but they had their own, separate,
+    pre-existing gap on top: a method's own parameter list beyond `self`
+    never went through `rewrite_markers` at all (`methods.mojo` spliced
+    it in as raw text), so an `@@`-marked entity parameter there was
+    silently invalid Mojo regardless. Confirmed broken via a real
+    end-to-end compile before this fix ('e' was never constructed).
+    `def greet(self, @@e: @@Employee) -> String:` now registers `@@e`
+    into the method's own scope exactly like a top-level function's
+    parameter already did."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Employee"] = True
+    struct_names["Department"] = True
+    var function_returns = Dict[String, String]()
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+
+    var src = String(
+        "@@struct @@Department:\n"
+        + "    unique name: String\n"
+        + "\n"
+        + "    def greet(self, @@e: @@Employee) -> String:\n"
+        + "        return @@e.name\n"
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+    )
+    assert_true("def greet(self, sqrrl__e: sqrrl__Employee) -> String:" in out)
+    assert_true("return sqrrl__e._inner[]._name" in out)
 
 
 def test_transform_struct_field_referencing_plain_struct_renders_bare_type() raises:

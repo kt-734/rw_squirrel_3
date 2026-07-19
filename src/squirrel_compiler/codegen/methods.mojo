@@ -204,7 +204,13 @@ def rewrite_method_body(method_body: String, struct_name: String, ctx: RewriteCo
     var out = String()
     for span in _split_method_spans(method_body):
         var header = _parse_method_span(span, struct_name)
+
+        var method_ctx = ctx.fresh_function_scope()
+        method_ctx.entity_to_type["self"] = struct_name
+        method_ctx.world_declared = header.is_world_marked
+
         var new_header = header.indent + header.keyword + header.method_name + "("
+        var params_tail: String
         if header.is_world_marked:
             var ab = header.after_paren.as_bytes()
             var starts_with_self = header.after_paren.startswith("self") and (
@@ -229,15 +235,33 @@ def rewrite_method_body(method_body: String, struct_name: String, ctx: RewriteCo
                 var k2 = k + 1
                 while k2 < len(asb) and (asb[k2] == UInt8(ord(" ")) or asb[k2] == UInt8(ord("\t"))):
                     k2 += 1
-                new_header += ", " + String(after_self[byte = k2 : after_self.byte_length()])
+                new_header += ", "
+                params_tail = String(after_self[byte = k2 : after_self.byte_length()])
             else:
-                new_header += String(after_self[byte = k : after_self.byte_length()])
+                params_tail = String(after_self[byte = k : after_self.byte_length()])
         else:
-            new_header += header.after_paren
+            params_tail = header.after_paren
 
-        var method_ctx = ctx.fresh_function_scope()
-        method_ctx.entity_to_type["self"] = struct_name
-        method_ctx.world_declared = header.is_world_marked
+        # `params_tail` is everything from right after `self`/world (or
+        # right after the method's own opening `(`, if it's not world-
+        # marked) through the header line's own end -- any further
+        # parameters, the closing `)`, and the return-type arrow, e.g.
+        # `@@e: @@Employee) -> @@Employee:`. Previously spliced in raw,
+        # completely bypassing the marker system -- meaning an `@@`-
+        # marked *non-self* method parameter was silently invalid Mojo
+        # (`@@`/`@@Employee` copied through literally) and never even
+        # reached `entity_to_type`, regardless of anything else. Routed
+        # through the ordinary `rewrite_markers` machinery instead, same
+        # as a top-level function's own parameter list already was --
+        # `is_in_def_signature` keys off the *line* starting with `def `/
+        # `fn `, which this fragment alone never would on its own, so a
+        # throwaway synthetic prefix restores that context for the
+        # rewrite (and for `method_ctx.entity_to_type`'s own registration,
+        # which the method body's own rewrite just below then reuses),
+        # then gets stripped back off before splicing into `new_header`.
+        var synthetic_prefix = "def _("
+        var rewritten_tail = rewrite_markers(synthetic_prefix + params_tail, method_ctx)
+        new_header += String(rewritten_tail[byte = synthetic_prefix.byte_length() : rewritten_tail.byte_length()])
 
         var rewritten_body = rewrite_markers(_mark_self_field_access(header.body), method_ctx)
 

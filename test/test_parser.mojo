@@ -296,8 +296,7 @@ def test_find_next_marker_entity_param() raises:
     assert_true(kind == MarkerKind.ENTITY_PARAM)
     var ep = s.parse_entity_param()
     assert_equal(ep.name, "subject")
-    assert_equal(ep.type_name, "Person")
-    assert_false(Bool(ep.wrapper))
+    assert_equal(ep.type_text, "@@Person")
 
 
 def test_find_next_marker_return_type() raises:
