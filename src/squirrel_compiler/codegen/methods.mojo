@@ -206,8 +206,6 @@ def rewrite_method_body(method_body: String, struct_name: String, ctx: RewriteCo
         var header = _parse_method_span(span, struct_name)
 
         var method_ctx = ctx.fresh_function_scope()
-        method_ctx.entity_to_type["self"] = struct_name
-        method_ctx.world_declared = header.is_world_marked
 
         var new_header = header.indent + header.keyword + header.method_name + "("
         var params_tail: String
@@ -256,12 +254,29 @@ def rewrite_method_body(method_body: String, struct_name: String, ctx: RewriteCo
         # `is_in_def_signature` keys off the *line* starting with `def `/
         # `fn `, which this fragment alone never would on its own, so a
         # throwaway synthetic prefix restores that context for the
-        # rewrite (and for `method_ctx.entity_to_type`'s own registration,
-        # which the method body's own rewrite just below then reuses),
-        # then gets stripped back off before splicing into `new_header`.
+        # rewrite (and for `method_ctx.entity_to_type`'s own registration
+        # of any marked parameter, which the method body's own rewrite
+        # just below then reuses), then gets stripped back off before
+        # splicing into `new_header`.
+        #
+        # `rewrite_markers`'s own main loop resets `ctx.entity_to_type`/
+        # `ctx.world_declared` whenever it sees text crossing into a new
+        # top-level `def` (`crosses_top_level_def`) -- correct for the
+        # *outer*, real per-file scan, but our own synthetic `"def _("`
+        # prefix satisfies that exact same check here too, on this
+        # nested, throwaway call, wiping both right back out. Neither is
+        # seeded until *after* this call returns -- nothing in a
+        # parameter list's own type annotations needs either (no `self.
+        # field` access, no table-level call, can happen there) -- so the
+        # reset is harmless for `params_tail`'s own rewrite, and `self`/
+        # `world_declared` are exactly as the body's own rewrite needs
+        # them by the time it runs next.
         var synthetic_prefix = "def _("
         var rewritten_tail = rewrite_markers(synthetic_prefix + params_tail, method_ctx)
         new_header += String(rewritten_tail[byte = synthetic_prefix.byte_length() : rewritten_tail.byte_length()])
+
+        method_ctx.entity_to_type["self"] = struct_name
+        method_ctx.world_declared = header.is_world_marked
 
         var rewritten_body = rewrite_markers(_mark_self_field_access(header.body), method_ctx)
 
