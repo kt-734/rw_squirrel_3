@@ -23,6 +23,10 @@ def main() raises:
         print("at most 5 years:", len(@@@Employee.for_years_employed_at_most(5)))
         print("3 to 6 years inclusive:", len(@@@Employee.for_years_employed_between(3, 6)))
 
+        # direct index + chain off a table-level range-query call, no
+        # intermediate variable required
+        print("first with 3-6 years:", @@@Employee.for_years_employed_between(3, 6)[0].name)
+
         var @@ranged = @@@Employee.for_years_employed_between(0, 100)
         for @@e in @@ranged:
             print("in range:", @@e.name, @@e.years_employed)

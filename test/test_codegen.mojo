@@ -444,6 +444,53 @@ def test_transform_ordered_field_range_query_call_sites() raises:
     assert_true("sqrrl___world.Employee.for_years_employed(3)" in out)
 
 
+def test_transform_table_level_call_direct_chain_without_binding() raises:
+    """A *direct* access-chain off a table-level call's own return value,
+    with no intermediate variable and not inside a `for` loop --
+    `@@@Employee.for_years_employed_greater_than(3)[0].name` -- resolves
+    correctly. Confirmed broken via a real end-to-end compile before this
+    fix: `_handle_table_level_call` never checked whether a trailing
+    chain followed the call (unlike `handle_func_call_marker`/`_handle_
+    instance_call`, which both already did), so `[0].name` was copied
+    through as literal, unrewritten text, failing with `'sqrrl__Employee'
+    value has no attribute 'name'` two layers removed from the actual
+    cause. For-loop iteration and a bare-`Int`-returning call (`count()`)
+    are unaffected regression checks -- both already worked, and don't
+    go through the new argument-consuming/chain-detecting path at all."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Employee"] = True
+    var function_returns = Dict[String, String]()
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+    var multi_fields = Dict[String, List[String]]()
+    var ordered_fields = Dict[String, List[String]]()
+    ordered_fields["Employee"] = List[String]()
+    ordered_fields["Employee"].append("years_employed")
+
+    var src = String(
+        "@@struct @@Employee:\n"
+        + "    name: String\n"
+        + "    ordered years_employed: UInt32\n"
+        + "\n"
+        + "def main() raises:\n"
+        + "    @@@:\n"
+        + "        print(@@@Employee.for_years_employed_greater_than(3)[0].name)\n"
+        + "        for @@e in @@@Employee.for_years_employed_greater_than(3):\n"
+        + "            print(@@e.name)\n"
+        + "        print(@@@Employee.count())\n"
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields, multi_fields, ordered_fields
+    )
+    assert_true(
+        'print(sqrrl___world.Employee.for_years_employed_greater_than(3)[0]._inner[]._name)' in out
+    )
+    assert_true("for sqrrl__e in sqrrl___world.Employee.for_years_employed_greater_than(3):" in out)
+    assert_true("print(sqrrl__e._inner[]._name)" in out)
+    assert_true("print(sqrrl___world.Employee.count())" in out)
+
+
 def test_transform_method_without_world_marking() raises:
     """A method with no `@@@`-marking compiles with no `sqrrl___world`
     parameter at all -- `self.field` is ordinary bound-variable field

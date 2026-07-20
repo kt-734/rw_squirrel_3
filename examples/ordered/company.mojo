@@ -867,6 +867,10 @@ def main() raises:
         print("at most 5 years:", len(sqrrl___world.Employee.for_years_employed_at_most(5)))
         print("3 to 6 years inclusive:", len(sqrrl___world.Employee.for_years_employed_between(3, 6)))
 
+        # direct index + chain off a table-level range-query call, no
+        # intermediate variable required
+        print("first with 3-6 years:", sqrrl___world.Employee.for_years_employed_between(3, 6)[0]._inner[]._name)
+
         var sqrrl__ranged = sqrrl___world.Employee.for_years_employed_between(0, 100)
         for sqrrl__e in sqrrl__ranged:
             print("in range:", sqrrl__e._inner[]._name, sqrrl__e._inner[]._years_employed)

@@ -116,7 +116,7 @@ def handle_field_access(
                 + "(...)' needs 'sqrrl___world' -- open @@: or"
                 " add '@@' to this function's own parameters first"
             )
-        _handle_table_level_call(sc, fa, ctx, pending_decl, pending_for_loop_decl, out)
+        _handle_table_level_call(sc, source, marker_start, fa, ctx, pending_decl, pending_for_loop_decl, out)
         return
 
     # Instance access -- @@entity<steps...>, a bound variable.
@@ -838,6 +838,8 @@ def _handle_instance_call(
 
 def _handle_table_level_call(
     mut sc: Scanner,
+    source: String,
+    marker_start: Int,
     fa: FieldAccess,
     mut ctx: RewriteContext,
     mut pending_decl: Optional[String],
@@ -847,7 +849,13 @@ def _handle_table_level_call(
     """`@@@Type.method(...)` -- unchanged dispatch from before the general
     access-chain redesign, re-keyed to `fa.steps[0].name`/`.marked`
     (always exactly one FIELD step for a table-level call, `handle_field_
-    access` already validated this before calling here)."""
+    access` already validated this before calling here).
+
+    `source`/`marker_start` are only needed for the trailing-chain-
+    continuation branch below (a direct `@@@Type.for_<field>(...)[0].
+    name`, no intermediate variable) -- to recurse into `_walk_access_
+    chain` the same way `handle_func_call_marker`/`_handle_instance_call`
+    already do for a marked function/method call's own return value."""
     var field = fa.steps[0].name
     var field_marked = fa.steps[0].marked
     var is_entity_returning = False
@@ -980,18 +988,72 @@ def _handle_table_level_call(
             "for_<field>/count_<field>/group_by_<field>/count_by_<field>/"
             "distinct_<field> are, so far"
         )
-    if is_entity_returning or is_list_returning:
-        enforce_entity_binding(
-            sc.source,
-            sc.pos,
-            pending_decl,
-            ctx.entity_to_type,
+    var call_text = "sqrrl___world." + fa.entity + "." + method_name
+    if not (is_entity_returning or is_list_returning):
+        # A bare-`Int`-returning call (`count()`/`count_<field>(...)`) --
+        # nothing to chain off, so this stays exactly as before: emit up
+        # through the method name only (not even the call's own `(`),
+        # letting the outer rewrite loop continue copying the argument
+        # list (and anything after) verbatim, any embedded `@@` markers
+        # rewritten naturally along the way.
+        out += call_text
+        pending_decl = None
+        pending_for_loop_decl = None
+        return
+
+    from squirrel_compiler.codegen.rewrite import rewrite_markers
+
+    # An entity/container-returning table-level call consumes its own
+    # argument list synchronously (mirroring `handle_func_call_marker`'s
+    # own shape), so `sc.pos` can land right past the matching `)` and a
+    # trailing `.field`/`[index]` chain (if any) can be detected and
+    # handed to `_walk_access_chain`, seeded with the call's own
+    # registered return type -- giving a table-level call the same
+    # direct-chain-off-a-call parity a marked function/method call
+    # already has (`@@@Type.for_<field>(...)[0].name`, no intermediate
+    # variable). Confirmed missing via a real end-to-end compile before
+    # this fix: `[0].name` was copied through as literal, unrewritten
+    # text, failing with `'sqrrl__Employee' value has no attribute
+    # 'name'` two layers removed from the actual cause.
+    if not sc.try_consume("("):
+        raise sc.err("InvalidSquirrelSyntax: expected '(' after '" + field + "'")
+    var arg_text = sc.scan_call_args_to_close()
+    var rewritten_args = rewrite_markers(arg_text, ctx)
+    var call_end_pos = sc.pos
+    call_text += "(" + rewritten_args + ")"
+
+    if sc.peek_trailing_chain_follows():
+        var steps = sc.scan_access_steps()
+        var tail = sc.scan_call_or_write_tail()
+        _walk_access_chain(
+            sc,
+            source,
+            marker_start,
+            ctx,
+            steps,
+            tail.is_call,
+            tail.write_value,
             registered_type,
+            call_text,
+            call_end_pos,
             fa.entity + "." + field + "(...)",
+            pending_decl,
+            pending_for_loop_decl,
+            out,
         )
+        return
+
+    enforce_entity_binding(
+        sc.source,
+        sc.pos,
+        pending_decl,
+        ctx.entity_to_type,
+        registered_type,
+        fa.entity + "." + field + "(...)",
+    )
     if is_list_returning and pending_for_loop_decl:
         ctx.entity_to_type[pending_for_loop_decl.value()] = container_element_of(registered_type)
-    out += "sqrrl___world." + fa.entity + "." + method_name
+    out += call_text
     pending_decl = None
     pending_for_loop_decl = None
 
