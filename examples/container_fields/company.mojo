@@ -308,7 +308,7 @@ def main() raises:
         print(sqrrl__eng._inner[]._sqrrl__leads["primary"]._inner[]._name)
         print(sqrrl__eng._inner[]._groups[0][0], sqrrl__eng._inner[]._groups[0][1], sqrrl__eng._inner[]._groups[1][0])
         print(sqrrl__eng._inner[]._ring[0], sqrrl__eng._inner[]._ring[1])
-        print(sqrrl__eng._inner[]._grid.get("p"), sqrrl__eng._inner[]._grid.get("q"))
+        print(sqrrl__eng._inner[]._grid["p"], sqrrl__eng._inner[]._grid["q"])
 
         sqrrl__eng._inner[]._sqrrl__members[0]._inner[].set_name("Alicia");
         print(sqrrl__eng._inner[]._sqrrl__members[0]._inner[]._name)
@@ -342,7 +342,7 @@ def main() raises:
         print(sqrrl__eng2._inner[]._sqrrl__leads["primary"]._inner[]._name)
         print(sqrrl__eng2._inner[]._groups[0][0], sqrrl__eng2._inner[]._groups[0][1], sqrrl__eng2._inner[]._groups[1][0])
         print(sqrrl__eng2._inner[]._ring[0], sqrrl__eng2._inner[]._ring[1])
-        print(sqrrl__eng2._inner[]._grid.get("p"), sqrrl__eng2._inner[]._grid.get("q"))
+        print(sqrrl__eng2._inner[]._grid["p"], sqrrl__eng2._inner[]._grid["q"])
         print(
             "reload OK: List/Set/Optional/Dict relations (key or value position), a nested"
             " List, and custom one- and two-argument containers all preserved"

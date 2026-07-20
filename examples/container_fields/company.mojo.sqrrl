@@ -48,7 +48,7 @@ def main() raises:
         print(@@eng.@@leads["primary"].name)
         print(@@eng.groups[0][0], @@eng.groups[0][1], @@eng.groups[1][0])
         print(@@eng.ring[0], @@eng.ring[1])
-        print(@@eng.grid.get("p"), @@eng.grid.get("q"))
+        print(@@eng.grid["p"], @@eng.grid["q"])
 
         @@eng.@@members[0].name = "Alicia"
         print(@@eng.@@members[0].name)
@@ -82,7 +82,7 @@ def main() raises:
         print(@@eng2.@@leads["primary"].name)
         print(@@eng2.groups[0][0], @@eng2.groups[0][1], @@eng2.groups[1][0])
         print(@@eng2.ring[0], @@eng2.ring[1])
-        print(@@eng2.grid.get("p"), @@eng2.grid.get("q"))
+        print(@@eng2.grid["p"], @@eng2.grid["q"])
         print(
             "reload OK: List/Set/Optional/Dict relations (key or value position), a nested"
             " List, and custom one- and two-argument containers all preserved"
