@@ -2086,11 +2086,17 @@ def test_transform_plain_struct_field_declaration_rewrites() raises:
     """A hand-written plain struct's own `var @@owner: @@Employee` field
     declaration (no `=`, not a def parameter -- previously simply
     unreachable syntax, now the *only* thing that shape can mean, plan's
-    §4) rewrites the *type* only -- the name stays bare (matches
-    "constructed with plain Mojo": `Address(owner=@@alice)` needs a bare
-    keyword parameter to match). A plain `var city: String` field (no `@@`
-    at all) is untouched, passed through byte-for-byte like any other
-    hand-written Mojo the compiler doesn't recognize."""
+    §4) rewrites both the name and the type -- `sqrrl__owner: sqrrl__
+    Employee`, the same collision-proof `sqrrl__` prefix a real `@@struct`
+    field's own name always gets, closing a real gap (an unprefixed
+    field name could collide with a Mojo reserved word, with zero DSL-
+    level protection). Since this is an `@fieldwise_init` struct, the
+    constructor's own keyword argument name changes to match too --
+    `Address(@@owner=@@alice)`, the `MarkerKind.CONSTRUCT_KWARG` shape
+    (see the dedicated construct-kwarg tests), not the old bare `owner=`.
+    A plain `var city: String` field (no `@@` at all) is untouched, passed
+    through byte-for-byte like any other hand-written Mojo the compiler
+    doesn't recognize."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     var function_returns = Dict[String, String]()
@@ -2114,7 +2120,7 @@ def test_transform_plain_struct_field_declaration_rewrites() raises:
         plain_struct_names=plain_struct_names,
     )
     assert_true("var city: String" in out)
-    assert_true("var owner: sqrrl__Employee" in out)
+    assert_true("var sqrrl__owner: sqrrl__Employee" in out)
     assert_false("@@owner" in out)
     assert_false("@@Employee" in out)
 
@@ -2125,15 +2131,12 @@ def test_transform_plain_struct_wrapped_relation_field_declaration_rewrites() ra
     raise outright ("a wrapped/container relation field isn't supported
     as a hand-written struct's own field declaration yet"), an explicit,
     honest gap the code itself flagged. Renders the same way the bare
-    case already does -- bare field name, wrapper kept as-is, only the
-    relation-typed argument gets `sqrrl__`-prefixed -- mirroring the
-    `ENTITY_PARAM` marker's own identical rendering for a function
-    parameter/var-decl initializer, just without the name prefix (never
-    applies to a field). `parse_entity_param`'s own scanner now scans the
-    full type text generally (`scan_entity_param_type_text`) -- a
-    2-argument wrapper (`Dict[@@K, V]`) or a relation nested inside a
-    further container works the same way, see the dedicated tests
-    below."""
+    case already does -- name `sqrrl__`-prefixed, wrapper kept as-is, the
+    relation-typed argument also `sqrrl__`-prefixed. `parse_entity_param`'s
+    own scanner now scans the full type text generally (`scan_entity_
+    param_type_text`) -- a 2-argument wrapper (`Dict[@@K, V]`) or a
+    relation nested inside a further container works the same way, see
+    the dedicated tests below."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     var function_returns = Dict[String, String]()
@@ -2155,7 +2158,7 @@ def test_transform_plain_struct_wrapped_relation_field_declaration_rewrites() ra
         indexed_fields,
         plain_struct_names=plain_struct_names,
     )
-    assert_true("var members: List[sqrrl__Employee]" in out)
+    assert_true("var sqrrl__members: List[sqrrl__Employee]" in out)
     assert_false("@@members" in out)
     assert_false("@@Employee" in out)
 
@@ -2386,7 +2389,7 @@ def test_transform_real_plain_real_hop_chain_read_and_write() raises:
         "def main() raises:\n"
         + "    @@@:\n"
         + "        var @@bob = @@@Employee { .name = \"Bob\" }\n"
-        + "        var addr = Address(city = \"Springfield\", owner = @@bob)\n"
+        + "        var addr = Address(city = \"Springfield\", @@owner = @@bob)\n"
         + "        var @@alice = @@@Person { .name = \"Alice\", .home = addr }\n"
         + "        print(@@alice.home.city)\n"
         + "        print(@@alice.home.@@owner.name)\n"
@@ -2404,18 +2407,19 @@ def test_transform_real_plain_real_hop_chain_read_and_write() raises:
         plain_value_fields=plain_value_fields,
     )
     # Construction: the plain-struct-typed construct-field value gets `^`
-    # (Address isn't ImplicitlyCopyable) -- and, separately, an `@@`-marked
-    # argument inside ordinary hand-written Mojo (`Address(..., owner =
-    # @@bob)`) rewrites correctly with zero construct-specific handling.
+    # (Address isn't ImplicitlyCopyable) -- and, separately, `Address(...,
+    # @@owner = @@bob)`'s own marked keyword argument (`MarkerKind.
+    # CONSTRUCT_KWARG`) rewrites to the field's real, `sqrrl__`-prefixed
+    # name, matching its own declaration.
     assert_true('sqrrl___world.Person.create(name = "Alice", home = addr^)' in out)
-    assert_true("Address(city = \"Springfield\", owner = sqrrl__bob)" in out)
+    assert_true("Address(city = \"Springfield\", sqrrl__owner = sqrrl__bob)" in out)
     # Read chain: real -> plain (no deref) -> real (._inner[] again).
     assert_true("sqrrl__alice._inner[]._home.city" in out)
-    assert_true("sqrrl__alice._inner[]._home.owner._inner[]._name" in out)
-    # Write chain: direct assignment on the plain struct's own bare field,
-    # at both depths (no set_<field> -- Address has no generated setters).
+    assert_true("sqrrl__alice._inner[]._home.sqrrl__owner._inner[]._name" in out)
+    # Write chain: direct assignment on the plain struct's own field, at
+    # both depths (no set_<field> -- Address has no generated setters).
     assert_true('sqrrl__alice._inner[]._home.city = "Shelbyville";' in out)
-    assert_true("sqrrl__alice._inner[]._home.owner = sqrrl__bob;" in out)
+    assert_true("sqrrl__alice._inner[]._home.sqrrl__owner = sqrrl__bob;" in out)
 
 
 def test_transform_generic_plain_struct_field_access_not_treated_as_container() raises:

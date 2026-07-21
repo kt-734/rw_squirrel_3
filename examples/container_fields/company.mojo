@@ -9,8 +9,8 @@ from sqrrl__world import sqrrl___init, sqrrl___World
 from sqrrl__json import sqrrl___begin_init_from_json, sqrrl___end_init_from_json, sqrrl___init_from_json, sqrrl___world_to_json
 
 
-from ring_module import Ring, sqrrl__Ring_json_to_list, sqrrl__Ring_json_from_list
-from grid_module import Grid, sqrrl__Grid_json_to_pairs, sqrrl__Grid_json_from_pairs
+from ring_module import Ring
+from grid_module import Grid
 
 @fieldwise_init
 struct sqrrl__EmployeeInner(Movable, ImplicitlyDeletable):

@@ -189,10 +189,18 @@ struct FieldAccess(Copyable, Movable):
     whether `entity` is a bound variable (requiring plain `@@`) or a
     struct type name doing a table-level call (requiring `@@@`) -- that's
     resolved later in `rewrite_field_access.mojo`, which validates this
-    flag against `ctx.entity_to_type` once it knows which case it is."""
+    flag against `ctx.entity_to_type` once it knows which case it is.
+
+    `entity_is_bare` is true when `entity` carried no `@@` marker at all
+    -- a plain-struct-typed local variable's own name (`n.@@ref`, `Scanner.
+    bare_root_before_dot`'s own shape). `entity` itself is never rewritten
+    for this case (no `sqrrl__` prefix -- the name was never marked, so
+    the generated name is identical to the source one); only marked
+    *steps* further down the chain still go through the usual rewriting."""
 
     var entity: String
     var entity_marked_world: Bool
+    var entity_is_bare: Bool
     var steps: List[AccessStep]
     var is_call: Bool
     var write_value: Optional[String]
@@ -241,16 +249,115 @@ struct EntityParam(Copyable, Movable):
 
 
 @fieldwise_init
+struct PlainVarDecl(Copyable, Movable):
+    """`[var ]<name>: <Type>` -- a *bare* (never `@@`-marked) local
+    variable, def-parameter, or hand-written-struct-field name with an
+    explicit type annotation, `type_text` either a single identifier
+    (`Note`) or a container of one (`List[Note]`), raw and un-rewritten
+    -- `type_text` can still itself embed a genuine `@@`-marked relation
+    reference even though `name` never carries `@@` at all (`members:
+    List[Dict[String, @@Employee]]`, a relation confined to a position
+    that doesn't require the *field's* own name to be marked): the
+    caller must run `type_text` through `rewritten_field_type` before
+    emitting it, the same general function `EntityParam`'s own hand-
+    written-struct-field branch already relies on for the identical
+    purpose -- never copy `type_text` through raw. `prefix_text` is
+    everything from the marker's own start through the declaration's `:`
+    and its trailing whitespace, captured verbatim (preserving whether
+    `var ` was actually present, and the source's own original spacing)
+    for the caller to re-emit unchanged ahead of the rewritten type.
+
+    Unlike `EntityParam`, `name` is never itself `@@`-prefixed (a plain
+    struct's own value never carries `@@` on the variable holding it --
+    only a field *access* through it can be marked, e.g. `n.@@ref`) --
+    this exists purely so a later marked field-access chain rooted at
+    `name` can resolve `type_text` as its starting type, the same way a
+    `@@Type{...}` construct or an `EntityParam` already lets a *marked*
+    name do.
+
+    `type_is_inferred` is True for the one remaining shape that needs no
+    explicit annotation at all: a var-decl whose initializer is itself a
+    constructor-call-shaped expression (`var addresses = List[Address]
+    ()`, `type_text` = `List[Address]`, inferred from the constructor's
+    own head rather than a written-out `: List[Address]`) -- the plain-
+    struct-local analogue of `handle_name_ref`'s own marked-var-decl
+    fallback (`var @@x = List[@@Type]()`, no explicit `@@Type` needed
+    either). When True, `type_text` is for *registration only*: the
+    constructor call itself is left unconsumed for the ordinary scan to
+    re-discover and emit normally (any `@@`-marked argument inside it
+    still needs that), so the caller must NOT also emit `type_text` --
+    doing so would duplicate it, since the same text reappears right
+    after `prefix_text` in the source, about to be scanned again."""
+
+    var name: String
+    var prefix_text: String
+    var type_text: String
+    var type_is_inferred: Bool
+
+
+@fieldwise_init
+struct PlainForLoop(Copyable, Movable):
+    """`for [var/ref ]<loop_var> in <container>:` -- both the loop
+    variable and the iterated expression bare (never `@@`-marked). The
+    iterated expression is either a single name (`for n in notes:`,
+    `container_name` alone, `is_call=False`) or a single bare function
+    call (`for n in get_notes(@@b):`, `is_call=True`, `arg_text` the
+    call's own raw, unrewritten argument-list text) -- not a full
+    arbitrary expression either way (`for n in some_dict.values():`
+    still isn't covered). Exists purely so `rewrite.mojo`'s own handler
+    can look up `container_name` in `ctx.entity_to_type` (the variable
+    case) or `ctx.bare_function_returns` (the call case) and, if it's a
+    container type, register `loop_var` against its element type -- the
+    bare-name/bare-call equivalent of `MarkerKind.FOR_ENTITY_LOOP`'s own
+    `pending_for_loop_decl` mechanism, which only ever triggers for a
+    `@@`-marked loop variable.
+
+    `binding_prefix` is `"var"`/`"ref"` if the source wrote one before
+    `loop_var`, else empty -- needed because the `is_call` case
+    reconstructs its own output text from parsed pieces rather than
+    copying the matched span verbatim (the non-call case's own `rewrite.
+    mojo` handler just copies `source[start:end]`, `var`/`ref` included
+    for free); without threading this through, the reconstruction
+    silently dropped it -- confirmed via a real compile: `for ref a in
+    get_addrs():` generated `for a in get_addrs():`, silently changing
+    the loop binding's own mutability semantics from the source."""
+
+    var loop_var: String
+    var container_name: String
+    var is_call: Bool
+    var arg_text: String
+    var binding_prefix: String
+
+
+@fieldwise_init
+struct BareForLoopHeader(Copyable, Movable):
+    """`for [var/ref ]<loop_var> in` -- `Scanner.parse_bare_for_loop_
+    over_marked_chain`'s own return value, split into pieces since its
+    caller (`rewrite.mojo`'s `BARE_FOR_ENTITY_LOOP` handler) always
+    reconstructs the output text (never copies verbatim -- the `@@`-
+    marked chain that follows always needs the ordinary marker-scanning
+    loop to continue from right after `in`, unlike `PLAIN_FOR_LOOP`'s own
+    non-call case) and needs `binding_prefix` (`"var"`/`"ref"`/empty, see
+    `PlainForLoop`'s own doc comment for why this matters) threaded back
+    in alongside `loop_var` to avoid the same silent-drop bug."""
+
+    var loop_var: String
+    var binding_prefix: String
+
+
+@fieldwise_init
 struct MarkerKind(ImplicitlyCopyable, Movable, Equatable):
     """What `Scanner.find_next_marker` found. Mojo has no `enum` keyword --
     a struct wrapping a discriminant, with named `comptime` values.
 
     Slimmed from rw_squirrel_2 for M1's scope (see the plan's Milestones
-    section): drops `PLAIN_VAR_DECL` (plain-struct-typed locals, deferred
-    alongside plain structs generally, M2+). `BEGIN_INIT_FROM_JSON`/
-    `END_INIT_FROM_JSON`/`INIT_FROM_JSON` (whole-world JSON serialization)
-    and `TO_JSON` land in M5, filling the three gaps this struct's own
-    numbering had already reserved for them plus one new value."""
+    section): originally dropped `PLAIN_VAR_DECL` (plain-struct-typed
+    locals, deferred alongside plain structs generally, M2+) -- since
+    built (plain-structs milestone), see `Scanner.at_plain_var_decl`/
+    `parse_plain_var_decl`. `BEGIN_INIT_FROM_JSON`/`END_INIT_FROM_JSON`/
+    `INIT_FROM_JSON` (whole-world JSON serialization) and `TO_JSON` land in
+    M5, filling the three gaps this struct's own numbering had already
+    reserved for them plus one new value."""
 
     var value: Int
 
@@ -270,6 +377,15 @@ struct MarkerKind(ImplicitlyCopyable, Movable, Equatable):
     comptime WORLD_SCOPE = Self(13)
     comptime TO_JSON = Self(15)
     comptime ENTITY_FUNC = Self(16)
+    comptime CONSTRUCT_KWARG = Self(17)
+    comptime PLAIN_VAR_DECL = Self(18)
+    comptime PLAIN_FOR_LOOP = Self(19)
+    comptime BARE_CALL_CHAIN = Self(20)
+    comptime BARE_FOR_ENTITY_LOOP = Self(21)
+    comptime BARE_VAR_DECL_OVER_ENTITY = Self(22)
+    comptime BARE_ROOTED_CHAIN = Self(23)
+    comptime BARE_VAR_DECL_OVER_BARE_CHAIN = Self(24)
+    comptime BARE_FOR_LOOP_OVER_BARE_CHAIN = Self(25)
 
     def __eq__(self, other: Self) -> Bool:
         return self.value == other.value

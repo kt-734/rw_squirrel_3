@@ -4,8 +4,8 @@ from squirrel_runtime.json import sqrrl___JsonScanner, sqrrl__json_string_litera
 from sqrrl__world import sqrrl___World, sqrrl___init
 from company import sqrrl__Employee, sqrrl__EmployeeInner, sqrrl__EmployeeTable
 from company import sqrrl__Department, sqrrl__DepartmentInner, sqrrl__DepartmentTable
-from company import Ring, sqrrl__Ring_json_to_list, sqrrl__Ring_json_from_list
-from company import Grid, sqrrl__Grid_json_to_pairs, sqrrl__Grid_json_from_pairs
+from ring_module import Ring, sqrrl__Ring_json_to_list, sqrrl__Ring_json_from_list
+from grid_module import Grid, sqrrl__Grid_json_to_pairs, sqrrl__Grid_json_from_pairs
 
 
 def list_to_json[T: Movable](lst: List[T]) -> String:

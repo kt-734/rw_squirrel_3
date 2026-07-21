@@ -104,13 +104,21 @@ def parse_struct_body(body: String, mut fields: List[Field]) raises -> String:
         _ = bs.try_consume(",")
 
 
-def parse_hand_written_struct_fields(body: String, mut fields: List[Field]) raises:
+def parse_hand_written_struct_fields(body: String, mut fields: List[Field]) raises -> String:
     """Extracts a hand-written (plain-structs milestone) struct's own `var
     name: Type`/`var @@name: @@Type` field declarations from `body`
     (already isolated via `Scanner.scan_indented_block`, same as `parse_
     struct_body`'s own caller), stopping at the first `def`/`fn` -- methods
-    are real, hand-written Mojo, never rewritten, so there's nothing
-    further for this read-only structural pass to extract.
+    are real, hand-written Mojo, never rewritten *in place*, but their own
+    raw text (from that first `def`/`fn` line onward) is captured and
+    returned regardless -- mirrors `parse_struct_body`'s own identical
+    return-the-suffix behavior exactly, so a plain struct's own methods can
+    be discovered (bare return-type text via `codegen/methods.mojo`'s
+    `bare_method_returns`, reused as-is) the same way an `@@struct`'s own
+    already are, letting a chain continue off a plain struct's own bare
+    method call (`addr2.get_extra().@@dept.name`) instead of the
+    "always a direct, untracked passthrough" fallback that's still correct
+    for anything this discovery pass doesn't find.
 
     Unlike `parse_struct_body`, no modifier keywords are ever recognized:
     `unique`/`indexed`/`multi`/`ordered`/`stats` are backward-index
@@ -130,11 +138,15 @@ def parse_hand_written_struct_fields(body: String, mut fields: List[Field]) rais
     while True:
         bs.skip_trivia()
         if bs.at_end():
-            return
+            return String()
         if (bs.starts_with("def") and not is_ident_char(bs.peek_at(3))) or (
             bs.starts_with("fn") and not is_ident_char(bs.peek_at(2))
         ):
-            return
+            var line_start = bs.pos
+            var body_bytes = body.as_bytes()
+            while line_start > 0 and body_bytes[line_start - 1] != UInt8(ord("\n")):
+                line_start -= 1
+            return String(body[byte = line_start : body.byte_length()])
         if not (bs.starts_with("var") and not is_ident_char(bs.peek_at(3))):
             raise bs.err(
                 "InvalidSquirrelSyntax: expected a 'var name: Type' field"

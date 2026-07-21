@@ -10,5 +10,5 @@ from schema.person import sqrrl__Person
 
 @fieldwise_init
 struct Assignment(Copyable, Movable, ImplicitlyDeletable):
-    var person: sqrrl__Person
+    var sqrrl__person: sqrrl__Person
     var role: String

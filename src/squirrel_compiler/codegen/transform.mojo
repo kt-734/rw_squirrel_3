@@ -17,6 +17,8 @@ def transform_source(
     plain_value_fields: Dict[String, Dict[String, String]] = Dict[String, Dict[String, String]](),
     json_used: Bool = False,
     method_returns: Dict[String, Dict[String, String]] = Dict[String, Dict[String, String]](),
+    bare_function_returns: Dict[String, String] = Dict[String, String](),
+    bare_method_returns: Dict[String, Dict[String, String]] = Dict[String, Dict[String, String]](),
 ) raises -> String:
     """Entry point for converting one whole `.mojo.sqrrl` file: builds a
     fresh `RewriteContext` and hands off to `rewrite_markers`. `json_used`
@@ -40,6 +42,8 @@ def transform_source(
         stats_fields=stats_fields.copy(),
         plain_struct_names=plain_struct_names.copy(),
         plain_value_fields=plain_value_fields.copy(),
+        bare_function_returns=bare_function_returns.copy(),
+        bare_method_returns=bare_method_returns.copy(),
         entity_to_type=Dict[String, String](),
         world_declared=False,
         temp_keep_alives_declared=False,

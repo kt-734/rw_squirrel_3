@@ -1,5 +1,6 @@
 from squirrel_compiler.parser import Scanner
-from squirrel_compiler.codegen import scan_entity_return_shape
+from squirrel_compiler.codegen import scan_entity_return_shape, scan_bare_return_type_text
+from squirrel_compiler.driver.file_paths import module_path_for
 
 
 def build_function_returns(sqrrl_files: List[String]) raises -> Dict[String, String]:
@@ -92,6 +93,186 @@ def build_function_returns(sqrrl_files: List[String]) raises -> Dict[String, Str
                 sc.pos = line_end
                 continue
             sc.pos += 1
+    return out^
+
+
+def build_bare_plain_function_returns(sqrrl_files: List[String]) raises -> Dict[String, String]:
+    """Bare (never `@@`/`@@@`-marked) top-level function name -> its raw,
+    unstripped return-type text, for every `def funcName(...) -> <Type>:`
+    signature project-wide whose own name carries no marking at all --
+    the counterpart `build_function_returns` doesn't track: a bare
+    function's return type is allowed to be anything at all (mandatory
+    marking only requires marking when the return is entity-*shaped*),
+    including a plain struct or a container of one, but until now
+    nothing recorded what that type actually *is* -- so a direct chain
+    off such a function's own call result (`make_note(@@b).@@ref.name`,
+    no intermediate variable) or a direct `for` loop over one (`for n in
+    get_notes():`) had no way to resolve, the bare-call analogue of
+    `PLAIN_VAR_DECL`'s own "no explicit signal, no registration" gap for
+    named variables.
+
+    Registers unconditionally, regardless of whether the return type
+    turns out to be a plain struct/container of one at all (`-> Int`
+    included) -- the exact same "always register, harmless" reasoning
+    `PLAIN_VAR_DECL` already uses: the consumer checks `plain_struct_
+    names`/`is_container_type` before ever acting on an entry, so an
+    irrelevant one is just dead, unused data."""
+    var out = Dict[String, String]()
+    for path in sqrrl_files:
+        var f = open(path, "r")
+        var source = f.read()
+        f.close()
+        var bytes = source.as_bytes()
+        var sc = Scanner(source)
+        while True:
+            sc.skip_trivia()
+            if sc.at_end():
+                break
+            if sc.starts_with("def ") and not sc.starts_with("def @@"):
+                var line_start = sc.pos
+                var line_end = line_start
+                while line_end < len(bytes) and bytes[line_end] != UInt8(ord("\n")):
+                    line_end += 1
+                # Top-level only -- an indented `def` is a method inside
+                # some struct's own body (`@@struct`, or a hand-written
+                # plain struct), never a genuinely bare top-level
+                # function; registering it *here* too, in this flat,
+                # receiver-unaware map, is a real collision risk once two
+                # different structs happen to declare a same-named method
+                # (confirmed via a real compile: `Widget.clone()` and
+                # `Address.clone()` collided, last-scanned-wins, and a
+                # completely unrelated call silently used the wrong
+                # one's return type) -- a method's own return type
+                # belongs in `bare_method_returns`/`build_plain_struct_
+                # bare_method_returns` instead, correctly scoped per
+                # struct name, never here.
+                var back = line_start
+                while back > 0 and bytes[back - 1] != UInt8(ord("\n")):
+                    back -= 1
+                var is_top_level = back == line_start
+                if is_top_level:
+                    var line_sc = Scanner(String(source[byte = line_start : line_end]))
+                    _ = line_sc.try_consume("def ")
+                    var func_name = line_sc.scan_ident()
+                    var raw_type = scan_bare_return_type_text(
+                        String(line_sc.source[byte = line_sc.pos : line_sc.source.byte_length()])
+                    )
+                    if func_name.byte_length() > 0 and raw_type:
+                        out[func_name] = raw_type.value()
+                sc.pos = line_end
+                continue
+            sc.pos += 1
+    return out^
+
+
+def build_function_symbols(sqrrl_files: List[String], target_root: String) raises -> Dict[String, String]:
+    """`sqrrl__<name>` (a top-level `@@`/`@@@`-marked function's own
+    generated name -- the same `sqrrl_prefixed` spelling both a
+    definition and a call site always get, `rewrite_field_access.mojo`'s
+    `handle_func_call_marker`) -> the module that declares it, for every
+    marked top-level function project-wide. Gives a cross-file call
+    (`@@@make_vendor(...)` declared in one file, called from another) the
+    same automatic-import treatment `build_entity_symbols` already gives
+    every `@@struct`'s own wrapper type -- merged into the very same
+    `entity_symbols`/`cross_file_symbols` map in `convert_directory.mojo`,
+    so `emit_file`'s existing "scan my own transformed text for whichever
+    of these symbols actually appear, import the ones that do" mechanism
+    (`driver/emit_file.mojo`) needs no changes at all to also cover
+    functions.
+
+    A bare (unmarked) function is deliberately excluded: its own
+    generated name carries no `sqrrl__` prefix, so auto-importing by
+    scanning for a plain word match would risk colliding with an
+    unrelated identifier (a stdlib name, a local variable) that merely
+    happens to share the same short, common spelling -- the `sqrrl__`
+    prefix is exactly what makes this scan-for-symbol mechanism safe for
+    a marked function/struct in the first place."""
+    var symbol_of = Dict[String, String]()
+    for path in sqrrl_files:
+        var module_path = module_path_for(path, target_root)
+        var f = open(path, "r")
+        var source = f.read()
+        f.close()
+        var bytes = source.as_bytes()
+        var sc = Scanner(source)
+        while True:
+            sc.skip_trivia()
+            if sc.at_end():
+                break
+            var is_world_marked = sc.starts_with("def @@@")
+            var is_entity_marked = sc.starts_with("def @@") and not is_world_marked
+            if is_world_marked or is_entity_marked:
+                var line_start = sc.pos
+                var line_end = line_start
+                while line_end < len(bytes) and bytes[line_end] != UInt8(ord("\n")):
+                    line_end += 1
+                var line_sc = Scanner(String(source[byte = line_start : line_end]))
+                _ = line_sc.try_consume("def ")
+                if is_world_marked:
+                    _ = line_sc.try_consume("@@@")
+                else:
+                    _ = line_sc.try_consume("@@")
+                var func_name = line_sc.scan_ident()
+                if func_name.byte_length() > 0:
+                    symbol_of["sqrrl__" + func_name] = module_path
+                sc.pos = line_end
+                continue
+            sc.pos += 1
+    return symbol_of^
+
+
+def discover_raw_imports(sqrrl_files: List[String]) raises -> Dict[String, String]:
+    """Every project-wide `from <module> import <name>[, <name>...]`
+    line's own *raw*, hand-written text (a `.mojo.sqrrl` file is free to
+    mix DSL declarations with plain pass-through import lines; a def's
+    own signature is assumed to fit on one line, and so is an import) --
+    imported symbol name -> the module it's imported from. Last import
+    wins if the same name is somehow imported from two different modules
+    project-wide (not expected in practice).
+
+    The one consumer this exists for: a *custom container wrapper*'s own
+    JSON escape-hatch companions (`sqrrl__<Wrapper>_json_to_pairs`/`_from_
+    pairs`/etc., `driver/json_module.mojo`) are hand-written raw Mojo the
+    compiler never parses a declaration for at all -- unlike a real
+    `@@struct`/plain struct's own `module_of` map, there's no way to know
+    a custom wrapper's *true* defining module just from discovery. Before
+    this existed, `json_module.mojo` fell back to "whichever struct's own
+    field first referenced the wrapper," assuming *that* file happened to
+    also import the escape-hatch functions itself (fragile: a schema file
+    declaring `@@field: Grid[K, @@V]` had to import `sqrrl__Grid_json_to_
+    pairs`/`_from_pairs` too, even though it never calls either). Scanning
+    for whichever file already imports the escape-hatch functions
+    *directly* (typically wherever the wrapper's actually constructed,
+    which already needs that import regardless) finds the true module
+    without ever reading the hand-written `.mojo` file itself."""
+    var out = Dict[String, String]()
+    for path in sqrrl_files:
+        var f = open(path, "r")
+        var source = f.read()
+        f.close()
+        var bytes = source.as_bytes()
+        var n = len(bytes)
+        var line_start = 0
+        while line_start < n:
+            var line_end = line_start
+            while line_end < n and bytes[line_end] != UInt8(ord("\n")):
+                line_end += 1
+            var line = String(String(source[byte = line_start : line_end]).strip())
+            if line.startswith("from "):
+                var import_idx = line.find(" import ")
+                if import_idx >= 0:
+                    var module = String(String(line[byte = 5 : import_idx]).strip())
+                    var names_part = String(line[byte = import_idx + 8 : line.byte_length()])
+                    var name_bytes = names_part.as_bytes()
+                    var name_n = len(name_bytes)
+                    var name_start = 0
+                    for i in range(name_n + 1):
+                        if i == name_n or name_bytes[i] == UInt8(ord(",")):
+                            var name = String(String(names_part[byte = name_start : i]).strip())
+                            if name.byte_length() > 0:
+                                out[name] = module
+                            name_start = i + 1
+            line_start = line_end + 1
     return out^
 
 

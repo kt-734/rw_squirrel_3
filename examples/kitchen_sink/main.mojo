@@ -17,6 +17,13 @@ from schema.profile import Profile
 from schema.employee import sqrrl__Employee
 from schema.person import sqrrl__Person
 from schema.vendor import sqrrl__Vendor
+from logic.factories import sqrrl__hire
+from logic.factories import sqrrl__hire_team
+from logic.factories import sqrrl__log
+from logic.factories import sqrrl__make_department
+from logic.factories import sqrrl__make_project
+from logic.factories import sqrrl__make_team
+from logic.factories import sqrrl__make_vendor
 
 
 from schema.money import Money
@@ -26,7 +33,7 @@ from schema.box import Box
 from schema.pair import Pair
 from schema.profile import Profile
 from schema.assignment import Assignment
-from logic.factories import sqrrl__make_vendor, sqrrl__make_project, sqrrl__make_department, sqrrl__hire, sqrrl__hire_team, sqrrl__make_team, sqrrl__log
+from schema.grid_module import Grid
 
 
 def sqrrl__promote(sqrrl__e: sqrrl__Employee, new_title: String) -> sqrrl__Employee:
@@ -61,6 +68,15 @@ def main() raises:
         _ = sqrrl__sales._inner[].add_to_sqrrl__projects(sqrrl__onboarding)
         print("eng project count:", len(sqrrl__eng._inner[]._sqrrl__projects))
         print("departments running onboarding:", len(sqrrl___world.Department.for_sqrrl__projects(sqrrl__onboarding)))
+
+        # Direct iteration over a `multi` relation field itself (not a
+        # bound variable, not a table-level for_<field>/all() call) --
+        # `multi`'s own relation_schema entry is the bare element type,
+        # never Set[...]-wrapped, so this loop variable's registration
+        # goes through a different path than an ordinary Set/List-
+        # wrapped relation field's does.
+        for sqrrl__proj in sqrrl__eng._inner[]._sqrrl__projects:
+            print("eng project (direct multi-field iteration):", sqrrl__proj._inner[]._name)
 
         # Set-wrapped *ordinary* relation field (not `multi`) -- a whole Set
         # assigned/read at once, unlike `multi`'s one-member-at-a-time API.
@@ -136,6 +152,11 @@ def main() raises:
         print("value_eq(eng, eng):", sqrrl__eng.value_eq(sqrrl__eng))
         print("value_eq(eng, sales):", sqrrl__eng.value_eq(sqrrl__sales))
 
+        # `==` -- identity, not field-by-field: a handle equals itself,
+        # never a different row, regardless of `equatable`/`value_eq`.
+        print("eng == eng (identity):", sqrrl__eng == sqrrl__eng)
+        print("eng == sales (identity):", sqrrl__eng == sqrrl__sales)
+
         # `stats salary` -- whole-table, `_by_<field>`, and `_for_<field>`
         # aggregate siblings, all three shapes.
         print("total salary (whole table):", sqrrl___world.Employee.sum_salary())
@@ -200,26 +221,52 @@ def main() raises:
 
         # A plain struct's own relation field, read through a fully
         # unmarked local variable -- `lead_assignment` is never itself
-        # `@@`-marked; the explicit `: Assignment` annotation is what lets
-        # this parser resolve `.@@person` against `Assignment`'s own
-        # relation field, direct Mojo field access under the hood (`Note`/
-        # `Assignment` have no generated table of their own to route a
-        # `get_<field>` call through).
+        # `@@`-marked (only a *field access* through a plain-struct value
+        # can be marked; the value's own local name never is, since a
+        # plain struct never has a table of its own to bind an entity
+        # handle against). Its explicit `: Assignment` type annotation is
+        # still enough for a marked access through it to resolve
+        # correctly (`.@@person`, matching the field's own declaration,
+        # `var @@person: @@Person`) -- no need to know or spell the raw
+        # internal name (`sqrrl__person`) by hand.
         var lead_assignment: Assignment = sqrrl__platform_team._inner[]._lead.copy()
-        print("platform team lead person:", lead_assignment.person._inner[].get_name())
+        print("platform team lead person:", lead_assignment.sqrrl__person._inner[]._name)
 
         sqrrl__platform_team._inner[].set_sqrrl__advisor(Optional(sqrrl__promoted_bob));
         if sqrrl__platform_team._inner[]._sqrrl__advisor:
             print("platform team advisor:", sqrrl__platform_team._inner[]._sqrrl__advisor.value()._inner[].get_title())
 
+        # A hand-written, custom two-argument container (Grid, same shape
+        # container_fields' own escape hatch already proved) with a
+        # genuine relation in its *value* position -- Grid[String,
+        # @@Employee], not Grid[String, Int]. Combines three things that
+        # had each only been confirmed working in isolation until now:
+        # a custom (non-Dict) two-argument wrapper, mandatory-marking's
+        # widened value-position rule, and the JSON escape hatch, all on
+        # the same field at once.
+        var directory_pairs = List[Tuple[String, sqrrl__Employee]]()
+        directory_pairs.append(("lead", sqrrl__alice_emp))
+        directory_pairs.append(("backup", sqrrl__bob_emp))
+        sqrrl__platform_team._inner[].set_sqrrl__directory(Grid[String, sqrrl__Employee](pairs=directory_pairs^));
+        print("platform team directory lookup (Grid value-position relation):", sqrrl__platform_team._inner[]._sqrrl__directory["lead"]._inner[]._title)
+        for role in sqrrl__platform_team._inner[]._sqrrl__directory:
+            print("platform team directory role (bare loop var, Grid yields keys only):", role)
+
         # keepalive: AuditLog entities survive with no local var and no
         # relation field pointing at them, purely via `keepalive`.
         sqrrl__log(sqrrl___world, "started")
         sqrrl__log(sqrrl___world, "did a thing")
+        var sqrrl__retracted_entry = sqrrl___world.AuditLog.create(message = "will be retracted")
         sqrrl__log(sqrrl___world, "finished")
         print("audit log entries kept alive:", len(sqrrl___world.AuditLog.all()))
         for sqrrl__entry in sqrrl___world.AuditLog.all():
             print("audit log entry:", sqrrl__entry._inner[]._message)
+
+        # dont_keepalive(): opts a single entity back out of its own
+        # struct's keepalive hold -- once nothing else references it
+        # either, it's gone, same as a non-keepalive entity always is.
+        _ = sqrrl__retracted_entry.dont_keepalive()
+        print("audit log entries after dont_keepalive (no other holder):", len(sqrrl___world.AuditLog.all()))
 
         # ---- deep plain-struct nesting + generics, through Employee.profile ----
         var profile = sqrrl__alice_emp._inner[]._profile.copy()
@@ -288,6 +335,8 @@ def main() raises:
         print("reloaded alice's dept:", sqrrl__reloaded_alice._inner[]._sqrrl__dept._inner[]._name)
         print("reloaded alice's rating survived:", sqrrl__reloaded_alice._inner[]._profile.rating.value)
         print("reloaded audit log count:", len(sqrrl___world.AuditLog.all()))
+        for sqrrl__t in sqrrl___world.Team.all():
+            print("reloaded team directory lookup survived (Grid value-position relation):", sqrrl__t._inner[]._sqrrl__directory["lead"]._inner[]._title)
 
         # `@@reloaded_alice` is a real, independently-held handle now --
         # everything else `@@@begin_init_from_json(...)` only retained

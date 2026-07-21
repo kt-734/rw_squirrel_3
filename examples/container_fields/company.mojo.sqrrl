@@ -1,5 +1,5 @@
-from ring_module import Ring, sqrrl__Ring_json_to_list, sqrrl__Ring_json_from_list
-from grid_module import Grid, sqrrl__Grid_json_to_pairs, sqrrl__Grid_json_from_pairs
+from ring_module import Ring
+from grid_module import Grid
 
 @@struct @@Employee:
     unique name: String

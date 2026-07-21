@@ -19,6 +19,9 @@ from squirrel_compiler.parser.ast import (
     AccessChainTail,
     NameRef,
     EntityParam,
+    PlainVarDecl,
+    PlainForLoop,
+    BareForLoopHeader,
     MarkerKind,
 )
 from squirrel_compiler.parser.scanner import Scanner, parse_construct_fields

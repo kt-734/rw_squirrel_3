@@ -1,6 +1,6 @@
 from squirrel_compiler.parser import Scanner, is_ident_char
 from squirrel_compiler.codegen.rewrite_context import RewriteContext
-from squirrel_compiler.codegen.helpers import scan_entity_return_shape
+from squirrel_compiler.codegen.helpers import scan_entity_return_shape, scan_bare_return_type_text
 
 
 def _leading_indent(text: String) -> String:
@@ -60,7 +60,13 @@ struct _MethodHeader(Copyable, Movable):
     `scan_entity_return_shape`), if it has one -- mandatory-marking
     extended to methods: `is_entity_marked`/`is_world_marked` are cross-
     validated against it exactly like `driver/misc_builders.mojo`'s
-    `build_function_returns` already does for top-level functions."""
+    `build_function_returns` already does for top-level functions.
+    `bare_return_type` is the raw, unstripped return-type text (see
+    `scan_bare_return_type_text`), captured unconditionally regardless of
+    marking -- `bare_method_returns`'s own counterpart for a bare method
+    that returns a plain struct or a container of one, the method
+    analogue of `driver/misc_builders.mojo`'s `build_bare_plain_function_
+    returns`."""
 
     var indent: String
     var keyword: String
@@ -70,6 +76,7 @@ struct _MethodHeader(Copyable, Movable):
     var after_paren: String
     var body: String
     var return_shape: Optional[String]
+    var bare_return_type: Optional[String]
 
 
 def _parse_method_span(span: String, struct_name: String) raises -> _MethodHeader:
@@ -129,6 +136,7 @@ def _parse_method_span(span: String, struct_name: String) raises -> _MethodHeade
     var after_paren = String(rest[byte = paren + 1 : rest.byte_length()])
 
     var return_shape = scan_entity_return_shape(after_paren)
+    var bare_return_type = scan_bare_return_type_text(after_paren)
 
     if is_entity_marked and not return_shape:
         raise Error(
@@ -159,6 +167,7 @@ def _parse_method_span(span: String, struct_name: String) raises -> _MethodHeade
         after_paren=after_paren,
         body=body,
         return_shape=return_shape,
+        bare_return_type=bare_return_type,
     )
 
 
@@ -235,6 +244,31 @@ def method_return_shapes(method_body: String, struct_name: String) raises -> Dic
         var header = _parse_method_span(span, struct_name)
         if header.return_shape:
             out[header.method_name] = header.return_shape.value()
+    return out^
+
+
+def bare_method_returns(method_body: String, struct_name: String) raises -> Dict[String, String]:
+    """Bare (never `@@`/`@@@`-marked) method name -> its raw, unstripped
+    return-type text, for every such method declared in `method_body` --
+    `method_return_shapes`'s counterpart for a bare method, the method
+    analogue of `driver/misc_builders.mojo`'s `build_bare_plain_function_
+    returns`: lets a chain off a bare method's own call result (`@@own.
+    get_note().@@ref.name`, no intermediate variable) resolve, the same
+    way a bare top-level function's call result already does via `ctx.
+    bare_function_returns`/`handle_bare_call_chain`.
+
+    Registers unconditionally for every unmarked method, regardless of
+    whether the return type turns out to be a plain struct/container of
+    one at all -- same "always register, harmless" reasoning as the
+    top-level-function counterpart: `_handle_instance_call` only acts on
+    an entry once it's also confirmed a chain actually follows."""
+    var out = Dict[String, String]()
+    if method_body.strip().byte_length() == 0:
+        return out^
+    for span in _split_method_spans(method_body):
+        var header = _parse_method_span(span, struct_name)
+        if not header.is_world_marked and not header.is_entity_marked and header.bare_return_type:
+            out[header.method_name] = header.bare_return_type.value()
     return out^
 
 

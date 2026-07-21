@@ -105,6 +105,105 @@ def is_after_for_keyword(source: String, pos: Int) -> Bool:
     return i == 3 or not is_ident_char(bytes[i - 4])
 
 
+def is_after_open_paren_or_comma(source: String, pos: Int) -> Bool:
+    """True if, scanning backward from byte offset `pos` (skipping spaces/
+    tabs), the immediately preceding byte is `(` or `,` -- `pos` sits at
+    the start of a call's own argument list, or right after a comma
+    separating two arguments. Tells a plain-struct constructor's own
+    keyword argument name (`Note(@@owner=...)`) apart from any other bare
+    `@@name=` shape -- a var-decl's own initializer (`var @@x = ...`) is
+    never preceded by `(`/`,` this way (`var`'s own trailing space is
+    neither)."""
+    var bytes = source.as_bytes()
+    var i = pos
+    while i > 0 and (bytes[i - 1] == UInt8(ord(" ")) or bytes[i - 1] == UInt8(ord("\t"))):
+        i -= 1
+    return i > 0 and (bytes[i - 1] == UInt8(ord("(")) or bytes[i - 1] == UInt8(ord(",")))
+
+
+def is_after_dot(source: String, pos: Int) -> Bool:
+    """True if, scanning backward from byte offset `pos` (skipping spaces/
+    tabs), the immediately preceding byte is `.` -- `pos` sits right after
+    a chain's own `.` continuation. Lets `find_next_marker` recognize a
+    *write* through a bare-rooted chain's own marked field (`addr2.@@
+    owner = @@bob`) as `FIELD_ACCESS` too, not just a read (`addr2.@@
+    owner.name`, already found via the `.`/`[` *following* the marked
+    step): a write's own marked field is always the chain's *last* step,
+    so nothing ever follows it with `.`/`[` for that existing check to
+    catch -- this is the same check from the *other* side, confirming
+    there's a chain to rewind through at all before attempting `bare_
+    root_before_dot` (without this guard, a genuinely root-level `var @@x
+    = ...`/`@@x = ...` -- never preceded by `.` -- would wrongly be
+    treated as a field write instead of an ordinary name reference)."""
+    var bytes = source.as_bytes()
+    var i = pos
+    while i > 0 and (bytes[i - 1] == UInt8(ord(" ")) or bytes[i - 1] == UInt8(ord("\t"))):
+        i -= 1
+    return i > 0 and bytes[i - 1] == UInt8(ord("."))
+
+
+def bare_root_before_dot(source: String, pos: Int) -> Int:
+    """If byte offset `pos` (the start of an `@@`-marked token, e.g.
+    `@@ref` in `n.@@ref`, `notes[0].@@ref`, or `foo.bar.@@ref`) is
+    immediately preceded by `.` then a chain of one or more `ident[...]`
+    segments (each own bracket span balanced, each pair joined by a
+    further `.`) -- returns that outermost identifier's own start offset
+    once the chain stops (the byte right before it is no longer `.`).
+    Returns `-1` if there's no real identifier there at all (`).@@ref`/
+    `].@@ref` immediately, with nothing bracket-balanced behind it, or
+    the source's own start).
+
+    Deliberately doesn't also gate on what comes *before* that outermost
+    identifier (no allowlist of "valid" preceding characters/keywords) --
+    tried that first and it was wrong: `return a.@@ref`/`x + a.@@ref`
+    both genuinely root the chain at `a`, and enumerating every keyword/
+    operator that can precede a fresh expression is an open-ended list
+    with no natural end, the opposite of general. The one real thing
+    that disqualifies an identifier from being the root -- it's actually
+    a deeper hop in some *other* chain -- is already fully handled by
+    this function's own loop (continuing backward through `.` for as
+    long as the chain keeps going); once that loop stops, whatever
+    identifier it lands on genuinely is the start of its own expression,
+    full stop.
+
+    Lets `n.@@ref`/`notes[0].@@ref`/`foo.bar.@@ref` (`n`/`notes`/`foo` a
+    bare local variable holding a plain-struct value or a container of
+    one, `bar`/`@@ref` a further unmarked/marked field hop) be recognized
+    as a single field-access chain rooted at `n`/`notes`/`foo`, not a
+    stray `@@ref` reference the scanner would otherwise stop at on its
+    own -- the root itself carries no `@@` at all, so nothing about
+    scanning forward from it ever finds a marker until `@@ref`."""
+    var bytes = source.as_bytes()
+    if pos == 0 or bytes[pos - 1] != UInt8(ord(".")):
+        return -1
+    var i = pos - 1
+    while True:
+        var j = i
+        while j > 0 and bytes[j - 1] == UInt8(ord("]")):
+            var depth = 0
+            var k = j - 1
+            while k >= 0:
+                if bytes[k] == UInt8(ord("]")):
+                    depth += 1
+                elif bytes[k] == UInt8(ord("[")):
+                    depth -= 1
+                    if depth == 0:
+                        break
+                k -= 1
+            if k < 0:
+                return -1
+            j = k
+        var ident_end = j
+        while j > 0 and is_ident_char(bytes[j - 1]):
+            j -= 1
+        if j == ident_end:
+            return -1
+        if j > 0 and bytes[j - 1] == UInt8(ord(".")):
+            i = j - 1
+            continue
+        return j
+
+
 def is_after_container_bracket(source: String, pos: Int) -> Bool:
     """True if byte offset `pos` sits inside `Ident[...]`'s bracket list, at
     *any* parameter position -- `List[@@Type`, `Dict[@@Type, V]`'s second

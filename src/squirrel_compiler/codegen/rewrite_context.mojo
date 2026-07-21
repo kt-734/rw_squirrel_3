@@ -38,6 +38,14 @@ struct RewriteContext(Copyable, Movable):
     `@@@end_init_from_json()`, giving a repeat `begin` or a stray `end` a
     clean compile-time check instead of an opaque downstream Mojo error.
 
+    `bare_method_returns` is `bare_function_returns`'s per-struct parallel
+    for a bare (unmarked) method -- struct name -> method name -> its raw,
+    unstripped return-type text (`codegen/methods.mojo`'s `bare_method_
+    returns`/`discovery.mojo`'s `build_bare_method_returns`), letting
+    `_handle_instance_call` continue a trailing chain off a bare method's
+    own call result the same way `bare_function_returns` already lets
+    `handle_bare_call_chain` continue one off a bare function's.
+
     `plain_struct_names`/`plain_value_fields` (plain-structs milestone) are
     the general access-chain walk's `owner_is_real`/`owner_is_plain`
     dispatch's own two project-wide maps: `plain_struct_names` says which
@@ -62,6 +70,8 @@ struct RewriteContext(Copyable, Movable):
     var stats_fields: Dict[String, List[String]]
     var plain_struct_names: Dict[String, Bool]
     var plain_value_fields: Dict[String, Dict[String, String]]
+    var bare_function_returns: Dict[String, String]
+    var bare_method_returns: Dict[String, Dict[String, String]]
     var entity_to_type: Dict[String, String]
     var world_declared: Bool
     var temp_keep_alives_declared: Bool
@@ -88,6 +98,8 @@ struct RewriteContext(Copyable, Movable):
             stats_fields=self.stats_fields.copy(),
             plain_struct_names=self.plain_struct_names.copy(),
             plain_value_fields=self.plain_value_fields.copy(),
+            bare_function_returns=self.bare_function_returns.copy(),
+            bare_method_returns=self.bare_method_returns.copy(),
             entity_to_type=Dict[String, String](),
             world_declared=False,
             temp_keep_alives_declared=False,

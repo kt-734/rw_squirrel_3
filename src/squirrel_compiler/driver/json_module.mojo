@@ -1533,6 +1533,40 @@ def _collect_custom_leaf_types(
         _collect_custom_leaf_types_from_type(parse_type_expr(f.type_str), plain_struct_names, type_param_names, seen, out)
 
 
+def _plain_struct_field_storage_name(
+    struct_name: String, f: Field, plain_struct_fields: Dict[String, List[Field]]
+) raises -> String:
+    """The real generated field/keyword name a hand-written plain struct's
+    own field gets -- `sqrrl__`-prefixed when `@@`-marked (matching
+    `codegen/rewrite.mojo`'s own `ENTITY_PARAM` field-declaration emission
+    and `MarkerKind.CONSTRUCT_KWARG`'s own constructor-call keyword
+    rewriting), bare otherwise. `f.name` alone (the DSL-source spelling,
+    marker stripped) is only ever correct for a *non*-relation field --
+    used unconditionally throughout this file for the JSON *key* text and
+    internal `parsed_<name>` temporaries (those never change), but reading
+    or constructing the real Mojo value itself needs this instead.
+
+    Deliberately checks `plain_struct_fields[struct_name]` -- the
+    project-wide, never-substituted declaration -- rather than `f` itself:
+    a *monomorphized* companion (`Box[@@Employee]`) is generated from a
+    *substituted* field list (`_substituted_fields_for`, `value: Self.T`
+    rendered as `value: @@Employee`), where `is_relation_field` on `f`
+    directly would wrongly say "yes" -- but the field's own NAME was never
+    `@@`-marked in the original declaration (`var value: Self.T` has no
+    `@@` anywhere; only a concrete instantiation makes the *type* look
+    like a relation), so `rewrite.mojo`'s own struct-declaration emission
+    never prefixed it either. Confirmed via a real compile: `Box[T]`'s own
+    `sqrrl__Box_to_json`/`_from_json` monomorphized companions failed
+    outright ('Box[sqrrl__Employee]' value has no attribute 'sqrrl__
+    value') before this lookup was corrected to check the *original*
+    field, not the substituted one."""
+    if struct_name in plain_struct_fields:
+        for orig in plain_struct_fields[struct_name]:
+            if orig.name == f.name:
+                return sqrrl_prefixed(f.name) if is_relation_field(orig) else f.name
+    return sqrrl_prefixed(f.name) if is_relation_field(f) else f.name
+
+
 def _emit_plain_struct_to_json(
     name: String,
     fields: List[Field],
@@ -1601,11 +1635,11 @@ def _emit_plain_struct_to_json(
         if _is_supported_container_field(f) and not _type_involves_relation(
             t, plain_struct_fields, plain_struct_type_params
         ):
-            out += "    out += sqrrl__to_json(value." + f.name + ")\n"
+            out += "    out += sqrrl__to_json(value." + _plain_struct_field_storage_name(name, f, plain_struct_fields) + ")\n"
         else:
             var value_expr = _dump_value_expr(
-                "value." + f.name, t, plain_struct_names, "    ", tmp_id, out, plain_struct_fields,
-                plain_struct_type_params,
+                "value." + _plain_struct_field_storage_name(name, f, plain_struct_fields), t, plain_struct_names, "    ", tmp_id, out,
+                plain_struct_fields, plain_struct_type_params,
             )
             out += "    out += " + value_expr + "\n"
         first = False
@@ -1784,7 +1818,7 @@ def _emit_plain_struct_from_json(
     for f in fields:
         if not first:
             ctor_args += ", "
-        ctor_args += f.name + "=parsed_" + f.name + ".take()"
+        ctor_args += _plain_struct_field_storage_name(name, f, plain_struct_fields) + "=parsed_" + f.name + ".take()"
         first = False
     out += "    return " + return_type + "(" + ctor_args + ")\n"
     return out^
@@ -1896,6 +1930,7 @@ def emit_json_module(
     discovery_structs: List[DiscoveredStruct],
     topo_order: List[DiscoveredStruct],
     plain_struct_discovery: PlainStructDiscovery = PlainStructDiscovery(Dict[String, List[Field]](), Dict[String, String]()),
+    raw_imports: Dict[String, String] = Dict[String, String](),
 ) raises -> String:
     """Emits `sqrrl__json.mojo`'s whole content -- every JSON-related
     generated symbol for the whole project, in this one file (the
@@ -1906,7 +1941,13 @@ def emit_json_module(
     key order and `sqrrl___world_from_json`'s dispatch-branch order, so a
     genuine dump always reloads safely. `plain_struct_discovery`
     (plain-structs milestone) drives one `sqrrl__<Name>_from_json`
-    companion per *non-generic* plain struct discovered project-wide."""
+    companion per *non-generic* plain struct discovered project-wide.
+    `raw_imports` (`discover_raw_imports`, `driver/misc_builders.mojo`) --
+    imported symbol name -> the module it's imported from, scanned from
+    every `.mojo.sqrrl` file's own raw `from X import Y` lines project-
+    wide -- is the true-origin lookup a custom container wrapper's/leaf
+    type's own escape-hatch companions use below, in place of the older
+    "whichever struct's field first referenced it" guess."""
     var plain_struct_fields = plain_struct_discovery.fields.copy()
     var plain_struct_names = Dict[String, Bool]()
     var plain_struct_name_list = List[String]()
@@ -1944,16 +1985,27 @@ def emit_json_module(
     # A custom container wrapper (the escape hatch -- any one- or two-
     # type-argument wrapper other than List/Set/Optional/Dict, and not a
     # discovered plain struct) has no `module_of` entry at all -- the
-    # compiler never scanned a declaration for it, by definition. Imports
-    # it (and its two hand-written escape-hatch companions -- `_json_to_
-    # list`/`_json_from_list` for a one-argument wrapper, `_json_to_
-    # pairs`/`_json_from_pairs` for a two-argument one, picked via each
-    # wrapper's own recorded arity) from whichever real @@struct/plain
-    # struct's own module first referenced it, on the assumption that
-    # module itself already imports it to declare the field in the first
-    # place (so it's re-exportable from there) -- the same transitive-
-    # import assumption `build_entity_symbols`'s own cross-file import
-    # mechanism already relies on.
+    # compiler never scanned a declaration for it, by definition. Its two
+    # hand-written escape-hatch companions (`_json_to_list`/`_json_from_
+    # list` for a one-argument wrapper, `_json_to_pairs`/`_json_from_pairs`
+    # for a two-argument one, picked via each wrapper's own recorded
+    # arity) are imported from, in priority order:
+    #   1. wherever `raw_imports` says the `_json_to_...` companion
+    #      itself is imported from directly, project-wide -- an explicit
+    #      escape valve for when the companions *don't* live alongside
+    #      the wrapper (rare, but not this compiler's business to
+    #      forbid): write `from <true module> import sqrrl__<Wrapper>_
+    #      json_to_pairs, sqrrl__<Wrapper>_json_from_pairs` anywhere in
+    #      the project (no DSL sugar needed -- it's an ordinary import
+    #      line) and this takes precedence.
+    #   2. else, wherever `raw_imports` says the wrapper *type itself* is
+    #      imported from -- the common case, trusting the convention that
+    #      the companions live alongside their wrapper.
+    #   3. else, whichever real @@struct/plain struct's own module first
+    #      *referenced* the wrapper as a field type -- the old guess,
+    #      kept only as a last resort (`raw_imports` having neither entry
+    #      shouldn't happen in practice, since nothing could construct
+    #      the wrapper's value without importing it somewhere).
     var custom_wrapper_module = Dict[String, String]()
     var custom_wrapper_list = List[String]()
     var custom_wrapper_arity = Dict[String, Int]()
@@ -1971,10 +2023,19 @@ def emit_json_module(
         for i in range(before2, len(custom_wrapper_list)):
             custom_wrapper_module[custom_wrapper_list[i]] = plain_struct_discovery.module_of[plain_name]
     for wrapper in custom_wrapper_list:
-        var suffix = "_to_pairs, sqrrl__" + wrapper + "_json_from_pairs\n" if custom_wrapper_arity[wrapper] == 2 else "_to_list, sqrrl__" + wrapper + "_json_from_list\n"
+        var is_pairs = custom_wrapper_arity[wrapper] == 2
+        var to_name = "sqrrl__" + wrapper + "_json_to_pairs" if is_pairs else "sqrrl__" + wrapper + "_json_to_list"
+        var suffix = "_to_pairs, sqrrl__" + wrapper + "_json_from_pairs\n" if is_pairs else "_to_list, sqrrl__" + wrapper + "_json_from_list\n"
+        var source_module: String
+        if to_name in raw_imports:
+            source_module = raw_imports[to_name]
+        elif wrapper in raw_imports:
+            source_module = raw_imports[wrapper]
+        else:
+            source_module = custom_wrapper_module[wrapper]
         out += (
             "from "
-            + custom_wrapper_module[wrapper]
+            + source_module
             + " import "
             + wrapper
             + ", sqrrl__"
@@ -1988,7 +2049,7 @@ def emit_json_module(
     # ExternalAddress` field imported from an ordinary, never-`.mojo.
     # sqrrl` module) has no `module_of` entry either, for the same reason
     # a custom container wrapper doesn't: the compiler never scanned a
-    # declaration for it. Same transitive-import assumption as the
+    # declaration for it. Same `raw_imports` true-origin lookup as the
     # custom-wrapper case above, just for the type itself plus its own
     # hand-written `sqrrl__<TypeName>_from_json` companion instead of the
     # two list-conversion companions a container needs.
@@ -2010,7 +2071,22 @@ def emit_json_module(
         for i in range(before4, len(custom_leaf_list)):
             custom_leaf_module[custom_leaf_list[i]] = plain_struct_discovery.module_of[plain_name]
     for leaf_type in custom_leaf_list:
-        out += "from " + custom_leaf_module[leaf_type] + " import " + leaf_type + ", sqrrl__" + leaf_type + "_from_json\n"
+        # Same three-tier priority as the custom-wrapper case above: an
+        # explicit import of `sqrrl__<TypeName>_from_json` itself,
+        # anywhere project-wide, wins first (the escape valve for when
+        # it doesn't live alongside `<TypeName>`); else wherever
+        # `<TypeName>` itself is imported from (the common case -- some
+        # file declaring a field of this type needs it regardless); else
+        # the old struct-declaring-module guess.
+        var from_json_name = "sqrrl__" + leaf_type + "_from_json"
+        var leaf_source_module: String
+        if from_json_name in raw_imports:
+            leaf_source_module = raw_imports[from_json_name]
+        elif leaf_type in raw_imports:
+            leaf_source_module = raw_imports[leaf_type]
+        else:
+            leaf_source_module = custom_leaf_module[leaf_type]
+        out += "from " + leaf_source_module + " import " + leaf_type + ", " + from_json_name + "\n"
 
     # The shared, generic `sqrrl__to_json[T]`/`sqrrl__from_json[T]`
     # dispatch table -- one `elif T == <ConcreteType>:` branch per

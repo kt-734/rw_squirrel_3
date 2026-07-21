@@ -9,6 +9,9 @@ from squirrel_compiler.parser.ast import (
     AccessChainTail,
     NameRef,
     EntityParam,
+    PlainVarDecl,
+    PlainForLoop,
+    BareForLoopHeader,
     MarkerKind,
 )
 from squirrel_compiler.parser.text_utils import (
@@ -18,6 +21,9 @@ from squirrel_compiler.parser.text_utils import (
     is_after_arrow,
     is_after_for_keyword,
     is_after_container_bracket,
+    is_after_open_paren_or_comma,
+    is_after_dot,
+    bare_root_before_dot,
     find_end_of_indented_block,
 )
 from squirrel_compiler.parser.field_parsing import parse_struct_body, parse_hand_written_struct_fields
@@ -189,12 +195,28 @@ struct Scanner(Movable):
             self.pos += 1
         return String(self.source[byte = start : self.pos])
 
-    def scan_braced_span(mut self) raises -> String:
-        """Requires `self.pos` at `{`. Returns the body between the matching
-        braces (exclusive), and advances `self.pos` past the closing `}`."""
-        if self.peek() != UInt8(ord("{")):
-            raise self.err("InvalidSquirrelSyntax: expected '{'")
-        self.pos += 1
+    def scan_balanced_span_body(
+        mut self, open_char: UInt8, close_char: UInt8, unterminated_msg: String
+    ) raises -> String:
+        """Requires `self.pos` already just past the relevant single open
+        bracket (the caller consumes/validates it themselves, since the
+        right "expected '...'" wording varies per caller). Returns the
+        body up to the matching `close_char` (exclusive), and advances
+        `self.pos` past the closing byte -- the shared shape `scan_
+        braced_span` (`{}`), `scan_bracketed_span` (`[]`), `scan_call_
+        args_to_close`/`_parse_json_call_arg` (`()`), and a hand-written
+        struct's own trait-list skip (also `()`) all used to duplicate as
+        separate, near-identical loops, differing only in which single
+        bracket pair they tracked and their own error wording.
+
+        `scan_call_args_to_close`'s own previous version tracked *all
+        three* bracket kinds as one combined depth counter (any opener
+        increments, any closer decrements, regardless of kind) rather
+        than matching `(`/`)` specifically -- a trick that happens to
+        find the same stopping point for well-formed Mojo (any nested
+        `[...]`/`{...}` is itself already balanced before the outer `)`
+        can appear), so single-kind tracking here gives it the identical
+        result without needing that trick at all."""
         var body_start = self.pos
         var depth = 1
         while not self.at_end() and depth > 0:
@@ -203,14 +225,23 @@ struct Scanner(Movable):
             if self.pos != before:
                 continue
             var b = self.peek()
-            if b == UInt8(ord("{")):
+            if b == open_char:
                 depth += 1
-            elif b == UInt8(ord("}")):
+            elif b == close_char:
                 depth -= 1
             self.pos += 1
         if depth != 0:
-            raise self.err("InvalidSquirrelSyntax: unterminated '{'")
+            raise self.err(unterminated_msg)
         return String(self.source[byte = body_start : self.pos - 1])
+
+    def scan_braced_span(mut self) raises -> String:
+        """Requires `self.pos` at `{`. Returns the body between the matching
+        braces (exclusive), and advances `self.pos` past the closing `}`."""
+        if not self.try_consume("{"):
+            raise self.err("InvalidSquirrelSyntax: expected '{'")
+        return self.scan_balanced_span_body(
+            UInt8(ord("{")), UInt8(ord("}")), "InvalidSquirrelSyntax: unterminated '{'"
+        )
 
     def scan_indented_block(mut self, header_indent: Int) -> String:
         """Requires `self.pos` right after a block header's own trailing
@@ -244,25 +275,11 @@ struct Scanner(Movable):
         """Requires `self.pos` at `[`. Returns the body between the matching
         brackets (exclusive), and advances `self.pos` past the closing `]`
         -- mirrors `scan_braced_span`, for `@@entity[index_expr]`."""
-        if self.peek() != UInt8(ord("[")):
+        if not self.try_consume("["):
             raise self.err("InvalidSquirrelSyntax: expected '['")
-        self.pos += 1
-        var body_start = self.pos
-        var depth = 1
-        while not self.at_end() and depth > 0:
-            var before = self.pos
-            self.skip_non_code()
-            if self.pos != before:
-                continue
-            var b = self.peek()
-            if b == UInt8(ord("[")):
-                depth += 1
-            elif b == UInt8(ord("]")):
-                depth -= 1
-            self.pos += 1
-        if depth != 0:
-            raise self.err("InvalidSquirrelSyntax: unterminated '['")
-        return String(self.source[byte = body_start : self.pos - 1])
+        return self.scan_balanced_span_body(
+            UInt8(ord("[")), UInt8(ord("]")), "InvalidSquirrelSyntax: unterminated '['"
+        )
 
     def scan_bracket_depth_aware_span(mut self, terminators: String) raises -> String:
         """The shared depth-aware "scan a type text span" shape `scan_type`
@@ -493,31 +510,25 @@ struct Scanner(Movable):
         if self.peek() == UInt8(ord("[")):
             type_params = self.parse_type_params()
             self.skip_trivia()
-        if self.peek() == UInt8(ord("(")):
+        if self.try_consume("("):
             # A real Mojo trait list -- skip it (balanced parens), never
-            # captured: nothing here needs its contents.
-            var depth = 0
-            while not self.at_end():
-                var before = self.pos
-                self.skip_non_code()
-                if self.pos != before:
-                    continue
-                var b = self.peek()
-                if b == UInt8(ord("(")):
-                    depth += 1
-                elif b == UInt8(ord(")")):
-                    depth -= 1
-                    if depth == 0:
-                        self.pos += 1
-                        break
-                self.pos += 1
+            # captured: nothing here needs its contents. Reuses `scan_
+            # balanced_span_body`'s own shape -- previously a separate,
+            # near-identical loop (and, unlike the others, one with no
+            # unterminated-paren check at all, silently running to end-
+            # of-input on malformed source instead of raising a clear
+            # error; a strict improvement, not a behavior this project
+            # ever relied on for a genuinely valid struct declaration).
+            _ = self.scan_balanced_span_body(
+                UInt8(ord("(")), UInt8(ord(")")), "InvalidSquirrelSyntax: unterminated '(' in trait list"
+            )
             self.skip_trivia()
         if not self.try_consume(":"):
             raise self.err("InvalidSquirrelSyntax: expected ':' after struct name")
         var body = self.scan_indented_block(header_indent)
         var struct_fields = List[Field]()
-        parse_hand_written_struct_fields(body, struct_fields)
-        return ParsedStruct(name=name, fields=struct_fields^, type_params=type_params^)
+        var method_body = parse_hand_written_struct_fields(body, struct_fields)
+        return ParsedStruct(name=name, fields=struct_fields^, method_body=method_body^, type_params=type_params^)
 
     def peek_empty_call_follows(mut self) -> Bool:
         """True if, from `self.pos` (skipping trivia around both the `(`
@@ -553,6 +564,558 @@ struct Scanner(Movable):
         """True if the byte at `self.pos` is `=` (assignment) and not `==`
         (equality). A pure lookahead -- doesn't move `self.pos`."""
         return self.peek() == UInt8(ord("=")) and self.peek_at(1) != UInt8(ord("="))
+
+    def at_plain_var_decl(mut self) raises -> Bool:
+        """True if `self.pos` starts `[var ]<name>: <Type>` -- a *bare*
+        local variable name (never `@@`-marked) with an explicit type
+        annotation, `<Type>` either a single identifier (`Note`) or a
+        container of one (`List[Note]`, `Dict[String, Note]`, any nesting
+        `scan_bracketed_span` already handles generally). Matches with or
+        without a leading `var ` and with or without a trailing ` = ...`
+        -- covers a var-decl, a def's own parameter declaration, *and* a
+        hand-written plain struct's own field declaration, the same three
+        contexts `MarkerKind.ENTITY_PARAM` already covers for the marked
+        equivalent (`@@name: @@Type`) -- disambiguating between them is
+        `rewrite.mojo`'s own handler's job (`is_in_def_signature`/`at_
+        assignment`, mirroring `ENTITY_PARAM`'s exact three-way split),
+        not this lookahead's. A pure lookahead, restoring `self.pos`
+        either way.
+
+        Purely syntactic -- has no access to the project-wide `plain_
+        struct_names` map (only a rewrite handler, via `RewriteContext`,
+        does), so this matches far more often than `PLAIN_VAR_DECL` is
+        actually acted on: `var x: Int = 5` and a struct's own `text:
+        String` field both match this shape too. The handler checks
+        `<Type>` semantically and, when it isn't actually a known plain
+        struct (or a container of one), just copies the matched text
+        straight through unchanged -- this lookahead only needs to be
+        syntactically conservative enough that it never fires on `var
+        @@x = ...`/`var @@x: @@Type = ...` (both already handled
+        elsewhere, via the `@@`-triggered branches above in `find_next_
+        marker`): `scan_ident` stops at `@`, so either name immediately
+        returns empty the moment a `@@`-marked spelling is actually
+        present, at either position.
+
+        A second, `var`-only shape (no `:` at all) also matches: `var
+        <name> = <CtorIdent>[<TypeArgs>]?(` -- a var-decl whose
+        initializer is itself a constructor-call-shaped expression,
+        letting `type_text` be inferred from the constructor's own head
+        instead of a written-out annotation (`var addresses = List[
+        Address]()`, no `: List[Address]` needed) -- the plain-struct-
+        local analogue of `handle_name_ref`'s own marked-var-decl
+        fallback for `var @@x = List[@@Type]()`. Requires the leading
+        `var` keyword specifically (unlike the annotated shape, which
+        allows omitting it for a def-parameter/struct-field): an ordinary
+        reassignment of an already-declared bare var (`addr2 = Address(
+        ...)`, no `var`) must never be reinterpreted as a fresh
+        declaration."""
+        var save = self.pos
+        var had_var = self.try_consume("var")
+        self.skip_trivia()
+        var name = self.scan_ident()
+        if name.byte_length() == 0:
+            self.pos = save
+            return False
+        self.skip_trivia()
+        if self.peek() == UInt8(ord(":")):
+            self.pos += 1
+            self.skip_trivia()
+            var type_name = self.scan_ident()
+            if type_name.byte_length() == 0:
+                self.pos = save
+                return False
+            self.skip_trivia()
+            if self.peek() == UInt8(ord("[")):
+                _ = self.scan_bracketed_span()
+            self.pos = save
+            return True
+        if not had_var or not self.at_assignment():
+            self.pos = save
+            return False
+        self.pos += 1
+        self.skip_trivia()
+        var ctor_name = self.scan_ident()
+        if ctor_name.byte_length() == 0:
+            self.pos = save
+            return False
+        if self.peek() == UInt8(ord("[")):
+            _ = self.scan_bracketed_span()
+        var matched = self.peek() == UInt8(ord("("))
+        self.pos = save
+        return matched
+
+    def parse_plain_var_decl(mut self) raises -> PlainVarDecl:
+        """Requires `self.pos` at the `var` token (or, with no leading
+        `var` at all, straight at the name -- a def parameter or a
+        struct field), already confirmed via `at_plain_var_decl`.
+
+        For the annotated shape, leaves `self.pos` right after the type
+        -- deliberately never consumes a trailing `=` itself (mirrors
+        `parse_entity_param`'s own shape exactly): the caller (`rewrite.
+        mojo`) needs `self.pos` sitting right there, unconsumed, to look
+        ahead for `=` itself and decide `is_var_decl` the same way
+        `MarkerKind.ENTITY_PARAM`'s own handler already does for the
+        marked equivalent.
+
+        For the inferred shape (`type_is_inferred=True`), leaves `self.
+        pos` right after `= ` -- deliberately *before* the constructor
+        call's own head, which stays unconsumed for the ordinary scan to
+        re-discover and emit normally (any `@@`-marked argument inside
+        it still needs that); `type_text` here is captured via a lookahead
+        that restores `self.pos` afterward, since it's for registration
+        only, never emitted by this marker itself."""
+        var start = self.pos
+        _ = self.try_consume("var")
+        self.skip_trivia()
+        var name = self.scan_ident()
+        self.skip_trivia()
+        if self.peek() == UInt8(ord(":")):
+            self.pos += 1
+            self.skip_trivia()
+            var prefix_text = String(self.source[byte = start : self.pos])
+            var type_start = self.pos
+            _ = self.scan_ident()
+            if self.peek() == UInt8(ord("[")):
+                _ = self.scan_bracketed_span()
+            var type_text = String(self.source[byte = type_start : self.pos])
+            return PlainVarDecl(
+                name=name, prefix_text=prefix_text, type_text=type_text, type_is_inferred=False
+            )
+        _ = self.at_assignment()
+        self.pos += 1
+        self.skip_trivia()
+        var prefix_text = String(self.source[byte = start : self.pos])
+        var type_lookahead = self.pos
+        var type_start = self.pos
+        _ = self.scan_ident()
+        if self.peek() == UInt8(ord("[")):
+            _ = self.scan_bracketed_span()
+        var type_text = String(self.source[byte = type_start : self.pos])
+        self.pos = type_lookahead
+        return PlainVarDecl(name=name, prefix_text=prefix_text, type_text=type_text, type_is_inferred=True)
+
+    def at_plain_for_loop(mut self) raises -> Bool:
+        """True if `self.pos` starts `for [var/ref ]<loop_var> in
+        <container>[(...)]:` -- both the loop variable and the iterated
+        expression bare (never `@@`-marked); the iterated expression is
+        a single name, optionally followed by one balanced call (`for n
+        in get_notes(@@b):`), never a full arbitrary expression. A pure
+        lookahead, restoring `self.pos` either way. Purely syntactic
+        (whether `<container>` is actually a known, container-typed
+        local/function is `rewrite.mojo`'s own handler's job) --
+        conservative enough to never misfire on `for @@x in ...:`
+        (`MarkerKind.FOR_ENTITY_LOOP`'s own shape, found via the `@@`-
+        triggered branches above, never reaching this fallback at
+        all)."""
+        var save = self.pos
+        if not (self.starts_with("for") and not is_ident_char(self.peek_at(3))):
+            self.pos = save
+            return False
+        self.pos += 3
+        self.skip_trivia()
+        _ = self.try_consume("var")
+        _ = self.try_consume("ref")
+        self.skip_trivia()
+        var loop_var = self.scan_ident()
+        if loop_var.byte_length() == 0:
+            self.pos = save
+            return False
+        self.skip_trivia()
+        if not (self.starts_with("in") and not is_ident_char(self.peek_at(2))):
+            self.pos = save
+            return False
+        self.pos += 2
+        self.skip_trivia()
+        var container_name = self.scan_ident()
+        if container_name.byte_length() == 0:
+            self.pos = save
+            return False
+        if self.peek() == UInt8(ord("(")):
+            self.pos += 1
+            _ = self.scan_call_args_to_close()
+        self.skip_trivia()
+        var matched = self.peek() == UInt8(ord(":"))
+        self.pos = save
+        return matched
+
+    def parse_plain_for_loop(mut self) raises -> PlainForLoop:
+        """Requires `self.pos` at the `for` token, already confirmed via
+        `at_plain_for_loop`. Leaves `self.pos` right after the container
+        name/call (before `:`) -- the caller copies `source[marker_start
+        : self.pos]` straight through verbatim for the non-call case
+        (preserving original spacing exactly, no hardcoded space
+        reconstruction, which caused a real cosmetic double-space bug for
+        `FOR_ENTITY_LOOP`'s own analogous case); the call case instead
+        needs its own argument list run through `rewrite_markers` (any
+        `@@`-marked argument still needs rewriting), so the caller
+        reconstructs that text itself rather than copying it raw."""
+        _ = self.try_consume("for")
+        self.skip_trivia()
+        var binding_prefix = String()
+        if self.try_consume("var"):
+            binding_prefix = "var"
+        elif self.try_consume("ref"):
+            binding_prefix = "ref"
+        self.skip_trivia()
+        var loop_var = self.scan_ident()
+        self.skip_trivia()
+        _ = self.try_consume("in")
+        self.skip_trivia()
+        var container_name = self.scan_ident()
+        var is_call = False
+        var arg_text = String()
+        if self.peek() == UInt8(ord("(")):
+            is_call = True
+            self.pos += 1
+            arg_text = self.scan_call_args_to_close()
+        return PlainForLoop(
+            loop_var=loop_var, container_name=container_name, is_call=is_call, arg_text=arg_text,
+            binding_prefix=binding_prefix,
+        )
+
+    def at_bare_for_loop_over_marked_chain(mut self) raises -> Bool:
+        """True if `self.pos` starts `for [var/ref ]<loop_var> in @@` --
+        a *bare* (never `@@`-marked) loop variable whose own iterated
+        expression is rooted at a single `@@` (a bound entity's own
+        field/method-call chain, a marked top-level function's own call,
+        or a bound entity referenced directly) -- deliberately requires
+        exactly one `@@`, not `@@@`: a table-level call's own result is
+        always compiler-constructed and guaranteed entity-shaped (see
+        `PendingForLoopDecl`'s own doc comment), never a legitimate case
+        for a bare loop var, so excluded here at the syntax level rather
+        than relying on downstream validation to catch it.
+
+        The bare-loop-var mirror of `MarkerKind.FOR_ENTITY_LOOP`'s own
+        `for @@x in ...:` shape (found via the `@@`-triggered branches in
+        `find_next_marker`, never reaching this fallback) -- lives here,
+        not there, because the loop variable itself carries no `@@` for
+        the scanner to stop at; this has to be a forward, purely
+        syntactic fallback check exactly like `at_plain_for_loop`/`at_
+        bare_call_chain`, checked once nothing `@@`-triggered matched at
+        the current position. Deliberately does *not* try to parse the
+        chain itself -- that's the ordinary `@@`-triggered dispatch's own
+        job once the outer scanning loop reaches the `@@` on its own; this
+        only confirms a single `@@` immediately follows `in`. A pure
+        lookahead, restoring `self.pos` either way."""
+        var save = self.pos
+        if not (self.starts_with("for") and not is_ident_char(self.peek_at(3))):
+            self.pos = save
+            return False
+        self.pos += 3
+        self.skip_trivia()
+        _ = self.try_consume("var")
+        _ = self.try_consume("ref")
+        self.skip_trivia()
+        var loop_var = self.scan_ident()
+        if loop_var.byte_length() == 0:
+            self.pos = save
+            return False
+        self.skip_trivia()
+        if not (self.starts_with("in") and not is_ident_char(self.peek_at(2))):
+            self.pos = save
+            return False
+        self.pos += 2
+        self.skip_trivia()
+        var matched = self.starts_with("@@") and not self.starts_with("@@@")
+        self.pos = save
+        return matched
+
+    def parse_bare_for_loop_prefix(mut self) raises -> BareForLoopHeader:
+        """Requires `self.pos` at the `for` token, already confirmed via
+        `at_bare_for_loop_over_marked_chain`. Consumes through `in`,
+        leaving `self.pos` right at the `@@` of the iterated expression --
+        mirrors `parse_for_entity_loop`'s own contract exactly (no
+        trailing-space handling here either, same reasoning: the source's
+        own original space between `in` and the `@@` is left for the
+        outer loop's own ordinary "between text" copy to reproduce
+        verbatim). Returns the loop variable's own (bare) name plus
+        whatever `var`/`ref` binding prefix preceded it (`PlainForLoop`'s
+        own doc comment has the full "why" -- this handler reconstructs
+        its own output text too, so dropping the prefix here would be the
+        exact same silent bug)."""
+        _ = self.try_consume("for")
+        self.skip_trivia()
+        var binding_prefix = String()
+        if self.try_consume("var"):
+            binding_prefix = "var"
+        elif self.try_consume("ref"):
+            binding_prefix = "ref"
+        self.skip_trivia()
+        var loop_var = self.scan_ident()
+        self.skip_trivia()
+        _ = self.try_consume("in")
+        return BareForLoopHeader(loop_var=loop_var, binding_prefix=binding_prefix)
+
+    def at_bare_var_decl_over_marked_chain(mut self) raises -> Bool:
+        """True if `self.pos` starts `var <bare_name> = @@` (single `@@`,
+        not `@@@` -- a table-level call's own result is always compiler-
+        constructed and guaranteed entity-shaped, and can't be assigned to
+        a bare name symmetrically for the same reason `at_bare_for_loop_
+        over_marked_chain` excludes it) -- a *bare* (never `@@`-marked)
+        var-decl whose initializer is rooted at a single `@@` (a bound
+        entity's own field/method-call chain, a marked top-level
+        function's own call, or a bound entity referenced directly).
+
+        The var-decl mirror of `at_bare_for_loop_over_marked_chain`
+        exactly, just for `pending_decl` instead of `pending_for_loop_
+        decl` -- needed for the identical reason: `var addr = @@bob.get_
+        home()` (a bare method returning a plain struct) has no `:
+        Address` annotation and no bare-identifier-before-`(` shape
+        either (`at_plain_var_decl`'s own inferred shape requires `scan_
+        ident()` to succeed on the RHS, which stops dead at `@`), so
+        nothing registers `addr` at all -- confirmed via a real compile
+        ("was never constructed") before this existed. Requires the
+        leading `var` keyword (an ordinary reassignment of an existing
+        bare var, `addr = @@bob...`, no `var`, must never be mistaken for
+        a fresh declaration)."""
+        var save = self.pos
+        if not self.try_consume("var"):
+            self.pos = save
+            return False
+        self.skip_trivia()
+        var name = self.scan_ident()
+        if name.byte_length() == 0:
+            self.pos = save
+            return False
+        self.skip_trivia()
+        if not self.at_assignment():
+            self.pos = save
+            return False
+        self.pos += 1
+        self.skip_trivia()
+        var matched = self.starts_with("@@") and not self.starts_with("@@@")
+        self.pos = save
+        return matched
+
+    def parse_bare_var_decl_prefix(mut self) raises -> String:
+        """Requires `self.pos` at the `var` token, already confirmed via
+        `at_bare_var_decl_over_marked_chain`. Consumes through `=`,
+        leaving `self.pos` right there (no trailing-space handling,
+        same reasoning as `parse_for_entity_loop`/`parse_bare_for_loop_
+        over_marked_chain`: the source's own original space between `=`
+        and the `@@` is left for the outer loop's own ordinary "between
+        text" copy to reproduce verbatim). Returns the variable's own
+        (bare) name."""
+        _ = self.try_consume("var")
+        self.skip_trivia()
+        var name = self.scan_ident()
+        self.skip_trivia()
+        _ = self.at_assignment()
+        self.pos += 1
+        return name
+
+    def at_bare_rooted_chain(mut self) raises -> Bool:
+        """True if `self.pos` starts `<bare_ident>.<ident>(` -- a bare
+        (never `@@`-marked) receiver whose own chain's first hop is a
+        method call, immediately followed by `(`. Neither the `@@`-
+        triggered dispatch (nothing here is `@@`-marked at all) nor
+        `bare_root_before_dot`'s own backward look (which can't rewind
+        through a call's own closing `)`, only through `]`) can recognize
+        this shape at all -- confirmed as a real, previously-silent gap:
+        `addr2.relocated(...).@@owner.name`/`var x = addr2.get_thing()`/
+        `for a in addr2.get_thing():` all left their own target
+        completely unregistered before this existed (`var x =`/`for a
+        in` need their own sibling markers too, `BARE_VAR_DECL_OVER_BARE_
+        CHAIN`/`BARE_FOR_LOOP_OVER_BARE_CHAIN`, to set `pending_decl`/
+        `pending_for_loop_decl` *before* the scanner reaches this one --
+        this marker alone is what makes the *direct*-chain shape, with
+        no intermediate variable, work).
+
+        Requires the receiver itself not be preceded by `.` -- otherwise
+        a deeper hop's own field name (`a.b.c(...)`, checked starting at
+        `b` once nothing matches at `a`) could be mistaken for a fresh
+        root, the same reasoning `bare_root_before_dot`'s own backward
+        walk already encodes for *its* direction, just checked forward
+        here instead.
+
+        Purely syntactic -- doesn't check `ctx.entity_to_type` (the
+        scanner has no access to it); the handler does, and silently
+        no-ops (advances one byte, exactly as if nothing had matched at
+        all) whenever the receiver isn't actually a tracked bare local --
+        this shape matches an *enormous* amount of completely ordinary,
+        unrelated Mojo (`some_string.upper()`, `some_list.append(...)`,
+        any native method call on any untracked local at all), so unlike
+        every other fallback check in this file, misfiring here is the
+        common case by a wide margin, not the exception -- the handler's
+        own silent, harmless no-op has to hold up under that, not just
+        the occasional false match."""
+        var save = self.pos
+        if is_after_dot(self.source, save):
+            return False
+        var receiver = self.scan_ident()
+        if receiver.byte_length() == 0:
+            self.pos = save
+            return False
+        if self.peek() != UInt8(ord(".")):
+            self.pos = save
+            return False
+        self.pos += 1
+        var method_name = self.scan_ident()
+        if method_name.byte_length() == 0:
+            self.pos = save
+            return False
+        var matched = self.peek() == UInt8(ord("("))
+        self.pos = save
+        return matched
+
+    def at_bare_var_decl_over_bare_chain(mut self) raises -> Bool:
+        """True if `self.pos` starts `var <bare_name> = <bare_ident>.
+        <ident>(` -- the bare-rooted mirror of `at_bare_var_decl_over_
+        marked_chain`, for a chain whose own root carries no `@@` either
+        (`var x = addr2.get_thing()`). Requires the *exact* same shape
+        `at_bare_rooted_chain` itself requires (receiver, `.`, method
+        name, `(`) -- not just `receiver.` -- on purpose: this marker's
+        own job is only to set `pending_decl` a step early, and `BARE_
+        ROOTED_CHAIN` is what actually consumes it (clearing it one way
+        or another, every return path) once the scanner reaches the
+        receiver's own position next. If this matched a *looser* shape
+        (`var x = addr2.some_field`, a plain field with no call at all --
+        `at_plain_var_decl`'s own inferred branch already covers `var
+        <name> = <CtorIdent>(`, a direct call with no receiver, so this
+        one only needs to worry about the receiver.something shape),
+        `BARE_ROOTED_CHAIN` wouldn't fire there at all (it requires the
+        call), and `pending_decl` would leak, unconsumed, into whatever
+        marker the scanner finds next -- confirmed as a real risk while
+        building this, not a hypothetical, hence matching the exact same
+        precondition rather than a superficially simpler one. No
+        explicit `not starts_with("@@")` guard needed -- `scan_ident()`
+        stops dead at `@` on its own, self-excluding the marked-root
+        sibling case exactly the way `at_plain_var_decl`'s own inferred
+        branch already does."""
+        var save = self.pos
+        if not self.try_consume("var"):
+            self.pos = save
+            return False
+        self.skip_trivia()
+        var name = self.scan_ident()
+        if name.byte_length() == 0:
+            self.pos = save
+            return False
+        self.skip_trivia()
+        if not self.at_assignment():
+            self.pos = save
+            return False
+        self.pos += 1
+        self.skip_trivia()
+        var receiver = self.scan_ident()
+        if receiver.byte_length() == 0:
+            self.pos = save
+            return False
+        if self.peek() != UInt8(ord(".")):
+            self.pos = save
+            return False
+        self.pos += 1
+        var method_name = self.scan_ident()
+        if method_name.byte_length() == 0:
+            self.pos = save
+            return False
+        var matched = self.peek() == UInt8(ord("("))
+        self.pos = save
+        return matched
+
+    def at_bare_for_loop_over_bare_chain(mut self) raises -> Bool:
+        """True if `self.pos` starts `for [var/ref ]<loop_var> in
+        <bare_ident>.<ident>(` -- the bare-rooted mirror of `at_bare_for_
+        loop_over_marked_chain`, for an iterated chain whose own root
+        carries no `@@` either (`for a in addr2.get_thing():`). Requires
+        the exact same shape `at_bare_rooted_chain` itself requires
+        (receiver, `.`, method name, `(`), for the identical "guarantee
+        it's actually consumed, not leaked" reason `at_bare_var_decl_
+        over_bare_chain`'s own doc comment explains in full."""
+        var save = self.pos
+        if not (self.starts_with("for") and not is_ident_char(self.peek_at(3))):
+            self.pos = save
+            return False
+        self.pos += 3
+        self.skip_trivia()
+        _ = self.try_consume("var")
+        _ = self.try_consume("ref")
+        self.skip_trivia()
+        var loop_var = self.scan_ident()
+        if loop_var.byte_length() == 0:
+            self.pos = save
+            return False
+        self.skip_trivia()
+        if not (self.starts_with("in") and not is_ident_char(self.peek_at(2))):
+            self.pos = save
+            return False
+        self.pos += 2
+        self.skip_trivia()
+        var receiver = self.scan_ident()
+        if receiver.byte_length() == 0:
+            self.pos = save
+            return False
+        if self.peek() != UInt8(ord(".")):
+            self.pos = save
+            return False
+        self.pos += 1
+        var method_name = self.scan_ident()
+        if method_name.byte_length() == 0:
+            self.pos = save
+            return False
+        var matched = self.peek() == UInt8(ord("("))
+        self.pos = save
+        return matched
+
+    def at_bare_call_chain(mut self) raises -> Bool:
+        """True if `self.pos` starts `<bare_ident>(...)` (a call, its own
+        argument list balanced) immediately followed by `.` or `[` -- a
+        bare (never `@@`-marked) function's own call result, chained
+        directly with no intermediate variable (`make_note(@@b).@@ref.
+        name`). A pure lookahead, restoring `self.pos` either way.
+
+        Checked *forward*, at the function name's own position, before
+        the scanner ever steps into the argument list at all -- not
+        backward from whatever marked step eventually follows the way
+        `bare_root_before_dot` works for a variable-rooted chain. This
+        matters concretely: the argument list can itself contain a
+        genuine `@@`-marked reference (`@@b` above), which the scanner's
+        own left-to-right walk would otherwise find and process as its
+        own independent marker *before* ever reaching a later marked
+        step to look backward from -- confirmed via a real crash (a
+        negative-length "between text" slice in `rewrite_markers`'s own
+        loop) when this was first built as a backward look instead.
+
+        Purely syntactic -- doesn't check whether the identifier is
+        actually a known function in `bare_function_returns` (the
+        scanner has no access to that project-wide map); `handle_bare_
+        call_chain` checks semantically and, when it isn't, just copies
+        the call through unchanged, letting the outer loop's own
+        ordinary scan continue normally into the trailing `.`/`[` text
+        from there -- the same "matches far more often than it's acted
+        on" shape `PLAIN_VAR_DECL`/`PLAIN_FOR_LOOP` already use.
+
+        Requires the identifier itself *not* be preceded by `.` -- a
+        confirmed, real bug found while investigating a *different*
+        bare-rooted-chain gap: without this guard, `addr2.relocated(...)
+        .@@owner` matched here too (this check has no idea what preceded
+        `relocated`, purely forward), looking `relocated` up in `ctx.
+        bare_function_returns` -- the *flat*, receiver-unaware map
+        `build_bare_plain_function_returns` populates from every `def `
+        line project-wide regardless of indentation -- as if it were a
+        genuinely bare top-level function. Two different structs each
+        declaring their own same-named method (`Widget.clone() -> Widget`
+        and `Address.clone(...) -> Address`) collided in that flat map
+        (last one scanned wins); confirmed via a real compile that `w.
+        clone().@@dept` (`w` a `Widget`, no `dept` field at all) silently
+        compiled as if `.clone()` returned `Address` instead, surfacing
+        only as a confusing Mojo-level `'Widget' value has no attribute
+        'sqrrl__dept'` error. A method call on any receiver (`.name(`)
+        must go through `BARE_ROOTED_CHAIN`'s own receiver-type-aware
+        lookup instead (`ctx.bare_method_returns[receiver_type][name]`,
+        already correctly struct-scoped) -- never this flat map."""
+        var save = self.pos
+        if is_after_dot(self.source, save):
+            return False
+        var name = self.scan_ident()
+        if name.byte_length() == 0 or self.peek() != UInt8(ord("(")):
+            self.pos = save
+            return False
+        self.pos += 1
+        _ = self.scan_call_args_to_close()
+        var matched = self.peek() == UInt8(ord(".")) or self.peek() == UInt8(ord("["))
+        self.pos = save
+        return matched
 
     def parse_struct(mut self) raises -> ParsedStruct:
         """Requires `self.pos` at the `@@struct` token. Grammar: `@@struct
@@ -726,8 +1289,62 @@ struct Scanner(Movable):
                         + ident
                         + "{...}'"
                     )
-                elif self.peek() == UInt8(ord(".")) or self.peek() == UInt8(ord("[")):
+                elif (
+                    self.peek() == UInt8(ord(".")) or self.peek() == UInt8(ord("["))
+                    or (self.at_assignment() and is_after_dot(self.source, marker_start))
+                ):
                     kind = MarkerKind.FIELD_ACCESS
+                    # `n.@@ref...` -- a chain rooted at a *bare*
+                    # (never `@@`-marked) plain-struct-typed local
+                    # variable, this marker sitting at its own first
+                    # marked step, not the chain's true root. Widen
+                    # `marker_start` back to `n` itself so `parse_
+                    # field_access` (extended to accept a bare
+                    # entity name too) parses the whole thing as one
+                    # chain, rather than treating `@@ref` as some
+                    # unrelated, freestanding reference.
+                    #
+                    # The `at_assignment() and is_after_dot(...)` half is
+                    # the *write* mirror of the same shape: `n.@@ref =
+                    # value` never has a trailing `.`/`[` (the marked
+                    # field is always the chain's own last step for a
+                    # write), so the read-only trigger above would never
+                    # catch it -- confirmed as a real, silent gap via a
+                    # real compile: `addr2.@@nonexistent = @@bob` (`addr2`
+                    # bare, `nonexistent` not even a real field) fell
+                    # through to plain `NAME_REF` entirely, which has no
+                    # idea it's preceded by `addr2.` at all, and just
+                    # blindly renamed it to `sqrrl__nonexistent` -- no
+                    # error until Mojo's own compile stage, confusingly
+                    # far from the actual cause. `is_after_dot` (not just
+                    # `at_assignment()` alone) is required here so a
+                    # genuine root-level `@@x = value`/`var @@x = value`
+                    # (never preceded by `.`) still goes through `NAME_
+                    # REF` exactly as before -- only a `.`-preceded write
+                    # is redirected here.
+                    #
+                    # A bare *function call*'s own result chained the
+                    # same way (`make_note(@@b).@@ref`) is deliberately
+                    # NOT handled via an equivalent backward look here --
+                    # by the time the scanner reaches `@@ref`, it has
+                    # already independently found and processed any
+                    # `@@`-marked argument *inside* the call (`@@b`) as
+                    # its own separate marker, emitting it and advancing
+                    # the outer loop's own position tracker past that
+                    # point. Rewinding back to the call's own name at
+                    # this point would try to re-process text the outer
+                    # loop already consumed, producing a negative-length
+                    # "between text" slice (confirmed via a real crash).
+                    # `MarkerKind.BARE_CALL_CHAIN` (`at_bare_call_chain`,
+                    # in the fallback chain below) instead detects this
+                    # *forward*, at the function name's own position,
+                    # before the scanner ever steps into the argument
+                    # list at all -- the same reason `PLAIN_VAR_DECL`/
+                    # `PLAIN_FOR_LOOP` are also forward, not backward,
+                    # checks.
+                    var bare_root_start = bare_root_before_dot(self.source, marker_start)
+                    if bare_root_start >= 0:
+                        marker_start = bare_root_start
                 elif self.peek() == UInt8(ord("(")):
                     # `@@ident(...)` -- a function (definition or call site)
                     # that returns an '@@'-marked value but needs no
@@ -768,10 +1385,40 @@ struct Scanner(Movable):
                     and is_after_for_keyword(self.source, marker_start)
                 ):
                     kind = MarkerKind.FOR_ENTITY_LOOP
+                elif self.at_assignment() and is_after_open_paren_or_comma(self.source, marker_start):
+                    # `Note(@@owner=@@b)` -- a hand-written plain struct's
+                    # own `@fieldwise_init`-derived constructor call, the
+                    # keyword argument spelled the same marked way the
+                    # field itself is declared (`var @@owner: @@Beta`)
+                    # rather than the raw internal `sqrrl__owner` name.
+                    # Preceded by `(`/`,` and followed by a real `=` (not
+                    # `==`) is the one shape nothing else in the grammar
+                    # already means -- `@@Type{...}`'s own construct-field
+                    # syntax uses `.@@field = value` (a `.` precedes it,
+                    # a completely different dispatch branch above), and a
+                    # var-decl's own initializer is never preceded by `(`/
+                    # `,` this way.
+                    kind = MarkerKind.CONSTRUCT_KWARG
                 else:
                     kind = MarkerKind.NAME_REF
                 self.pos = marker_start
                 return kind
+            if self.at_plain_var_decl():
+                return MarkerKind.PLAIN_VAR_DECL
+            if self.at_bare_var_decl_over_marked_chain():
+                return MarkerKind.BARE_VAR_DECL_OVER_ENTITY
+            if self.at_bare_var_decl_over_bare_chain():
+                return MarkerKind.BARE_VAR_DECL_OVER_BARE_CHAIN
+            if self.at_plain_for_loop():
+                return MarkerKind.PLAIN_FOR_LOOP
+            if self.at_bare_for_loop_over_marked_chain():
+                return MarkerKind.BARE_FOR_ENTITY_LOOP
+            if self.at_bare_for_loop_over_bare_chain():
+                return MarkerKind.BARE_FOR_LOOP_OVER_BARE_CHAIN
+            if self.at_bare_rooted_chain():
+                return MarkerKind.BARE_ROOTED_CHAIN
+            if self.at_bare_call_chain():
+                return MarkerKind.BARE_CALL_CHAIN
             self.pos += 1
 
     def at_wrapped_entity_param(mut self) raises -> Bool:
@@ -942,11 +1589,27 @@ struct Scanner(Movable):
         access`'s own job (the "premature-leaf rollback" mechanism), using
         each `AccessStep.end_pos` to roll back to a known-good boundary."""
         var entity_marked_world = self.try_consume("@@@")
-        if not entity_marked_world and not self.try_consume("@@"):
-            raise self.err("InvalidSquirrelSyntax: expected '@@'")
-        var entity = self.scan_ident()
-        if entity.byte_length() == 0:
-            raise self.err("InvalidSquirrelSyntax: expected entity name")
+        var entity: String
+        var entity_is_bare = False
+        if entity_marked_world or self.try_consume("@@"):
+            entity = self.scan_ident()
+            if entity.byte_length() == 0:
+                raise self.err("InvalidSquirrelSyntax: expected entity name")
+        else:
+            # A chain can also start at a *bare* (never `@@`-marked)
+            # identifier -- a plain-struct-typed local variable's own
+            # name, e.g. `n.@@ref.name` -- reachable only via `find_next_
+            # marker`'s own backward look (`bare_root_before_dot`), which
+            # rewinds `self.pos` to the identifier's start before this is
+            # ever called; every *other* caller still always finds
+            # '@@'/'@@@' here first, unchanged. `entity_marked_world`
+            # stays `False` for this shape -- a bare-rooted chain can
+            # never be a table-level call, always written with the
+            # marked `@@@Type.method(...)` spelling instead.
+            entity = self.scan_ident()
+            if entity.byte_length() == 0:
+                raise self.err("InvalidSquirrelSyntax: expected '@@'")
+            entity_is_bare = True
 
         var steps = self.scan_access_steps()
         if len(steps) == 0:
@@ -958,6 +1621,7 @@ struct Scanner(Movable):
         return FieldAccess(
             entity=entity,
             entity_marked_world=entity_marked_world,
+            entity_is_bare=entity_is_bare,
             steps=steps^,
             is_call=tail.is_call,
             write_value=tail.write_value,
@@ -1130,22 +1794,9 @@ struct Scanner(Movable):
         (the caller already did, via one of the two `parse_*_func`s
         above, before it even knows yet whether this call needs a
         trailing-chain resolution or not)."""
-        var body_start = self.pos
-        var depth = 1
-        while not self.at_end() and depth > 0:
-            var before = self.pos
-            self.skip_non_code()
-            if self.pos != before:
-                continue
-            var b = self.peek()
-            if b == UInt8(ord("(")) or b == UInt8(ord("[")) or b == UInt8(ord("{")):
-                depth += 1
-            elif b == UInt8(ord(")")) or b == UInt8(ord("]")) or b == UInt8(ord("}")):
-                depth -= 1
-            self.pos += 1
-        if depth != 0:
-            raise self.err("InvalidSquirrelSyntax: unterminated '(' in function call")
-        return String(self.source[byte = body_start : self.pos - 1])
+        return self.scan_balanced_span_body(
+            UInt8(ord("(")), UInt8(ord(")")), "InvalidSquirrelSyntax: unterminated '(' in function call"
+        )
 
     def peek_trailing_chain_follows(mut self) -> Bool:
         """Pure lookahead (restores `self.pos` either way): true if,
@@ -1160,6 +1811,34 @@ struct Scanner(Movable):
         self.pos = save
         return follows
 
+    def peek_marked_field_name(mut self) -> Optional[String]:
+        """Pure lookahead (restores `self.pos` either way): if, skipping
+        trivia from `self.pos`, the next thing is `.` immediately
+        followed by `@@`, returns the marked field's own name; else
+        `None`. Lets `_handle_instance_call`'s plain-struct-owner branch
+        catch a marked field chained off an *untracked* call's own
+        return value right at the call site (`addr.copy().@@dept`,
+        `.copy()` never registered) instead of downstream, once the
+        scanner rediscovers `@@dept` on its own and treats it as an
+        unrelated, freestanding reference -- the same "confusing error
+        two steps removed from the actual cause" `peek_trailing_chain_
+        follows`'s own callers are built to avoid, just checking for a
+        *marked* continuation specifically rather than any continuation
+        at all."""
+        var save = self.pos
+        self.skip_trivia()
+        var result: Optional[String] = None
+        if self.peek() == UInt8(ord(".")):
+            self.pos += 1
+            self.skip_trivia()
+            if self.starts_with("@@"):
+                self.pos += 2
+                var name = self.scan_ident()
+                if name.byte_length() > 0:
+                    result = Optional[String](name)
+        self.pos = save
+        return result
+
     def _parse_json_call_arg(mut self, call_text: String) raises -> String:
         """Scans from just after `call_text`'s own '(' through the matching
         ')' at real-code depth, returns the raw, trimmed argument text
@@ -1172,22 +1851,9 @@ struct Scanner(Movable):
         self.skip_trivia()
         if not self.try_consume("("):
             raise self.err("InvalidSquirrelSyntax: expected '(' after '" + call_text + "'")
-        var body_start = self.pos
-        var depth = 1
-        while not self.at_end() and depth > 0:
-            var before = self.pos
-            self.skip_non_code()
-            if self.pos != before:
-                continue
-            var b = self.peek()
-            if b == UInt8(ord("(")):
-                depth += 1
-            elif b == UInt8(ord(")")):
-                depth -= 1
-            self.pos += 1
-        if depth != 0:
-            raise self.err("InvalidSquirrelSyntax: unterminated '(' in '" + call_text + "(...)'")
-        var raw = String(self.source[byte = body_start : self.pos - 1])
+        var raw = self.scan_balanced_span_body(
+            UInt8(ord("(")), UInt8(ord(")")), "InvalidSquirrelSyntax: unterminated '(' in '" + call_text + "(...)'"
+        )
         return String(raw.strip())
 
     def parse_begin_init_from_json(mut self) raises -> String:

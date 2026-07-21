@@ -23,11 +23,15 @@ def emit_world_module(discovery: DiscoveryResult) -> String:
     double: `sqrrl_prefixed`'s own `sqrrl__` +
     name convention means a user's own `@@`-marked name could otherwise
     collide with one of these (`@@world`/`@@init`/`@@World` are all
-    perfectly plausible entity/variable names). `sqrrl__check_no_leaks`/
-    `sqrrl__leaked_<name>` stay double -- neither ever appears in a scope
-    where hand-written DSL code coexists (only ever called from other
-    generated code), so there's nothing for them to actually collide
-    with.
+    perfectly plausible entity/variable names). `sqrrl__check_no_leaks`
+    stays double (a method name, technically callable as `sqrrl___world.
+    sqrrl__check_no_leaks()`, even if no real DSL script ever would) --
+    it never appears in a scope where hand-written DSL code coexists
+    (only ever called from other generated code), so there's nothing for
+    it to actually collide with. Its own local `leaked_<name>` counter
+    variable, below, carries no `sqrrl__` prefix at all -- unlike a
+    method name, a local variable inside this one generated method's own
+    body has zero collision surface with anything, prefixed or not.
 
     Slimmed from rw_squirrel_2's own `emit_world_module` for M1's scope:
     no `TempKeepAlives`/`to_json`/`sqrrl___world_from_json`/
@@ -36,7 +40,33 @@ def emit_world_module(discovery: DiscoveryResult) -> String:
     give JSON reload a safe reconstruction order). `sqrrl__check_no_leaks`/
     `__del__` are unchanged: `@@:` still builds a real, live `sqrrl___World`
     immediately, so leak detection at scope-end is unaffected by anything
-    else in this rewrite."""
+    else in this rewrite.
+
+    `sqrrl__check_no_leaks` clears *every* keepalive struct's own hold in
+    one pass, *before* checking any struct's liveness in a second pass --
+    not interleaved (clear mine, check mine, clear the next one's, check
+    the next one's...), which was this method's own original shape and a
+    real bug: a keepalive struct can hold a genuinely live reference to
+    an entity of a *different* struct (a `multi`/relation field, e.g. a
+    keepalive `@@Group` holding `@@Person` members), and that other
+    struct might be declared -- and therefore checked -- earlier in
+    `discovery.structs`' own iteration order, before this struct's own
+    keepalive hold on it ever gets cleared. Confirmed via a real end-to-
+    end compile (the ported `friends` example, a keepalive join struct
+    holding `multi` members of an earlier-declared struct): `Person`
+    aborted as "leaked" even though its only remaining reference was
+    `Group`'s own keepalive membership, one line away from being cleared
+    -- simply declared too early to benefit from it. Two full passes
+    fixes this regardless of declaration order: nothing is ever checked
+    while a keepalive-only hold on it could still be pending release.
+
+    Pass 1's `_ = self.<Name>.storage[].keepalive_clear()`: `EntityStorage.
+    keepalive_clear` deliberately returns the dropped dict instead of
+    destroying it itself, so that destruction (and any `__del__`-triggered
+    mutation back into the *same* `EntityStorage`, e.g. a `multi` member's
+    own `free_id` call) happens only once `self.<Name>.storage[]`'s own
+    exclusive borrow has fully ended -- a real, confirmed Mojo aliasing
+    hazard otherwise silently discards that nested mutation."""
     var out = String()
     for ds in discovery.structs:
         var table_name = sqrrl_prefixed(ds.parsed.name) + "Table"
@@ -59,27 +89,39 @@ def emit_world_module(discovery: DiscoveryResult) -> String:
     if len(discovery.structs) == 0:
         out += "        pass\n"
     else:
+        # Pass 1: drop every keepalive struct's own hold *first*, before
+        # any liveness check runs at all -- both call sites (`__del__`
+        # and `@@init()`) immediately destroy or replace the whole World
+        # right after this runs, so clearing every hold up front is safe
+        # regardless of which struct's own check happens to run next.
         for ds in discovery.structs:
-            var count_var = "sqrrl__leaked_" + ds.parsed.name
             if ds.parsed.is_keepalive:
-                # A keepalive-tagged struct's own keepalive hold
-                # (`EntityStorage.keepalive`, M4) is a real, deliberate
-                # strong reference -- an entity retained *only* by it is
-                # expected to still be live at scope-end, not a leak.
-                # Actually *drop* the hold first (both call sites --
-                # __del__ and @@init() -- immediately destroy or replace
-                # the whole World right after this runs, so clearing it
-                # here is safe), then check what's still alive: an entity
-                # held only by keepalive dies right here and stops
-                # counting; one *also* held by something else genuinely
-                # external stays alive and still gets caught. Simply
-                # subtracting the keepalive set's own size would miss that
-                # second case (an entity counted as "explained away" by
-                # keepalive even though something else is also leaking it)
-                # -- actually releasing the reference and re-checking
-                # liveness doesn't have that blind spot.
-                out += "        self." + ds.parsed.name + ".storage[].keepalive_clear()\n"
-            out += "        var " + count_var + " = len(self." + ds.parsed.name + ".all())\n"
+                out += (
+                    "        _ = self."
+                    + ds.parsed.name
+                    + ".storage[].keepalive_clear()\n"
+                )
+        # Pass 2: now that every keepalive-only hold is already gone,
+        # checking what's still alive is order-independent -- an entity
+        # held only by keepalive (its own, or a *different* keepalive
+        # struct's, e.g. a relation/`multi` field) already died in pass
+        # 1 and stops counting; one *also* held by something else
+        # genuinely external stays alive and still gets caught. Simply
+        # subtracting the keepalive set's own size would miss that
+        # second case (an entity counted as "explained away" by
+        # keepalive even though something else is also leaking it) --
+        # actually releasing the reference and re-checking liveness
+        # doesn't have that blind spot.
+        #
+        # `.count()`, not `len(.all())`: `.all()` builds a whole `Set`
+        # of fresh wrapper instances (one real construction, one Set
+        # insertion, per live entity) purely to immediately discard it
+        # after taking its length -- `.count()` reads the same live
+        # count `EntityStorage` already maintains directly, no
+        # construction needed at all.
+        for ds in discovery.structs:
+            var count_var = "leaked_" + ds.parsed.name
+            out += "        var " + count_var + " = self." + ds.parsed.name + ".count()\n"
             out += "        if " + count_var + " > 0:\n"
             out += (
                 '            abort("LeakedEntities: \''

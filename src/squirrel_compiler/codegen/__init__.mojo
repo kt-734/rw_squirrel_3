@@ -14,6 +14,7 @@ from squirrel_compiler.codegen.helpers import (
     is_entity_iterable_leaf,
     encode_container_type,
     scan_entity_return_shape,
+    scan_bare_return_type_text,
 )
 from squirrel_compiler.codegen.entity import emit_entity_inner, emit_entity
 from squirrel_compiler.codegen.table import emit_indexes, emit_table

@@ -5,7 +5,7 @@ from schema.box import Box
 from schema.pair import Pair
 from schema.profile import Profile
 from schema.assignment import Assignment
-from logic.factories import sqrrl__make_vendor, sqrrl__make_project, sqrrl__make_department, sqrrl__hire, sqrrl__hire_team, sqrrl__make_team, sqrrl__log
+from schema.grid_module import Grid
 
 
 def @@promote(@@e: @@Employee, new_title: String) -> @@Employee:
@@ -39,6 +39,15 @@ def main() raises:
         _ = @@sales.add_to_@@projects(@@onboarding)
         print("eng project count:", len(@@eng.@@projects))
         print("departments running onboarding:", len(@@@Department.for_@@projects(@@onboarding)))
+
+        # Direct iteration over a `multi` relation field itself (not a
+        # bound variable, not a table-level for_<field>/all() call) --
+        # `multi`'s own relation_schema entry is the bare element type,
+        # never Set[...]-wrapped, so this loop variable's registration
+        # goes through a different path than an ordinary Set/List-
+        # wrapped relation field's does.
+        for @@proj in @@eng.@@projects:
+            print("eng project (direct multi-field iteration):", @@proj.name)
 
         # Set-wrapped *ordinary* relation field (not `multi`) -- a whole Set
         # assigned/read at once, unlike `multi`'s one-member-at-a-time API.
@@ -114,6 +123,11 @@ def main() raises:
         print("value_eq(eng, eng):", @@eng.value_eq(@@eng))
         print("value_eq(eng, sales):", @@eng.value_eq(@@sales))
 
+        # `==` -- identity, not field-by-field: a handle equals itself,
+        # never a different row, regardless of `equatable`/`value_eq`.
+        print("eng == eng (identity):", @@eng == @@eng)
+        print("eng == sales (identity):", @@eng == @@sales)
+
         # `stats salary` -- whole-table, `_by_<field>`, and `_for_<field>`
         # aggregate siblings, all three shapes.
         print("total salary (whole table):", @@@Employee.sum_salary())
@@ -178,26 +192,52 @@ def main() raises:
 
         # A plain struct's own relation field, read through a fully
         # unmarked local variable -- `lead_assignment` is never itself
-        # `@@`-marked; the explicit `: Assignment` annotation is what lets
-        # this parser resolve `.@@person` against `Assignment`'s own
-        # relation field, direct Mojo field access under the hood (`Note`/
-        # `Assignment` have no generated table of their own to route a
-        # `get_<field>` call through).
+        # `@@`-marked (only a *field access* through a plain-struct value
+        # can be marked; the value's own local name never is, since a
+        # plain struct never has a table of its own to bind an entity
+        # handle against). Its explicit `: Assignment` type annotation is
+        # still enough for a marked access through it to resolve
+        # correctly (`.@@person`, matching the field's own declaration,
+        # `var @@person: @@Person`) -- no need to know or spell the raw
+        # internal name (`sqrrl__person`) by hand.
         var lead_assignment: Assignment = @@platform_team.lead.copy()
-        print("platform team lead person:", lead_assignment.person._inner[].get_name())
+        print("platform team lead person:", lead_assignment.@@person.name)
 
         @@platform_team.@@advisor = Optional(@@promoted_bob)
         if @@platform_team.@@advisor:
             print("platform team advisor:", @@platform_team.@@advisor.value()._inner[].get_title())
 
+        # A hand-written, custom two-argument container (Grid, same shape
+        # container_fields' own escape hatch already proved) with a
+        # genuine relation in its *value* position -- Grid[String,
+        # @@Employee], not Grid[String, Int]. Combines three things that
+        # had each only been confirmed working in isolation until now:
+        # a custom (non-Dict) two-argument wrapper, mandatory-marking's
+        # widened value-position rule, and the JSON escape hatch, all on
+        # the same field at once.
+        var directory_pairs = List[Tuple[String, @@Employee]]()
+        directory_pairs.append(("lead", @@alice_emp))
+        directory_pairs.append(("backup", @@bob_emp))
+        @@platform_team.@@directory = Grid[String, @@Employee](pairs=directory_pairs^)
+        print("platform team directory lookup (Grid value-position relation):", @@platform_team.@@directory["lead"].title)
+        for role in @@platform_team.@@directory:
+            print("platform team directory role (bare loop var, Grid yields keys only):", role)
+
         # keepalive: AuditLog entities survive with no local var and no
         # relation field pointing at them, purely via `keepalive`.
         @@@log("started")
         @@@log("did a thing")
+        var @@retracted_entry = @@@AuditLog { .message = "will be retracted" }
         @@@log("finished")
         print("audit log entries kept alive:", len(@@@AuditLog.all()))
         for @@entry in @@@AuditLog.all():
             print("audit log entry:", @@entry.message)
+
+        # dont_keepalive(): opts a single entity back out of its own
+        # struct's keepalive hold -- once nothing else references it
+        # either, it's gone, same as a non-keepalive entity always is.
+        _ = @@retracted_entry.dont_keepalive()
+        print("audit log entries after dont_keepalive (no other holder):", len(@@@AuditLog.all()))
 
         # ---- deep plain-struct nesting + generics, through Employee.profile ----
         var profile = @@alice_emp.profile.copy()
@@ -266,6 +306,8 @@ def main() raises:
         print("reloaded alice's dept:", @@reloaded_alice.@@dept.name)
         print("reloaded alice's rating survived:", @@reloaded_alice.profile.rating.value)
         print("reloaded audit log count:", len(@@@AuditLog.all()))
+        for @@t in @@@Team.all():
+            print("reloaded team directory lookup survived (Grid value-position relation):", @@t.@@directory["lead"].title)
 
         # `@@reloaded_alice` is a real, independently-held handle now --
         # everything else `@@@begin_init_from_json(...)` only retained

@@ -16,6 +16,7 @@ from schema.profile import Profile
 from schema.contact_info import ContactInfo
 from schema.assignment import Assignment
 from schema.address import Address
+from schema.grid_module import Grid, sqrrl__Grid_json_to_pairs, sqrrl__Grid_json_from_pairs
 
 
 def list_to_json[T: Movable](lst: List[T]) -> String:
@@ -154,6 +155,18 @@ def sqrrl__Team_to_json(e: sqrrl__Team) -> String:
     else:
         ds2 = "null"
     out += ds2
+    out += ","
+    out += '"directory":'
+    ref fv_directory = e._inner[].get_sqrrl__directory()
+    var ds3 = String("[")
+    var dfirst3 = True
+    for de3 in sqrrl__Grid_json_to_pairs(fv_directory):
+        if not dfirst3:
+            ds3 += ","
+        ds3 += "[" + sqrrl__to_json(de3[0]) + "," + String(de3[1].id()) + "]"
+        dfirst3 = False
+    ds3 += "]"
+    out += ds3
     out += "}"
     return out^
 
@@ -162,6 +175,7 @@ def sqrrl__Team_from_json_with_id(table: sqrrl__TeamTable, sqrrl__tbl_Person: sq
     var parsed_lead: Optional[Assignment] = None
     var parsed_members: Optional[List[sqrrl__Person]] = None
     var parsed_advisor: Optional[Optional[sqrrl__Employee]] = None
+    var parsed_directory: Optional[Grid[String, sqrrl__Employee]] = None
     sc.expect_byte(UInt8(ord("{")))
     if not sc.try_consume_byte(UInt8(ord("}"))):
         while True:
@@ -188,6 +202,20 @@ def sqrrl__Team_from_json_with_id(table: sqrrl__TeamTable, sqrrl__tbl_Person: sq
                 else:
                     nc1 = Optional[sqrrl__Employee](sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sc.parse_json_int()))))
                 parsed_advisor = nc1^
+            elif key == "directory":
+                var nc1 = List[Tuple[String, sqrrl__Employee]]()
+                sc.expect_byte(UInt8(ord("[")))
+                if not sc.try_consume_byte(UInt8(ord("]"))):
+                    while True:
+                        sc.expect_byte(UInt8(ord("[")))
+                        var nck1 = sc.parse_json_string()
+                        sc.expect_byte(UInt8(ord(",")))
+                        nc1.append((nck1, sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sc.parse_json_int())))))
+                        sc.expect_byte(UInt8(ord("]")))
+                        if not sc.try_consume_byte(UInt8(ord(","))):
+                            break
+                    sc.expect_byte(UInt8(ord("]")))
+                parsed_directory = sqrrl__Grid_json_from_pairs(nc1^)
             else:
                 raise Error("InvalidJson: unknown field " + key + " for Team")
             if not sc.try_consume_byte(UInt8(ord(","))):
@@ -201,12 +229,15 @@ def sqrrl__Team_from_json_with_id(table: sqrrl__TeamTable, sqrrl__tbl_Person: sq
         raise Error("InvalidJson: missing field members for Team")
     if not parsed_advisor:
         raise Error("InvalidJson: missing field advisor for Team")
+    if not parsed_directory:
+        raise Error("InvalidJson: missing field directory for Team")
     table.storage[].alloc_specific_id(id)
     var v_name = parsed_name.value()
     var v_lead = parsed_lead.take()
     var v_members = parsed_members.take()
     var v_advisor = parsed_advisor.take()
-    var inner = ArcPointer(sqrrl__TeamInner(_id=id, _table=table.storage, _name=v_name, _lead=v_lead^, _sqrrl__members=v_members^, _sqrrl__advisor=v_advisor^))
+    var v_directory = parsed_directory.take()
+    var inner = ArcPointer(sqrrl__TeamInner(_id=id, _table=table.storage, _name=v_name, _lead=v_lead^, _sqrrl__members=v_members^, _sqrrl__advisor=v_advisor^, _sqrrl__directory=v_directory^))
     table.storage[].register_weak(id, inner)
     return sqrrl__Team(inner^)
 
@@ -755,7 +786,7 @@ def sqrrl__Project_all_from_json(table: sqrrl__ProjectTable, sqrrl__tbl_Vendor: 
 def sqrrl__Assignment_to_json(value: Assignment) -> String:
     var out = String("{")
     out += '"person":'
-    out += String(value.person.id())
+    out += String(value.sqrrl__person.id())
     out += ","
     out += '"role":'
     out += sqrrl__to_json(value.role)
@@ -784,7 +815,7 @@ def sqrrl__Assignment_from_json(sqrrl__tbl_Person: sqrrl__PersonTable, mut sc: s
         raise Error("InvalidJson: missing field person for Assignment")
     if not parsed_role:
         raise Error("InvalidJson: missing field role for Assignment")
-    return Assignment(person=parsed_person.take(), role=parsed_role.take())
+    return Assignment(sqrrl__person=parsed_person.take(), role=parsed_role.take())
 
 def sqrrl__Address_to_json(value: Address) -> String:
     var out = String("{")

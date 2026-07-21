@@ -11,6 +11,8 @@ from squirrel_compiler.driver.discovery import (
     build_ordered_fields,
     build_world_methods,
     build_method_returns,
+    build_bare_method_returns,
+    build_plain_struct_bare_method_returns,
     build_stats_fields,
     build_entity_symbols,
     discover_plain_structs,
@@ -19,7 +21,14 @@ from squirrel_compiler.driver.discovery import (
     check_plain_struct_names_disjoint,
 )
 from squirrel_compiler.driver.cycles import check_no_relation_cycles
-from squirrel_compiler.driver.misc_builders import build_function_returns, check_single_world_scope_call, project_uses_json
+from squirrel_compiler.driver.misc_builders import (
+    build_function_returns,
+    build_bare_plain_function_returns,
+    build_function_symbols,
+    check_single_world_scope_call,
+    project_uses_json,
+    discover_raw_imports,
+)
 from squirrel_compiler.driver.world_module import emit_world_module
 from squirrel_compiler.driver.topo_order import topo_sort_structs
 from squirrel_compiler.driver.json_module import emit_json_module
@@ -59,12 +68,25 @@ def convert_directory(target_root: String) raises:
 
     var relation_schema = build_relation_schema(discovery, plain_struct_fields)
     var function_returns = build_function_returns(sqrrl_files)
+    var bare_function_returns = build_bare_plain_function_returns(sqrrl_files)
     var unique_fields = build_unique_fields(discovery)
     var indexed_fields = build_indexed_fields(discovery)
     var multi_fields = build_multi_fields(discovery)
     var ordered_fields = build_ordered_fields(discovery)
     var world_methods = build_world_methods(discovery)
     var method_returns = build_method_returns(discovery)
+    var bare_method_returns = build_bare_method_returns(discovery)
+    # A plain struct's own bare methods are discovered separately (`plain_
+    # struct_discovery`, not `discovery`'s own `@@struct`-only list) but
+    # merge into the exact same map -- struct names are disjoint by
+    # construction (`check_plain_struct_names_disjoint`, already run
+    # above), so there's no key collision to resolve, just letting
+    # `_handle_instance_call`'s plain-struct-owner branch consult the same
+    # `ctx.bare_method_returns` a real `@@struct`'s own bare method
+    # already does.
+    var plain_struct_bare_method_returns = build_plain_struct_bare_method_returns(plain_struct_discovery)
+    for struct_name in plain_struct_bare_method_returns.keys():
+        bare_method_returns[String(struct_name)] = plain_struct_bare_method_returns[String(struct_name)].copy()
     var stats_fields = build_stats_fields(discovery)
     var plain_value_fields = build_plain_value_fields(discovery, plain_struct_fields)
     var entity_symbols = build_entity_symbols(discovery)
@@ -81,6 +103,13 @@ def convert_directory(target_root: String) raises:
     # sink example) exercised it.
     for plain_name in plain_struct_discovery.module_of.keys():
         entity_symbols[String(plain_name)] = plain_struct_discovery.module_of[String(plain_name)]
+    # A cross-file `@@@`/`@@`-marked top-level function call needs the
+    # exact same automatic import treatment -- merged into the very same
+    # map, so `emit_file`'s existing symbol-scan-and-import mechanism
+    # covers it with no changes of its own.
+    var function_symbols = build_function_symbols(sqrrl_files, target_root)
+    for func_symbol in function_symbols.keys():
+        entity_symbols[String(func_symbol)] = function_symbols[String(func_symbol)]
 
     var world_module = emit_world_module(discovery)
     var world_path = join(target_root, "sqrrl__world.mojo")
@@ -111,7 +140,8 @@ def convert_directory(target_root: String) raises:
         var generated = emit_file(
             path, own_module_path, relation_schema, struct_names, function_returns, unique_fields,
             indexed_fields, multi_fields, ordered_fields, world_methods, stats_fields, entity_symbols,
-            plain_struct_names, plain_value_fields, json_used, method_returns=method_returns
+            plain_struct_names, plain_value_fields, json_used, method_returns=method_returns,
+            bare_function_returns=bare_function_returns, bare_method_returns=bare_method_returns,
         )
         out_paths.append(out_path)
         generated_files.append(generated^)
@@ -121,7 +151,8 @@ def convert_directory(target_root: String) raises:
         # (user's own non-negotiable notes.md constraint, M5) -- never
         # folded into emit_world_module/emit_file's own per-struct output.
         var topo_order = topo_sort_structs(discovery, relation_schema)
-        var json_module = emit_json_module(discovery.structs, topo_order, plain_struct_discovery)
+        var raw_imports = discover_raw_imports(sqrrl_files)
+        var json_module = emit_json_module(discovery.structs, topo_order, plain_struct_discovery, raw_imports)
         var json_path = join(target_root, "sqrrl__json.mojo")
         var jf = open(json_path, "w")
         jf.write(json_module)

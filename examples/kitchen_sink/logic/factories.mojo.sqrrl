@@ -5,6 +5,7 @@ from schema.box import Box
 from schema.pair import Pair
 from schema.profile import Profile
 from schema.assignment import Assignment
+from schema.grid_module import Grid
 
 
 def @@@make_vendor(name: String) -> @@Vendor:
@@ -50,12 +51,13 @@ def @@@hire_team(names: List[String], email_suffix: String, starting_years: UInt
     return @@team^
 
 def @@@make_team(name: String, @@lead_person: @@Person, role: String) -> @@Team:
-    var assignment = Assignment(person=@@lead_person, role=role)
+    var assignment = Assignment(@@person=@@lead_person, role=role)
     var @@t = @@@Team {
         .name = name,
         .lead = assignment,
         .@@members = List[@@Person](),
         .@@advisor = None,
+        .@@directory = Grid[String, @@Employee](pairs=List[Tuple[String, @@Employee]]()),
     }
     return @@t
 

@@ -28,6 +28,7 @@ from schema.box import Box
 from schema.pair import Pair
 from schema.profile import Profile
 from schema.assignment import Assignment
+from schema.grid_module import Grid
 
 
 def sqrrl__make_vendor(mut sqrrl___world: sqrrl___World, name: String) -> sqrrl__Vendor:
@@ -67,8 +68,8 @@ def sqrrl__hire_team(mut sqrrl___world: sqrrl___World, names: List[String], emai
     return sqrrl__team^
 
 def sqrrl__make_team(mut sqrrl___world: sqrrl___World, name: String, sqrrl__lead_person: sqrrl__Person, role: String) -> sqrrl__Team:
-    var assignment = Assignment(person=sqrrl__lead_person, role=role)
-    var sqrrl__t = sqrrl___world.Team.create(name = name, lead = assignment^, sqrrl__members = List[sqrrl__Person](), sqrrl__advisor = None)
+    var assignment = Assignment(sqrrl__person=sqrrl__lead_person, role=role)
+    var sqrrl__t = sqrrl___world.Team.create(name = name, lead = assignment^, sqrrl__members = List[sqrrl__Person](), sqrrl__advisor = None, sqrrl__directory = Grid[String, sqrrl__Employee](pairs=List[Tuple[String, sqrrl__Employee]]()))
     return sqrrl__t
 
 def sqrrl__log(mut sqrrl___world: sqrrl___World, message: String) raises:

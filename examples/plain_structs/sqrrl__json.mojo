@@ -7,7 +7,7 @@ from company import sqrrl__Person, sqrrl__PersonInner, sqrrl__PersonTable
 from company import Address
 from company import Box
 from company import Tagged
-from company import ExternalCity, sqrrl__ExternalCity_from_json
+from ext_module import ExternalCity, sqrrl__ExternalCity_from_json
 
 
 def list_to_json[T: Movable](lst: List[T]) -> String:
@@ -233,7 +233,7 @@ def sqrrl__Address_to_json(value: Address) -> String:
     out += sqrrl__to_json(value.city)
     out += ","
     out += '"owner":'
-    out += String(value.owner.id())
+    out += String(value.sqrrl__owner.id())
     out += "}"
     return out^
 
@@ -259,7 +259,7 @@ def sqrrl__Address_from_json(sqrrl__tbl_Employee: sqrrl__EmployeeTable, mut sc: 
         raise Error("InvalidJson: missing field city for Address")
     if not parsed_owner:
         raise Error("InvalidJson: missing field owner for Address")
-    return Address(city=parsed_city.take(), owner=parsed_owner.take())
+    return Address(city=parsed_city.take(), sqrrl__owner=parsed_owner.take())
 
 def sqrrl__Tagged_to_json[Kind: Copyable & ImplicitlyDeletable](value: Tagged[Kind]) -> String:
     var out = String("{")

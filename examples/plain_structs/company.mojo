@@ -14,7 +14,20 @@ from ext_module import ExternalCity, sqrrl__ExternalCity_from_json
 @fieldwise_init
 struct Address(Copyable, Movable, ImplicitlyDeletable):
     var city: String
-    var owner: sqrrl__Employee
+    var sqrrl__owner: sqrrl__Employee
+
+    def relocated(self, new_city: String, sqrrl__owner: sqrrl__Employee) -> Address:
+        # A hand-written method on a plain (non-`@@struct`) struct,
+        # returning another plain-struct value -- tracked the same way a
+        # bare top-level function/an `@@struct`'s own bare method already
+        # are, letting a trailing chain continue off its own call result
+        # (`addr.relocated(...).@@owner.name`, no intermediate variable).
+        # (Takes `@@owner` as its own parameter rather than reading `self.
+        # @@owner` -- a plain struct's own method body is real, hand-
+        # written Mojo the DSL never gives its own `self` a registered
+        # type inside, unlike a spliced `@@struct` method's `self`, so a
+        # marked field access directly on `self` doesn't resolve here.)
+        return Address(city=new_city, sqrrl__owner=sqrrl__owner)
 
 
 struct Box[T: Copyable & ImplicitlyDeletable](Movable, ImplicitlyDeletable):
@@ -84,6 +97,28 @@ struct sqrrl__Employee(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeleta
 
     def sqrrl__to_json(self) -> String:
         return String(self.id())
+
+    def get_home(self) -> Address:
+        # A bare (never `@@`/`@@@`-marked) method on an `@@struct`,
+        # returning a plain-struct value -- the method analogue of a bare
+        # top-level function's own call result: its own call can be
+        # chained directly (`@@x.get_home().@@owner.name`, no
+        # intermediate variable), no different from `make_address(...)`
+        # above except the receiver is a bound `@@entity` instead of a
+        # function's own parameters.
+        return Address(city="Metropolis", sqrrl__owner=self)
+
+    def get_homes(self) -> List[Address]:
+        # Same, but returning a *container* of the plain struct -- lets a
+        # bare (never `@@`-marked) `for` loop variable iterate directly
+        # off the bare method's own call result, no intermediate
+        # variable, the entity-rooted analogue of `for a in addresses:`/
+        # `for a in make_addresses(...):` above.
+        var out = List[Address]()
+        out.append(Address(city="Smallville", sqrrl__owner=self))
+        return out^
+
+
 
 
 struct sqrrl__EmployeeIndexes(Movable, ImplicitlyDeletable):
@@ -271,25 +306,103 @@ struct sqrrl__PersonTable(Movable):
             out.add(key.copy())
         return out^
 
+def owner_name(a: Address) raises -> String:
+    # A function parameter with a bare (never `@@`-marked) plain-struct
+    # type -- its own explicit annotation alone is enough for a marked
+    # relation-field access through it to resolve, no different from a
+    # local variable's.
+    return a.sqrrl__owner._inner[]._name
+
+
+def make_address(city: String, sqrrl__owner: sqrrl__Employee) raises -> Address:
+    # A bare (never `@@`/`@@@`-marked) function returning a plain-struct
+    # value -- its own call result can be chained directly (`make_
+    # address(...).@@owner.name`, no intermediate variable) or iterated
+    # directly (`for x in make_addresses(...):`), the exact same way a
+    # bare local variable's own value already can.
+    return Address(city = city, sqrrl__owner = sqrrl__owner)
+
+
+def make_addresses(sqrrl__owner: sqrrl__Employee) raises -> List[Address]:
+    var out = List[Address]()
+    out.append(Address(city = "Ogdenville", sqrrl__owner = sqrrl__owner))
+    out.append(Address(city = "North Haverbrook", sqrrl__owner = sqrrl__owner))
+    return out^
+
+
 def main() raises:
     var sqrrl___world = sqrrl___init()
     try:
         var sqrrl__bob = sqrrl___world.Employee.create(name = "Bob")
-        var addr = Address(city = "Springfield", owner = sqrrl__bob)
+        var addr: Address = Address(city = "Springfield", sqrrl__owner = sqrrl__bob)
         var meta = Tagged[String](label = "vip", count = 1)
         var sqrrl__alice = sqrrl___world.Person.create(name = "Alice", home = addr^, meta = meta^, hometown = ExternalCity(name = "Ogdenville"), sqrrl__box = Box(sqrrl__bob))
 
         print(sqrrl__alice._inner[]._home.city)
-        print(sqrrl__alice._inner[]._home.owner._inner[]._name)
+        print(sqrrl__alice._inner[]._home.sqrrl__owner._inner[]._name)
         print(sqrrl__alice._inner[]._meta.label, sqrrl__alice._inner[]._meta.count)
         print(sqrrl__alice._inner[]._hometown.name)
         print(sqrrl__alice._inner[]._sqrrl__box.value._inner[].get_name())
 
         sqrrl__alice._inner[]._home.city = "Shelbyville";
-        sqrrl__alice._inner[]._home.owner = sqrrl__bob;
+        sqrrl__alice._inner[]._home.sqrrl__owner = sqrrl__bob;
 
         print(sqrrl__alice._inner[]._home.city)
-        print(sqrrl__alice._inner[]._home.owner._inner[]._name)
+        print(sqrrl__alice._inner[]._home.sqrrl__owner._inner[]._name)
+
+        # `addr2` itself is a bare local variable -- never `@@`-marked --
+        # holding a plain-struct value directly (not reached through an
+        # entity's own field this time). No explicit `: Address`
+        # annotation needed here -- the constructor call on the right is
+        # itself enough to infer it from, the same way a marked entity's
+        # own `var @@x = List[@@Type]()` already can.
+        var addr2 = Address(city = "Ogdenville", sqrrl__owner = sqrrl__bob)
+        print(addr2.sqrrl__owner._inner[]._name)
+        addr2.sqrrl__owner = sqrrl__bob;
+        print(addr2.sqrrl__owner._inner[]._name)
+
+        # The same, through a function parameter, a container of the
+        # bare-typed value, and a bare for-loop variable over one.
+        print(owner_name(addr2))
+        var addresses = List[Address]()
+        addresses.append(addr2.copy())
+        print(addresses[0].sqrrl__owner._inner[]._name)
+        for a in addresses:
+            print(a.sqrrl__owner._inner[]._name)
+
+        # A bare function's own call result, chained directly (no
+        # intermediate variable) or iterated directly (no intermediate
+        # variable, no `for @@x in ...:` marked form) -- the bare-call
+        # analogue of the local-variable/parameter/container cases above.
+        print(make_address("Capital City", sqrrl__bob).sqrrl__owner._inner[]._name)
+        for a in make_addresses(sqrrl__bob):
+            print(a.sqrrl__owner._inner[]._name)
+
+        # A bare *method*'s own call result, chained directly off a
+        # bound `@@entity` receiver -- the method analogue of the two
+        # bare-function cases just above.
+        print(sqrrl__bob.get_home().sqrrl__owner._inner[]._name)
+
+        # A bare `for` loop variable, iterating directly off a bare
+        # method's own call result rooted at a bound `@@entity` receiver
+        # -- no intermediate variable, no `for @@x in ...:` marked form
+        # (the element is a plain struct, not an entity).
+        for a in sqrrl__bob.get_homes():
+            print(a.sqrrl__owner._inner[]._name)
+
+        # A bare *var-decl*, no annotation, initialized straight from a
+        # bound `@@entity`'s own bare method call -- no explicit `:
+        # Address` needed (unlike a call whose own name isn't itself
+        # `@@`-rooted, which `PLAIN_VAR_DECL`'s own inferred branch
+        # handles instead), the entity-rooted analogue of the direct-
+        # chain/for-loop cases just above.
+        var addr3 = sqrrl__bob.get_home()
+        print(addr3.sqrrl__owner._inner[]._name)
+
+        # A hand-written method on a plain struct itself (`Address.
+        # relocated`, not an entity/entity-method), chained directly off
+        # a bare-rooted plain-struct value -- no intermediate variable.
+        print(addr2.relocated("Shelbyville", sqrrl__bob).sqrrl__owner._inner[]._name)
 
         var box_a = Box(42)
         var box_b = Box("hello")
@@ -312,7 +425,7 @@ def main() raises:
             raise Error("id mismatch: alice")
 
         print(sqrrl__alice2._inner[]._home.city)
-        print(sqrrl__alice2._inner[]._home.owner._inner[]._name)
+        print(sqrrl__alice2._inner[]._home.sqrrl__owner._inner[]._name)
         print(sqrrl__alice2._inner[]._meta.label, sqrrl__alice2._inner[]._meta.count)
         print(sqrrl__alice2._inner[]._hometown.name)
         print(sqrrl__alice2._inner[]._sqrrl__box.value._inner[].get_name())

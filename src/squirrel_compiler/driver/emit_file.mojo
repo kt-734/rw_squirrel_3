@@ -55,6 +55,8 @@ def emit_file(
     plain_value_fields: Dict[String, Dict[String, String]] = Dict[String, Dict[String, String]](),
     json_used: Bool = False,
     method_returns: Dict[String, Dict[String, String]] = Dict[String, Dict[String, String]](),
+    bare_function_returns: Dict[String, String] = Dict[String, String](),
+    bare_method_returns: Dict[String, Dict[String, String]] = Dict[String, Dict[String, String]](),
 ) raises -> String:
     """Emits the generated Mojo source for `path` (a single `.mojo.sqrrl`
     file), prefixed with the runtime imports, an import for every
@@ -83,7 +85,8 @@ def emit_file(
         transformed = transform_source(
             source, relation_schema, struct_names, function_returns, unique_fields, indexed_fields, multi_fields,
             ordered_fields, world_methods, stats_fields, plain_struct_names, plain_value_fields, json_used,
-            method_returns=method_returns
+            method_returns=method_returns, bare_function_returns=bare_function_returns,
+            bare_method_returns=bare_method_returns,
         )
     except e:
         raise Error(path + ": " + String(e))

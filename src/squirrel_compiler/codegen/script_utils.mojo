@@ -103,10 +103,26 @@ def enforce_entity_binding(
     """Shared by every call that returns a single entity or a container of
     them: binding it to a `var @@x = ...` declaration tracks
     `registered_type` in `entity_to_type`; binding it to a plain, unmarked
-    variable instead is rejected with a clear, container-aware error."""
-    if pending_decl:
-        entity_to_type[pending_decl.value()] = registered_type
-    elif is_unmarked_var_target(source, marker_start):
+    variable instead is rejected with a clear, container-aware error.
+
+    `is_unmarked_var_target` (a purely textual check, independent of
+    `pending_decl`) is checked *first*, unconditionally -- not `elif`,
+    the way it read when `pending_decl` being `Some` implied "the target
+    must be `@@`-marked" by construction (true as long as only a marked
+    `var @@x = ...` ever set it). `BARE_VAR_DECL_OVER_ENTITY` (`var
+    <bare_name> = @@...:`) broke that assumption on purpose, to register
+    a bare local reading a *plain* value off a marked chain (`var h =
+    @@bob.home`) -- but it sets `pending_decl` before the scanner even
+    knows whether the chain's *terminal* step turns out to be entity-
+    shaped or plain, so `pending_decl` alone can no longer prove the
+    target was marked. Checking the target's own marking directly first
+    closes the gap this order would otherwise reopen: confirmed via a
+    real compile that `var h = @@bob.@@dept` (a bare var holding a real
+    entity relation) was silently accepted and compiled to `var h =
+    sqrrl__bob._inner[]._sqrrl__dept` -- exactly the mandatory-marking
+    violation this function exists to catch, bypassed entirely by the
+    old order."""
+    if is_unmarked_var_target(source, marker_start):
         raise Error(
             source_location(source, marker_start)
             + ": InvalidSquirrelSyntax: '@@"
@@ -124,6 +140,8 @@ def enforce_entity_binding(
             + call_text
             + ";'), not a plain one"
         )
+    if pending_decl:
+        entity_to_type[pending_decl.value()] = registered_type
 
 
 def _is_bare_identifier(s: String) -> Bool:

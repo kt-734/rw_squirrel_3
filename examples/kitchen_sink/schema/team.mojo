@@ -10,6 +10,8 @@ from schema.employee import sqrrl__Employee
 from schema.person import sqrrl__Person
 
 
+from schema.grid_module import Grid
+
 @fieldwise_init
 struct sqrrl__TeamInner(Movable, ImplicitlyDeletable):
     var _id: UInt32
@@ -18,6 +20,7 @@ struct sqrrl__TeamInner(Movable, ImplicitlyDeletable):
     var _lead: Assignment
     var _sqrrl__members: List[sqrrl__Person]
     var _sqrrl__advisor: Optional[sqrrl__Employee]
+    var _sqrrl__directory: Grid[String, sqrrl__Employee]
 
     def __del__(deinit self):
         self._table[].free_id(self._id)
@@ -35,6 +38,9 @@ struct sqrrl__TeamInner(Movable, ImplicitlyDeletable):
     def set_sqrrl__advisor(mut self, var v: Optional[sqrrl__Employee]):
         self._sqrrl__advisor = v^
 
+    def set_sqrrl__directory(mut self, var v: Grid[String, sqrrl__Employee]):
+        self._sqrrl__directory = v^
+
     @always_inline
     def get_name(self) -> ref [self._name] String:
         return self._name
@@ -50,6 +56,10 @@ struct sqrrl__TeamInner(Movable, ImplicitlyDeletable):
     @always_inline
     def get_sqrrl__advisor(self) -> ref [self._sqrrl__advisor] Optional[sqrrl__Employee]:
         return self._sqrrl__advisor
+
+    @always_inline
+    def get_sqrrl__directory(self) -> ref [self._sqrrl__directory] Grid[String, sqrrl__Employee]:
+        return self._sqrrl__directory
 
 
 struct sqrrl__Team(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable, sqrrl___JsonSerializable):
@@ -91,9 +101,9 @@ struct sqrrl__TeamTable(Movable):
     def __init__(out self):
         self.storage = ArcPointer(EntityStorage[sqrrl__TeamIndexes, sqrrl__TeamInner](sqrrl__TeamIndexes()))
 
-    def create(mut self, *, name: String, var lead: Assignment, var sqrrl__members: List[sqrrl__Person], var sqrrl__advisor: Optional[sqrrl__Employee]) -> sqrrl__Team:
+    def create(mut self, *, name: String, var lead: Assignment, var sqrrl__members: List[sqrrl__Person], var sqrrl__advisor: Optional[sqrrl__Employee], var sqrrl__directory: Grid[String, sqrrl__Employee]) -> sqrrl__Team:
         var id = self.storage[].alloc_id()
-        var inner = ArcPointer(sqrrl__TeamInner(_id=id, _table=self.storage, _name=name, _lead=lead^, _sqrrl__members=sqrrl__members^, _sqrrl__advisor=sqrrl__advisor^))
+        var inner = ArcPointer(sqrrl__TeamInner(_id=id, _table=self.storage, _name=name, _lead=lead^, _sqrrl__members=sqrrl__members^, _sqrrl__advisor=sqrrl__advisor^, _sqrrl__directory=sqrrl__directory^))
         self.storage[].register_weak(id, inner)
         return sqrrl__Team(inner^)
 

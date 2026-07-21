@@ -5,6 +5,19 @@ struct Address(Copyable, Movable, ImplicitlyDeletable):
     var city: String
     var @@owner: @@Employee
 
+    def relocated(self, new_city: String, @@owner: @@Employee) -> Address:
+        # A hand-written method on a plain (non-`@@struct`) struct,
+        # returning another plain-struct value -- tracked the same way a
+        # bare top-level function/an `@@struct`'s own bare method already
+        # are, letting a trailing chain continue off its own call result
+        # (`addr.relocated(...).@@owner.name`, no intermediate variable).
+        # (Takes `@@owner` as its own parameter rather than reading `self.
+        # @@owner` -- a plain struct's own method body is real, hand-
+        # written Mojo the DSL never gives its own `self` a registered
+        # type inside, unlike a spliced `@@struct` method's `self`, so a
+        # marked field access directly on `self` doesn't resolve here.)
+        return Address(city=new_city, @@owner=@@owner)
+
 
 struct Box[T: Copyable & ImplicitlyDeletable](Movable, ImplicitlyDeletable):
     var value: Self.T
@@ -29,6 +42,26 @@ struct Tagged[Kind: Copyable & ImplicitlyDeletable](Movable, ImplicitlyDeletable
 @@struct @@Employee:
     unique name: String
 
+    def get_home(self) -> Address:
+        # A bare (never `@@`/`@@@`-marked) method on an `@@struct`,
+        # returning a plain-struct value -- the method analogue of a bare
+        # top-level function's own call result: its own call can be
+        # chained directly (`@@x.get_home().@@owner.name`, no
+        # intermediate variable), no different from `make_address(...)`
+        # above except the receiver is a bound `@@entity` instead of a
+        # function's own parameters.
+        return Address(city="Metropolis", @@owner=self)
+
+    def get_homes(self) -> List[Address]:
+        # Same, but returning a *container* of the plain struct -- lets a
+        # bare (never `@@`-marked) `for` loop variable iterate directly
+        # off the bare method's own call result, no intermediate
+        # variable, the entity-rooted analogue of `for a in addresses:`/
+        # `for a in make_addresses(...):` above.
+        var out = List[Address]()
+        out.append(Address(city="Smallville", @@owner=self))
+        return out^
+
 
 @@struct @@Person:
     unique name: String
@@ -38,10 +71,34 @@ struct Tagged[Kind: Copyable & ImplicitlyDeletable](Movable, ImplicitlyDeletable
     @@box: Box[@@Employee]
 
 
+def owner_name(a: Address) raises -> String:
+    # A function parameter with a bare (never `@@`-marked) plain-struct
+    # type -- its own explicit annotation alone is enough for a marked
+    # relation-field access through it to resolve, no different from a
+    # local variable's.
+    return a.@@owner.name
+
+
+def make_address(city: String, @@owner: @@Employee) raises -> Address:
+    # A bare (never `@@`/`@@@`-marked) function returning a plain-struct
+    # value -- its own call result can be chained directly (`make_
+    # address(...).@@owner.name`, no intermediate variable) or iterated
+    # directly (`for x in make_addresses(...):`), the exact same way a
+    # bare local variable's own value already can.
+    return Address(city = city, @@owner = @@owner)
+
+
+def make_addresses(@@owner: @@Employee) raises -> List[Address]:
+    var out = List[Address]()
+    out.append(Address(city = "Ogdenville", @@owner = @@owner))
+    out.append(Address(city = "North Haverbrook", @@owner = @@owner))
+    return out^
+
+
 def main() raises:
     @@@:
         var @@bob = @@@Employee { .name = "Bob" }
-        var addr = Address(city = "Springfield", owner = @@bob)
+        var addr: Address = Address(city = "Springfield", @@owner = @@bob)
         var meta = Tagged[String](label = "vip", count = 1)
         var @@alice = @@@Person {
             .name = "Alice",
@@ -62,6 +119,60 @@ def main() raises:
 
         print(@@alice.home.city)
         print(@@alice.home.@@owner.name)
+
+        # `addr2` itself is a bare local variable -- never `@@`-marked --
+        # holding a plain-struct value directly (not reached through an
+        # entity's own field this time). No explicit `: Address`
+        # annotation needed here -- the constructor call on the right is
+        # itself enough to infer it from, the same way a marked entity's
+        # own `var @@x = List[@@Type]()` already can.
+        var addr2 = Address(city = "Ogdenville", @@owner = @@bob)
+        print(addr2.@@owner.name)
+        addr2.@@owner = @@bob
+        print(addr2.@@owner.name)
+
+        # The same, through a function parameter, a container of the
+        # bare-typed value, and a bare for-loop variable over one.
+        print(owner_name(addr2))
+        var addresses = List[Address]()
+        addresses.append(addr2.copy())
+        print(addresses[0].@@owner.name)
+        for a in addresses:
+            print(a.@@owner.name)
+
+        # A bare function's own call result, chained directly (no
+        # intermediate variable) or iterated directly (no intermediate
+        # variable, no `for @@x in ...:` marked form) -- the bare-call
+        # analogue of the local-variable/parameter/container cases above.
+        print(make_address("Capital City", @@bob).@@owner.name)
+        for a in make_addresses(@@bob):
+            print(a.@@owner.name)
+
+        # A bare *method*'s own call result, chained directly off a
+        # bound `@@entity` receiver -- the method analogue of the two
+        # bare-function cases just above.
+        print(@@bob.get_home().@@owner.name)
+
+        # A bare `for` loop variable, iterating directly off a bare
+        # method's own call result rooted at a bound `@@entity` receiver
+        # -- no intermediate variable, no `for @@x in ...:` marked form
+        # (the element is a plain struct, not an entity).
+        for a in @@bob.get_homes():
+            print(a.@@owner.name)
+
+        # A bare *var-decl*, no annotation, initialized straight from a
+        # bound `@@entity`'s own bare method call -- no explicit `:
+        # Address` needed (unlike a call whose own name isn't itself
+        # `@@`-rooted, which `PLAIN_VAR_DECL`'s own inferred branch
+        # handles instead), the entity-rooted analogue of the direct-
+        # chain/for-loop cases just above.
+        var addr3 = @@bob.get_home()
+        print(addr3.@@owner.name)
+
+        # A hand-written method on a plain struct itself (`Address.
+        # relocated`, not an entity/entity-method), chained directly off
+        # a bare-rooted plain-struct value -- no intermediate variable.
+        print(addr2.relocated("Shelbyville", @@bob).@@owner.name)
 
         var box_a = Box(42)
         var box_b = Box("hello")

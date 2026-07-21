@@ -15,16 +15,16 @@ struct sqrrl___World(Movable):
         self.Tag = sqrrl__TagTable()
 
     def sqrrl__check_no_leaks(mut self):
-        var sqrrl__leaked_Project = len(self.Project.all())
-        if sqrrl__leaked_Project > 0:
-            abort("LeakedEntities: 'Project' still has " + String(sqrrl__leaked_Project) + " live entities outside sqrrl___world -- something external still references them")
-        var sqrrl__leaked_Department = len(self.Department.all())
-        if sqrrl__leaked_Department > 0:
-            abort("LeakedEntities: 'Department' still has " + String(sqrrl__leaked_Department) + " live entities outside sqrrl___world -- something external still references them")
-        self.Tag.storage[].keepalive_clear()
-        var sqrrl__leaked_Tag = len(self.Tag.all())
-        if sqrrl__leaked_Tag > 0:
-            abort("LeakedEntities: 'Tag' still has " + String(sqrrl__leaked_Tag) + " live entities outside sqrrl___world -- something external still references them")
+        _ = self.Tag.storage[].keepalive_clear()
+        var leaked_Project = self.Project.count()
+        if leaked_Project > 0:
+            abort("LeakedEntities: 'Project' still has " + String(leaked_Project) + " live entities outside sqrrl___world -- something external still references them")
+        var leaked_Department = self.Department.count()
+        if leaked_Department > 0:
+            abort("LeakedEntities: 'Department' still has " + String(leaked_Department) + " live entities outside sqrrl___world -- something external still references them")
+        var leaked_Tag = self.Tag.count()
+        if leaked_Tag > 0:
+            abort("LeakedEntities: 'Tag' still has " + String(leaked_Tag) + " live entities outside sqrrl___world -- something external still references them")
 
     def __del__(deinit self):
         self.sqrrl__check_no_leaks()

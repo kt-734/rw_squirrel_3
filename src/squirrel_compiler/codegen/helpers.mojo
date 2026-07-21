@@ -313,16 +313,30 @@ def _entity_iterable_leaf_name(t: TypeExpr) -> String:
     return _entity_iterable_leaf_name(t.arg(0))
 
 
-def is_entity_iterable_leaf(
-    type_str: String, struct_names: Dict[String, Bool], plain_struct_names: Dict[String, Bool]
-) -> Bool:
+def is_entity_iterable_leaf(type_str: String, struct_names: Dict[String, Bool]) -> Bool:
     """True if `type_str` -- an already-`@@`-stripped, *registered* type
     string (`relation_schema`/`function_returns`/`method_returns`'s own
     values, or a bound container variable's own tracked type) --
     recursively bottoms out, through *position 0 only* (the one position
     real iteration, `for x in container:`, ever exposes), at a known
-    struct name (real or plain) -- i.e. iterating this type genuinely
-    yields an entity, not a plain leaf like `String`.
+    *real* struct name -- i.e. iterating this type genuinely yields an
+    entity, not a plain leaf like `String` and not a plain struct either
+    (a plain struct has no table of its own for `@@x` to bind against,
+    exactly like `entity_is_bare`/`PLAIN_VAR_DECL` already treat a plain-
+    struct-typed value as never itself `@@`-markable -- confirmed a real,
+    previously-unreachable gap: every *other* caller only ever registers
+    an entity-*reachable* type in the first place (`is_directly_entity_
+    reachable` gates `relation_schema`/`function_returns`/`method_
+    returns`'s own registration), so this function's own former `or leaf
+    in plain_struct_names` branch was dead code for all of them -- until
+    `bare_method_returns`/`bare_function_returns` started registering
+    *every* bare function/method's return type unconditionally, plain
+    structs included, making it reachable for the first time. Confirmed
+    via a real compile: `for @@a in @@bob.get_homes():` (a bare method
+    returning `List[Address]`, `Address` plain) wasn't rejected, and the
+    generated code went on to render `a` with real-entity storage syntax
+    -- `sqrrl__a.sqrrl__dept._inner[]._name` -- silently wrong, not just
+    unresolved.
 
     Deliberately narrower than `is_directly_entity_reachable` (which
     additionally accepts a relation confined to position 1, since
@@ -336,7 +350,7 @@ def is_entity_iterable_leaf(
     `Employee`) -- confirmed as a real, previously-silent risk once
     marking widened to cover position 2 as well as position 1."""
     var leaf = _entity_iterable_leaf_name(parse_type_expr(type_str))
-    return leaf in struct_names or leaf in plain_struct_names
+    return leaf in struct_names
 
 
 def container_index_result_of(t: String) -> String:
@@ -420,3 +434,30 @@ def scan_entity_return_shape(text: String) raises -> Optional[String]:
     if type_text.byte_length() == 0 or not is_directly_entity_reachable(type_text):
         return None
     return Optional[String](parse_type_expr(type_text).render_relation_stripped())
+
+
+def scan_bare_return_type_text(text: String) raises -> Optional[String]:
+    """Like `scan_entity_return_shape`, but returns the raw return-type
+    text unconditionally (not just when it's entity-shaped, and not
+    relation-stripped) -- the counterpart for a *bare* function or method,
+    whose return type might be a plain struct or a container of one
+    instead of (or as well as) an entity, which `is_directly_entity_
+    reachable` alone would say no to. Shared by `driver/misc_builders.
+    mojo`'s `build_bare_plain_function_returns` (top-level defs) and
+    `codegen/methods.mojo`'s `_parse_method_span` (struct methods) -- same
+    "identical scan once positioned right after the name" reasoning as
+    `scan_entity_return_shape` itself."""
+    var sc = Scanner(text)
+    var found_arrow = False
+    while not sc.at_end():
+        if sc.try_consume("->"):
+            found_arrow = True
+            break
+        sc.pos += 1
+    if not found_arrow:
+        return None
+    sc.skip_trivia()
+    var type_text = sc.scan_bracket_depth_aware_span(":")
+    if type_text.byte_length() == 0:
+        return None
+    return Optional[String](type_text)

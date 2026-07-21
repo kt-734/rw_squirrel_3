@@ -2,20 +2,34 @@ from squirrel_compiler.parser import Field, parse_type_expr, TypeExpr
 from squirrel_compiler.codegen.helpers import is_relation_field
 
 
-def _relation_target_base_name(t: TypeExpr) -> String:
-    """The bare struct name a relation-shaped type expression points at --
-    unwraps any container nesting first (`List[@@Employee]`/`List[List[
-    @@Employee]]` -> `"Employee"`, `@@Box[String]` -> `"Box"`, plain
-    `@@Employee` -> `"Employee"`) -- what both `plain_struct_fields`'s own
-    keys and `discovery.structs`' own names are keyed by. Only follows the
-    *first* argument at each level -- correct for every caller of this
-    specific function, which only ever apply it to an *unmarked* field's
-    own wrapper-or-leaf base name (`_relation_target_base_names`, below,
-    is the one that needs to find every relation reachable at any
-    position)."""
-    if t.kind == TypeExpr.RELATION or t.kind == TypeExpr.LEAF:
-        return t.name
-    return _relation_target_base_name(t.arg(0))
+def _plain_struct_base_names(t: TypeExpr, plain_struct_fields: Dict[String, List[Field]], mut out: List[String]):
+    """Every plain-struct name `t` reaches, at *any* argument position and
+    nesting depth (`Dict[String, Address]` -- `Address` in the *value*
+    position, not the key; `List[Dict[String, Address]]`, nested two
+    levels deep) -- an unmarked field's counterpart to `_relation_target_
+    base_names`' own any-position walk, just checking `plain_struct_
+    fields` membership instead of `@@`-marked-ness. Checks `t.name`
+    unconditionally, then always recurses into every argument too (mirrors
+    `_collect_plain_struct_targets_from_type`'s own shape below): a plain
+    struct's own generic argument can independently reach a *different*
+    plain struct with its own relation, so finding one at some position
+    doesn't mean there's nothing further to find deeper in the same type.
+
+    Replaces the old `_relation_target_base_name` (singular, first-
+    argument-only): `Dict[String, Address]` used to resolve only to
+    `"String"`, silently losing any relation nested *inside* `Address`
+    itself (this function's whole reason to exist) whenever `Address` sat
+    anywhere but the wrapper's own first argument -- the same "position 2
+    blindness" bug class already found and fixed for marked relation
+    fields (`_relation_target_base_names`, `is_directly_entity_reachable`),
+    just never widened here too since nothing had exercised this
+    specific unmarked-field-embedding-a-plain-struct shape yet."""
+    if t.kind == TypeExpr.RELATION:
+        return
+    if t.name in plain_struct_fields:
+        out.append(t.name)
+    for i in range(t.arg_count()):
+        _plain_struct_base_names(t.arg(i), plain_struct_fields, out)
 
 
 def _relation_target_base_names(t: TypeExpr, mut out: List[String]):
@@ -60,20 +74,25 @@ def collect_relation_targets(
     reading it)."""
     for f in fields:
         if not is_relation_field(f):
-            # An unmarked plain-value field (`home: Address`) is never
-            # itself a relation, but its value may still be a plain
-            # struct embedding further relation fields of its own
-            # (`Address`'s `@@owner: @@Employee`) -- recurse into it, but
-            # never add the plain struct's own name to `out`: it isn't a
-            # real entity, so it never gets its own sibling-table
-            # parameter. Anything else unmarked (an ordinary leaf like
-            # `name: String`, or a genuinely opaque hand-written type) has
-            # nothing further to reach.
-            var t = _relation_target_base_name(parse_type_expr(f.type_str))
-            if t in seen or t not in plain_struct_fields:
-                continue
-            seen[t] = True
-            collect_relation_targets(plain_struct_fields[t], plain_struct_fields, seen, out)
+            # An unmarked plain-value field (`home: Address`, or `lookup:
+            # Dict[String, Address]` -- a plain struct can sit at *any*
+            # container argument position, not just the first) is never
+            # itself a relation, but its value may still be (or embed, at
+            # any depth) a plain struct with further relation fields of
+            # its own (`Address`'s `@@owner: @@Employee`) -- recurse into
+            # every one `_plain_struct_base_names` finds, but never add a
+            # plain struct's own name to `out`: it isn't a real entity, so
+            # it never gets its own sibling-table parameter. Anything else
+            # unmarked (an ordinary leaf like `name: String`, or a
+            # genuinely opaque hand-written type) has nothing further to
+            # reach.
+            var plain_targets = List[String]()
+            _plain_struct_base_names(parse_type_expr(f.type_str), plain_struct_fields, plain_targets)
+            for t in plain_targets:
+                if t in seen:
+                    continue
+                seen[t] = True
+                collect_relation_targets(plain_struct_fields[t], plain_struct_fields, seen, out)
             continue
         # A marked field may reach more than one distinct relation target
         # at once (`Dict[@@Employee, @@Department]`, relation in both

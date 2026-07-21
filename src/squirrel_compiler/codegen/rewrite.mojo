@@ -16,7 +16,14 @@ from squirrel_compiler.codegen.script_utils import (
     indent_of,
 )
 from squirrel_compiler.codegen.rewrite_context import RewriteContext
-from squirrel_compiler.codegen.rewrite_field_access import handle_field_access, handle_name_ref, handle_func_call_marker
+from squirrel_compiler.codegen.rewrite_field_access import (
+    handle_field_access,
+    handle_name_ref,
+    handle_func_call_marker,
+    handle_bare_call_chain,
+    handle_bare_rooted_chain,
+    PendingForLoopDecl,
+)
 
 
 def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
@@ -41,7 +48,7 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
     var pos = 0
 
     var pending_decl: Optional[String] = None
-    var pending_for_loop_decl: Optional[String] = None
+    var pending_for_loop_decl: Optional[PendingForLoopDecl] = None
 
     # Set by `MarkerKind.WORLD_SCOPE` (`@@:`) -- the byte offset where its
     # indented block ends, and the indentation to reproduce the spliced
@@ -197,14 +204,29 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
                 # A hand-written plain struct's own field declaration
                 # (plain-structs milestone, the plan's §4) -- the only
                 # other shape `@@name: <type>` can mean, now that it's not
-                # a def parameter or a var-decl initializer. The name
-                # stays bare (matches "constructed with plain mojo":
-                # `Address(owner=@@alice)` needs a bare keyword parameter
-                # to match) -- only the type resolves to the real
-                # generated name (bare if it's itself a plain struct,
-                # sqrrl__-prefixed if it's a real entity). No `ctx.entity_
-                # to_type` registration here -- this isn't a local-variable
-                # binding, it's a struct field.
+                # a def parameter or a var-decl initializer. The name gets
+                # the same `sqrrl__` prefix a real `@@struct`'s own field
+                # already always gets -- collision-proofs it against a
+                # Mojo reserved word or any other existing identifier the
+                # same way (confirmed via a real repro: an unprefixed
+                # `@@ref: @@Type` field collided with Mojo's own `ref`
+                # keyword, with zero DSL-level protection, unlike an
+                # `@@struct`'s own fields, which can never collide since
+                # they're always prefixed). The type resolves to the real
+                # generated name same as before (bare if it's itself a
+                # plain struct, sqrrl__-prefixed if it's a real entity).
+                # No `ctx.entity_to_type` registration here -- this isn't a
+                # local-variable binding, it's a struct field.
+                #
+                # Since this is an `@fieldwise_init` struct, prefixing the
+                # field name also changes its own constructor's keyword
+                # argument name to match (Mojo's own rule: the keyword
+                # always equals the field name) -- `Note(@@owner=@@b)`'s
+                # own `@@owner=` keyword marker (a *new* shape, handled by
+                # `MarkerKind.CONSTRUCT_KWARG` below) is what lets the
+                # `.sqrrl` source keep writing the marked name (matching
+                # the field's own declaration) rather than the raw
+                # internal one.
                 #
                 # `ep.type_text` (mandatory-marking milestone: `Scanner.
                 # scan_entity_param_type_text`) is the *whole* raw type
@@ -218,7 +240,188 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
                 # same pre-existing, deliberate restriction as every other
                 # Dict-typed field: iterating it only ever yields keys,
                 # never values -- not a new gap this fix introduces.
-                out += ep.name + ": " + rewritten_field_type(ep.type_text, ctx.plain_struct_names)
+                out += sqrrl_prefixed(ep.name) + ": " + rewritten_field_type(ep.type_text, ctx.plain_struct_names)
+            pending_decl = None
+            pending_for_loop_decl = None
+
+        elif kind == MarkerKind.PLAIN_VAR_DECL:
+            # `[var ]<name>: <Type>` -- a bare local/parameter name (never
+            # `@@`-marked) with an explicit type annotation, `<Type>` a
+            # single identifier (`Note`) or a container of one (`List[
+            # Note]`). `prefix_text` (verbatim through `name` and `:`) is
+            # never rewritten, but `type_text` still might need to be --
+            # it can itself embed a genuine relation even though `name`
+            # stays bare (`members: List[Dict[String, @@Employee]]`, the
+            # relation confined to a position that doesn't require the
+            # *field's* own name to be marked) -- `rewritten_field_type`,
+            # the exact same general function `ENTITY_PARAM`'s own hand-
+            # written-struct-field branch already relies on, handles that
+            # correctly (falling through unchanged when there's nothing
+            # to rewrite) -- copying `type_text` through raw instead
+            # would silently skip that rewrite, since capturing the whole
+            # bracketed span (needed for a *container-of-plain-struct*
+            # local's own registration below) also swallows any `@@`
+            # embedded deeper inside before the outer loop could ever
+            # reach it on its own.
+            #
+            # Three contexts, exactly mirroring `MarkerKind.ENTITY_PARAM`'s
+            # own three-way split for the marked equivalent: a def's own
+            # parameter (`is_param`), a var-decl (`is_var_decl`, found via
+            # the same "look ahead for `=`, then rewind" `ENTITY_PARAM`
+            # already uses), or -- when neither holds -- a hand-written
+            # plain struct's own field declaration, which needs no
+            # registration at all (that struct's own field-type
+            # resolution is handled entirely elsewhere, not through `ctx.
+            # entity_to_type`).
+            #
+            # Registration itself doesn't check whether `type_text`
+            # actually names a known plain struct (or wraps one) -- always
+            # registering is simpler and just as safe: `var x: Int = 5`/
+            # `def foo(count: Int)` registering `ctx.entity_to_type["x"]
+            # = "Int"` is never reachable through a marked chain anyway
+            # (`Int` has no `@@`-markable fields for `x.@@anything` to
+            # even parse against), so it's dead, harmless data, not a
+            # false positive that changes behavior anywhere. This is what
+            # makes `var x: Int = 5`/a struct's own `text: String` field
+            # (both matching `at_plain_var_decl`'s purely syntactic check
+            # just as much as `var n: Note = ...` does) total no-ops.
+            #
+            # Lets a later marked field-access chain rooted at this name
+            # resolve (`n.@@ref.name`, `items[0].@@ref.name`) even though
+            # `n`/`items` are never themselves `@@`-marked -- only a field
+            # *access* through a plain-struct value can be marked, never
+            # the value's own local/parameter name.
+            var pvd_start = sc.pos
+            var pvd = sc.parse_plain_var_decl()
+            var is_param = is_in_def_signature(source, pvd_start)
+            # `type_is_inferred` (`var addresses = List[Address]()`, no
+            # explicit annotation) only ever matches a var-decl by
+            # construction (`at_plain_var_decl`'s own second shape
+            # requires the leading `var` keyword) -- the ordinary "look
+            # ahead for `=`" check below doesn't apply here at all,
+            # `self.pos` already sits right *past* the `=` it would be
+            # looking for.
+            var is_var_decl = pvd.type_is_inferred
+            if not is_param and not pvd.type_is_inferred:
+                var save = sc.pos
+                sc.skip_trivia()
+                is_var_decl = sc.at_assignment()
+                sc.pos = save
+            if is_param or is_var_decl:
+                # For the inferred shape, `pvd.type_text` is only a
+                # *type* when the RHS was actually a constructor call
+                # (`Address(...)`/`List[Address]()`, `type_text` the
+                # struct/container's own name) -- `at_plain_var_decl`'s
+                # own syntactic check can't tell that apart from a bare
+                # *function* call that happens to look identical (`var
+                # addrs = make_addresses(@@bob)`, `type_text` = "make_
+                # addresses", the function's own name, not a type at
+                # all). Confirmed as a real, previously-silent gap: `for
+                # a in addrs:` afterward left `a` completely unregistered
+                # (`is_container_type("make_addresses")` is false, so
+                # `PLAIN_FOR_LOOP`'s own registration never fires), the
+                # same "was never constructed" error a genuinely bogus
+                # type produces -- except this one had a perfectly good
+                # real type available the whole time (`ctx.bare_function_
+                # returns["make_addresses"]` = "List[Address]"), just
+                # never consulted. `ctx.bare_function_returns` is checked
+                # first and wins whenever `type_text` names a real bare
+                # function -- a function and a struct can never share one
+                # name in the same Mojo scope, so there's no ambiguity to
+                # resolve, only a preference for the *real* type when a
+                # more specific one is available.
+                var registered_type = (
+                    ctx.bare_function_returns[pvd.type_text] if pvd.type_text in ctx.bare_function_returns
+                    else pvd.type_text
+                )
+                ctx.entity_to_type[pvd.name] = registered_type
+            # Inferred: `type_text` is registration-only, never emitted --
+            # the constructor call it came from is left unconsumed right
+            # after `prefix_text`, for the ordinary scan to re-discover
+            # and emit normally (any `@@`-marked argument inside it still
+            # needs that treatment); emitting it here too would duplicate
+            # it.
+            out += pvd.prefix_text if pvd.type_is_inferred else (
+                pvd.prefix_text + rewritten_field_type(pvd.type_text, ctx.plain_struct_names)
+            )
+            pending_decl = None
+            pending_for_loop_decl = None
+
+        elif kind == MarkerKind.BARE_VAR_DECL_OVER_ENTITY:
+            # `var <bare_name> = @@...:` -- the var-decl mirror of `BARE_
+            # FOR_ENTITY_LOOP` just below: a variable that's never itself
+            # `@@`-marked, but whose initializer is rooted at a single
+            # `@@` (a bound entity's own plain field, a bare method call
+            # on one, a marked top-level function's own call, or a bound
+            # entity referenced directly) -- needed for the identical
+            # reason `BARE_FOR_ENTITY_LOOP` was: `var addr = @@bob.get_
+            # home()` (a bare method returning a plain struct) has no `:
+            # Address` annotation and no bare-identifier-before-`(` shape
+            # for `PLAIN_VAR_DECL`'s own inferred branch to catch either
+            # (its `scan_ident()` stops dead at the RHS's own leading
+            # `@`) -- previously left `addr` completely unregistered, a
+            # real "was never constructed" error on a real compile, not
+            # hypothetical. Sets `pending_decl` and lets the outer loop
+            # continue into the `@@` on its own next iteration -- the
+            # existing `is_entity_method`/bare-method/`handle_func_call_
+            # marker`/`handle_name_ref` registration sites (all already
+            # `register_pending_decl_type=True` or unconditional) do the
+            # rest, no new chain-walking logic needed at all.
+            var name = sc.parse_bare_var_decl_prefix()
+            out += "var " + name + " ="
+            pending_decl = Optional[String](name)
+            pending_for_loop_decl = None
+
+        elif kind == MarkerKind.BARE_VAR_DECL_OVER_BARE_CHAIN:
+            # `var <bare_name> = <bare_ident>.<chain>` -- the bare-rooted
+            # mirror of `BARE_VAR_DECL_OVER_ENTITY` just above, for a
+            # chain whose own root carries no `@@` either (`var x =
+            # addr2.get_thing()`, `addr2` itself bare) -- `PLAIN_VAR_
+            # DECL`'s own inferred branch only covers a *direct*
+            # constructor/bare-function call (`Ident(`, no receiver);
+            # this is for a receiver.method()-shaped RHS instead. Sets
+            # `pending_decl` and lets the outer loop continue into `BARE_
+            # ROOTED_CHAIN` (found at the receiver's own position next)
+            # -- identical mechanics to the `@@`-rooted sibling, just
+            # feeding a different downstream marker.
+            var bare_name = sc.parse_bare_var_decl_prefix()
+            out += "var " + bare_name + " ="
+            pending_decl = Optional[String](bare_name)
+            pending_for_loop_decl = None
+
+        elif kind == MarkerKind.PLAIN_FOR_LOOP:
+            # `for [var/ref ]<loop_var> in <container>[(...)]:` -- all
+            # bare, never `@@`-marked. The bare-name/bare-call equivalent
+            # of `FOR_ENTITY_LOOP`'s own `pending_for_loop_decl`
+            # mechanism -- but since `<container>` here is a single bare
+            # identifier (optionally called), never itself a marker the
+            # outer loop would stop at again, this handler does the
+            # whole lookup-and-register step in one shot rather than
+            # deferring to a follow-up marker the way FOR_ENTITY_LOOP
+            # does for a *marked* iterated expression. No-op (just
+            # copies/reconstructs the matched span unchanged) whenever
+            # `container_name` isn't actually a known, container-typed
+            # local/function -- `for x in range(10):`/`for x in some_
+            # list_of_ints:` match this shape exactly the same, and only
+            # genuinely registering a loop variable when the container is
+            # *itself* already tracked is what makes those total no-ops
+            # too. The call case (`for n in get_notes(@@b):`) needs its
+            # own argument list rewritten (any `@@`-marked argument still
+            # needs it), so it's reconstructed rather than copied
+            # verbatim -- same reasoning `handle_bare_call_chain`/
+            # `handle_func_call_marker` already use for their own calls.
+            var pfl_start = sc.pos
+            var pfl = sc.parse_plain_for_loop()
+            if pfl.is_call:
+                var rewritten_args = rewrite_markers(pfl.arg_text, ctx)
+                var binding = (pfl.binding_prefix + " ") if pfl.binding_prefix.byte_length() > 0 else String()
+                out += "for " + binding + pfl.loop_var + " in " + pfl.container_name + "(" + rewritten_args + ")"
+                if pfl.container_name in ctx.bare_function_returns and is_container_type(ctx.bare_function_returns[pfl.container_name]):
+                    ctx.entity_to_type[pfl.loop_var] = container_element_of(ctx.bare_function_returns[pfl.container_name])
+            else:
+                if pfl.container_name in ctx.entity_to_type and is_container_type(ctx.entity_to_type[pfl.container_name]):
+                    ctx.entity_to_type[pfl.loop_var] = container_element_of(ctx.entity_to_type[pfl.container_name])
+                out += String(source[byte = pfl_start : sc.pos])
             pending_decl = None
             pending_for_loop_decl = None
 
@@ -264,10 +467,74 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
             # every other marker already does -- no special-casing needed
             # here at all, unlike when a bare (unmarked) function name
             # could never itself be a marker-stop position.
-            pending_for_loop_decl = Optional[String](name)
+            pending_for_loop_decl = Optional[PendingForLoopDecl](PendingForLoopDecl(name=name, wants_marked=True))
+
+        elif kind == MarkerKind.BARE_FOR_ENTITY_LOOP:
+            # `for <bare_var> in @@...:` -- the bare-loop-var mirror of
+            # `FOR_ENTITY_LOOP` just above: a loop variable that's never
+            # itself `@@`-marked, but whose iterated expression is rooted
+            # at a single `@@` (a bound entity's own plain field, a bare
+            # method call on one, a marked top-level function's own call,
+            # or a bound entity referenced directly) -- needed once a
+            # bare method/field could resolve to a *plain*-struct-shaped
+            # container through an `@@`-marked root at all (`@@own.get_
+            # notes().@@ref.name`'s own for-loop shape, `for n in @@own.
+            # get_notes():` -- previously left `n` completely
+            # unregistered, the exact "was never constructed" gap a bare
+            # top-level function/local variable's own `PLAIN_VAR_DECL`/
+            # `PLAIN_FOR_LOOP` already closed, just never for an `@@`-
+            # rooted chain). `wants_marked=False` -- `_require_for_loop_
+            # marking_matches` (consumed by whichever marker handles the
+            # chain that follows) rejects if the terminal type turns out
+            # to actually be entity-shaped after all, the same way `wants_
+            # marked=True` above rejects the opposite mismatch.
+            var header = sc.parse_bare_for_loop_prefix()
+            var header_binding = (header.binding_prefix + " ") if header.binding_prefix.byte_length() > 0 else String()
+            out += "for " + header_binding + header.loop_var + " in"
+            pending_decl = None
+            pending_for_loop_decl = Optional[PendingForLoopDecl](
+                PendingForLoopDecl(name=header.loop_var, wants_marked=False)
+            )
+
+        elif kind == MarkerKind.BARE_FOR_LOOP_OVER_BARE_CHAIN:
+            # `for <bare_var> in <bare_ident>.<chain>:` -- the bare-rooted
+            # mirror of `BARE_FOR_ENTITY_LOOP` just above, for an iterated
+            # chain whose own root carries no `@@` either (`for a in
+            # addr2.get_thing():`). Same mechanics, feeding `BARE_ROOTED_
+            # CHAIN` next instead of the `@@`-triggered dispatch.
+            # `wants_marked=False` for the identical reason -- the
+            # terminal type this eventually resolves to still needs to
+            # not be entity-shaped, checked by whichever site actually
+            # registers it.
+            var bare_header = sc.parse_bare_for_loop_prefix()
+            var bare_binding = (bare_header.binding_prefix + " ") if bare_header.binding_prefix.byte_length() > 0 else String()
+            out += "for " + bare_binding + bare_header.loop_var + " in"
+            pending_decl = None
+            pending_for_loop_decl = Optional[PendingForLoopDecl](
+                PendingForLoopDecl(name=bare_header.loop_var, wants_marked=False)
+            )
 
         elif kind == MarkerKind.FIELD_ACCESS:
             handle_field_access(sc, source, marker_start, ctx, pending_decl, pending_for_loop_decl, out)
+
+        elif kind == MarkerKind.BARE_CALL_CHAIN:
+            handle_bare_call_chain(sc, source, marker_start, ctx, pending_decl, pending_for_loop_decl, out)
+
+        elif kind == MarkerKind.BARE_ROOTED_CHAIN:
+            handle_bare_rooted_chain(sc, source, marker_start, ctx, pending_decl, pending_for_loop_decl, out)
+
+        elif kind == MarkerKind.CONSTRUCT_KWARG:
+            # `Note(@@owner=@@b)` -- a hand-written plain struct's own
+            # constructor call, the keyword spelled the marked way (same
+            # as the field's own declaration, `var @@owner: @@Beta`)
+            # rather than the raw internal name. Just the keyword itself:
+            # the `=` and the value on its own right (`@@b`, an ordinary
+            # `NAME_REF`) are untouched, copied/rewritten by the outer
+            # loop's own general "between markers"/next-marker handling,
+            # same as any other call argument already is.
+            sc.pos += 2
+            var kwarg_name = sc.scan_ident()
+            out += sqrrl_prefixed(kwarg_name)
 
         else:  # MarkerKind.NAME_REF
             handle_name_ref(sc, source, marker_start, ctx, pending_decl, pending_for_loop_decl, out)

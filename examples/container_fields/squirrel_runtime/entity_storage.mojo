@@ -134,8 +134,24 @@ struct EntityStorage[
         except:
             return False
 
-    def keepalive_clear(mut self):
+    def keepalive_clear(mut self) -> Dict[UInt32, ArcPointer[Self.Inner]]:
+        """Returns the dropped dict rather than destroying it here: a
+        held `Inner` (e.g. a keepalive `@@Group`) can itself hold a
+        `multi`/relation field pointing at *this same* `EntityStorage`
+        (e.g. its `@@Person` members), so if this method destroyed the
+        dict directly, an entity's own `__del__` would run *nested*
+        inside this call's own exclusive borrow of `self` -- and any
+        mutation it makes back into `self` (confirmed via a real repro:
+        `free_id`'s `free_list.append` specifically) silently gets
+        discarded once this call's own borrow window closes, even
+        though the very same entity's `live[id] = False` mutation
+        persists fine. Returning the dict instead defers its actual
+        destruction to the caller, after this call has already
+        returned -- by then there's no outer borrow of `self` left for
+        a nested mutation to conflict with."""
+        var old = self.keepalive^
         self.keepalive = Dict[UInt32, ArcPointer[Self.Inner]]()
+        return old^
 
     def all(self) -> List[UInt32]:
         """Every currently-live id -- a single pass over every id ever

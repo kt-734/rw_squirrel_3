@@ -9,7 +9,7 @@ from squirrel_compiler.parser import (
 )
 from squirrel_compiler.driver.file_paths import module_path_for
 from squirrel_compiler.codegen import sqrrl_prefixed
-from squirrel_compiler.codegen.methods import world_marked_method_names, method_return_shapes
+from squirrel_compiler.codegen.methods import world_marked_method_names, method_return_shapes, bare_method_returns
 
 
 struct DiscoveredStruct(Copyable, Movable, ImplicitlyDeletable):
@@ -155,12 +155,21 @@ struct PlainStructDiscovery(Movable):
     module declared it, needed by `driver/json_module.mojo` to import the
     plain struct's own real Mojo type for its generated `from_json`
     companion (mirrors `DiscoveryResult`'s own `module_of`, same purpose,
-    kept as a separate struct since nothing else needs this pairing)."""
+    kept as a separate struct since nothing else needs this pairing).
+
+    `method_body` is each plain struct's own raw method-body text (`""`
+    for one with no methods at all) -- captured the same way `@@struct`'s
+    own already is (`ParsedStruct.method_body`, via `parse_hand_written_
+    struct_fields`'s own return-the-suffix behavior, mirroring `parse_
+    struct_body`), letting `driver/discovery.mojo`'s `build_bare_method_
+    returns`-equivalent for plain structs reuse `codegen/methods.mojo`'s
+    `bare_method_returns` as-is."""
 
     var fields: Dict[String, List[Field]]
     var module_of: Dict[String, String]
     var is_generic: Dict[String, Bool]
     var type_params: Dict[String, List[TypeParam]]
+    var method_body: Dict[String, String]
 
     def __init__(
         out self,
@@ -168,11 +177,13 @@ struct PlainStructDiscovery(Movable):
         var module_of: Dict[String, String],
         var is_generic: Dict[String, Bool] = Dict[String, Bool](),
         var type_params: Dict[String, List[TypeParam]] = Dict[String, List[TypeParam]](),
+        var method_body: Dict[String, String] = Dict[String, String](),
     ):
         self.fields = fields^
         self.module_of = module_of^
         self.is_generic = is_generic^
         self.type_params = type_params^
+        self.method_body = method_body^
 
 
 def discover_plain_structs(sqrrl_files: List[String], target_root: String) raises -> PlainStructDiscovery:
@@ -196,6 +207,7 @@ def discover_plain_structs(sqrrl_files: List[String], target_root: String) raise
     var module_of = Dict[String, String]()
     var is_generic = Dict[String, Bool]()
     var type_params = Dict[String, List[TypeParam]]()
+    var method_body = Dict[String, String]()
     for path in sqrrl_files:
         var module_path = module_path_for(path, target_root)
         var f = open(path, "r")
@@ -209,9 +221,10 @@ def discover_plain_structs(sqrrl_files: List[String], target_root: String) raise
                 is_generic[parsed.name] = len(parsed.type_params) > 0
                 fields[parsed.name] = parsed.fields.copy()
                 type_params[parsed.name] = parsed.type_params.copy()
+                method_body[parsed.name] = parsed.method_body
         except e:
             raise Error(path + ": " + String(e))
-    return PlainStructDiscovery(fields^, module_of^, is_generic^, type_params^)
+    return PlainStructDiscovery(fields^, module_of^, is_generic^, type_params^, method_body^)
 
 
 def build_plain_struct_names(plain_struct_fields: Dict[String, List[Field]]) -> Dict[String, Bool]:
@@ -335,6 +348,56 @@ def build_method_returns(discovery: DiscoveryResult) raises -> Dict[String, Dict
     for ds in discovery.structs:
         method_returns[ds.parsed.name] = method_return_shapes(ds.parsed.method_body, ds.parsed.name)
     return method_returns^
+
+
+def build_bare_method_returns(discovery: DiscoveryResult) raises -> Dict[String, Dict[String, String]]:
+    """Struct name -> bare method name -> its raw, unstripped return-type
+    text, for every `@@struct` declared project-wide -- `build_method_
+    returns`'s counterpart for a bare (unmarked) method, the method
+    analogue of `driver/misc_builders.mojo`'s `build_bare_plain_function_
+    returns`: lets `_handle_instance_call` (`rewrite_field_access.mojo`)
+    continue a trailing chain off a bare method's own call result
+    (`@@own.get_note().@@ref.name`, no intermediate variable), the same
+    way `ctx.bare_function_returns`/`handle_bare_call_chain` already lets
+    one continue off a bare top-level function's own call result."""
+    var bare_method_returns_out = Dict[String, Dict[String, String]]()
+    for ds in discovery.structs:
+        bare_method_returns_out[ds.parsed.name] = bare_method_returns(ds.parsed.method_body, ds.parsed.name)
+    return bare_method_returns_out^
+
+
+def build_plain_struct_bare_method_returns(
+    plain_struct_discovery: PlainStructDiscovery,
+) raises -> Dict[String, Dict[String, String]]:
+    """`build_bare_method_returns`'s own counterpart for a hand-written
+    plain struct's own methods -- struct name -> bare method name -> its
+    raw, unstripped return-type text, for every plain struct declared
+    project-wide. Reuses `codegen/methods.mojo`'s `bare_method_returns`
+    completely unchanged (it's already generic text-splitting, with no
+    `@@struct`-specific dependency beyond error-message wording, which
+    never fires here since a plain struct's own method is never `@@`/
+    `@@@`-marked in practice) -- the only missing piece was `PlainStruct
+    Discovery.method_body` itself, which didn't exist until now (`parse_
+    hand_written_struct_fields` used to discard a plain struct's own
+    method text entirely, unlike `@@struct`'s `parse_struct_body`, which
+    always captured it).
+
+    Lets `_handle_instance_call`'s plain-struct-owner branch (`rewrite_
+    field_access.mojo`, previously *always* a direct, untracked
+    passthrough with no lookup at all) continue a trailing chain off a
+    plain struct's own bare method call (`addr2.get_extra().@@dept.
+    name`), the same way a bare method on a real `@@struct` already can
+    -- merged into the very same `ctx.bare_method_returns` map at
+    `convert_directory.mojo`'s own build step (struct names are disjoint
+    by construction -- `check_plain_struct_names_disjoint` -- so there's
+    no key collision to resolve, just a union of two already-generic
+    "struct name -> bare method name -> return type" maps)."""
+    var out = Dict[String, Dict[String, String]]()
+    for struct_name in plain_struct_discovery.method_body.keys():
+        out[String(struct_name)] = bare_method_returns(
+            plain_struct_discovery.method_body[String(struct_name)], String(struct_name)
+        )
+    return out^
 
 
 def build_stats_fields(discovery: DiscoveryResult) -> Dict[String, List[String]]:

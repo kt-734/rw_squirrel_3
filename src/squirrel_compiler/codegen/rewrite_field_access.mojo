@@ -28,13 +28,34 @@ from squirrel_compiler.codegen.script_utils import (
 from squirrel_compiler.codegen.rewrite_context import RewriteContext
 
 
+@fieldwise_init
+struct PendingForLoopDecl(Copyable, Movable):
+    """A `for <var> in <iterable>:` awaiting its own element-type
+    registration once the iterable's terminal step resolves. `name` is
+    the loop variable's own source name (never itself carrying `@@`);
+    `wants_marked` is whether the source wrote `@@name` (`MarkerKind.
+    FOR_ENTITY_LOOP` -- the iterated result must resolve to something
+    entity-shaped) or bare `name` rooted at an `@@`-marked chain
+    (`MarkerKind.BARE_FOR_ENTITY_LOOP` -- the exact inverse requirement:
+    the result must resolve to something that ISN'T). Every consumption
+    site validates both directions through the same `_require_for_loop_
+    marking_matches` -- a bare loop var over a chain that happens to
+    bottom out at a genuinely `@@`-marked relation/entity-returning method
+    is just as much a marking-symmetry violation as a marked loop var
+    over a plain one, so both need the same guard, not just the
+    historically-first-built direction."""
+
+    var name: String
+    var wants_marked: Bool
+
+
 def handle_field_access(
     mut sc: Scanner,
     source: String,
     marker_start: Int,
     mut ctx: RewriteContext,
     mut pending_decl: Optional[String],
-    mut pending_for_loop_decl: Optional[String],
+    mut pending_for_loop_decl: Optional[PendingForLoopDecl],
     mut out: String,
 ) raises:
     """Handles `MarkerKind.FIELD_ACCESS` (`@@entity<steps...>`, a general
@@ -132,8 +153,19 @@ def handle_field_access(
         )
 
     var current_type = ctx.entity_to_type[fa.entity]
-    var expr = sqrrl_prefixed(fa.entity)
-    var prev_end_pos = marker_start + (3 if fa.entity_marked_world else 2) + fa.entity.byte_length()
+    var expr: String
+    var prev_end_pos: Int
+    if fa.entity_is_bare:
+        # `n.@@ref...` -- `n` itself carried no `@@` at all (a plain-
+        # struct-typed local variable's own bare name), so it's never
+        # rewritten, and the marker's own start (`marker_start`, widened
+        # back to `n`'s own start by `bare_root_before_dot`) has no `@@`/
+        # `@@@` prefix bytes to skip over either.
+        expr = fa.entity
+        prev_end_pos = marker_start + fa.entity.byte_length()
+    else:
+        expr = sqrrl_prefixed(fa.entity)
+        prev_end_pos = marker_start + (3 if fa.entity_marked_world else 2) + fa.entity.byte_length()
 
     _walk_access_chain(
         sc,
@@ -166,7 +198,7 @@ def _walk_access_chain(
     prev_end_pos_in: Int,
     entity_label: String,
     mut pending_decl: Optional[String],
-    mut pending_for_loop_decl: Optional[String],
+    mut pending_for_loop_decl: Optional[PendingForLoopDecl],
     mut out: String,
 ) raises:
     """The general per-step chain walk shared by `handle_field_access`
@@ -249,8 +281,8 @@ def _walk_access_chain(
                     # not a "Dict iteration only yields keys" one -- the
                     # actual, correct outcome once this registers at all.
                     if pending_for_loop_decl and is_container_type(elem_type):
-                        _require_for_loop_entity_marking(sc, ctx, elem_type, pending_for_loop_decl.value())
-                        ctx.entity_to_type[pending_for_loop_decl.value()] = container_element_of(elem_type)
+                        _require_for_loop_marking_matches(sc, ctx, elem_type, pending_for_loop_decl.value())
+                        ctx.entity_to_type[pending_for_loop_decl.value().name] = container_element_of(elem_type)
                     out += expr
                     pending_decl = None
                     pending_for_loop_decl = None
@@ -288,7 +320,11 @@ def _walk_access_chain(
             # `current_type` isn't a container -- premature-leaf rollback:
             # this might be legitimate native indexing on a leaf value
             # (`@@alice.name[0]`, String indexing) that our own knowledge
-            # of the chain simply doesn't extend to.
+            # of the chain simply doesn't extend to. Only actually safe
+            # when nothing from here on is `@@`/`@@@`-marked -- see the
+            # sibling FIELD-step rollback just below for the full "why".
+            if _any_step_marked_from(steps, i):
+                raise _unresolvable_marked_step_err(sc, current_type, steps, i)
             out += expr
             sc.pos = prev_end_pos
             pending_decl = None
@@ -302,6 +338,36 @@ def _walk_access_chain(
             # Premature-leaf rollback -- `current_type` isn't a known
             # struct at all (a native Mojo leaf type reached through an
             # earlier plain field, e.g. `String` after `.name`).
+            #
+            # Only safe when nothing from this step onward is `@@`/`@@@`-
+            # marked: rolling back means `sc.pos` goes to `prev_end_pos`,
+            # *before* this step's own text, handing the remaining source
+            # back to the ordinary scan to reprocess as plain Mojo -- fine
+            # when that remaining text really is unmarked native syntax
+            # (`[0]`, `.upper()`), but if it still contains a genuine
+            # `@@`/`@@@` marker, the scanner will just rediscover the
+            # *exact same* marker at the *exact same* position next time
+            # around (for a bare root, `bare_root_before_dot` rewinds
+            # back to the identical root every time) -- an infinite loop
+            # at `rewrite_markers`'s own top-level `while True:`, `out`
+            # growing by `expr` on every pass, until the process aborts on
+            # an allocation failure. Confirmed via a real repro that
+            # crashed near-instantly (an OOM-style abort, not a clean
+            # error) before this check existed: `var x: Int = 5; print(x.
+            # @@fake.name)` -- pre-existing and unrelated to `bare_method_
+            # returns`/the inferred-var-decl case, just never reachable
+            # before, since every *other* `ctx.entity_to_type` producer
+            # only ever registers a type that's actually real/plain (a
+            # marked root's own type always is, by construction; a bare
+            # root's `PLAIN_VAR_DECL`/inferred registration is the one
+            # place that deliberately registers "harmless, dead data" too
+            # -- "harmless" turned out to depend on this check existing).
+            # A marked step reached through an unresolvable root is
+            # always a genuine, decidable error (native Mojo has no
+            # `@@`-prefixed syntax at all), never a legitimate leaf --
+            # raise instead of silently rolling back.
+            if _any_step_marked_from(steps, i):
+                raise _unresolvable_marked_step_err(sc, current_type, steps, i)
             out += expr
             sc.pos = prev_end_pos
             pending_decl = None
@@ -364,8 +430,9 @@ def _walk_access_chain(
             )
 
         var deref = "" if owner_is_plain else "._inner[]"
-        var storage_name = step.name if owner_is_plain else (
-            storage_field_name_for_hop(step.name) if step.marked else storage_field_name_for_plain(step.name)
+        var storage_name = (
+            (sqrrl_prefixed(step.name) if step.marked else step.name) if owner_is_plain
+            else (storage_field_name_for_hop(step.name) if step.marked else storage_field_name_for_plain(step.name))
         )
 
         if is_last:
@@ -433,14 +500,52 @@ def _walk_access_chain(
                 # terminal branch and was missing the equivalent
                 # registration entirely (confirmed missing via a real
                 # transform_source check, not assumed).
-                if pending_for_loop_decl and is_container_type(registered_type):
-                    _require_for_loop_entity_marking(sc, ctx, registered_type, pending_for_loop_decl.value())
-                    ctx.entity_to_type[pending_for_loop_decl.value()] = container_element_of(registered_type)
+                if pending_for_loop_decl:
+                    var is_multi_relation = (
+                        current_type in ctx.multi_fields and _contains(ctx.multi_fields[current_type], step.name)
+                    )
+                    if is_multi_relation:
+                        # A `multi` relation field's own `relation_schema`
+                        # entry is already the bare *element* type (`multi
+                        # @@members: @@Person`'s own declared type_str is
+                        # just `@@Person` -- the `multi` keyword alone
+                        # implies Set-backed storage, never wrapped in the
+                        # schema map itself), so a direct `for @@p in
+                        # @@entity.@@members:` registers `@@p` against
+                        # `registered_type` directly -- `container_
+                        # element_of` would be wrong/inapplicable here,
+                        # there's no wrapper to unwrap. Confirmed missing
+                        # via a real end-to-end compile: `for @@p in
+                        # @@g.@@members:` left `@@p` completely
+                        # unregistered (`is_container_type(registered_
+                        # type)` was false, since `registered_type` was
+                        # already bare).
+                        _require_for_loop_marking_matches(sc, ctx, registered_type, pending_for_loop_decl.value())
+                        ctx.entity_to_type[pending_for_loop_decl.value().name] = registered_type
+                    elif is_container_type(registered_type):
+                        _require_for_loop_marking_matches(sc, ctx, registered_type, pending_for_loop_decl.value())
+                        ctx.entity_to_type[pending_for_loop_decl.value().name] = container_element_of(registered_type)
             elif is_plain_value:
                 var registered_type = ctx.plain_value_fields[current_type][step.name]
+                # `var h = @@bob.home` (`home` a plain, non-container
+                # value field) -- unlike the `is_relation` branch just
+                # above, a plain value never needs `enforce_entity_
+                # binding`'s own marking-symmetry check at all (there's
+                # no entity to accidentally bind to a bare name here --
+                # the whole point of `BARE_VAR_DECL_OVER_ENTITY` is that
+                # a bare target reading a genuinely plain value is
+                # correct, not a violation), so registering directly
+                # whenever `pending_decl` is set is enough. Confirmed
+                # missing via a real compile: `var h = @@bob.home` left
+                # `h` completely unregistered before this, the same "was
+                # never constructed" gap `BARE_VAR_DECL_OVER_ENTITY` was
+                # built to close, just for a plain FIELD read specifically
+                # rather than a method call.
+                if pending_decl:
+                    ctx.entity_to_type[pending_decl.value()] = registered_type
                 if pending_for_loop_decl and is_container_type(registered_type):
-                    _require_for_loop_entity_marking(sc, ctx, registered_type, pending_for_loop_decl.value())
-                    ctx.entity_to_type[pending_for_loop_decl.value()] = container_element_of(registered_type)
+                    _require_for_loop_marking_matches(sc, ctx, registered_type, pending_for_loop_decl.value())
+                    ctx.entity_to_type[pending_for_loop_decl.value().name] = container_element_of(registered_type)
             out += expr
             pending_decl = None
             pending_for_loop_decl = None
@@ -465,7 +570,7 @@ def handle_func_call_marker(
     mut ctx: RewriteContext,
     is_world: Bool,
     mut pending_decl: Optional[String],
-    mut pending_for_loop_decl: Optional[String],
+    mut pending_for_loop_decl: Optional[PendingForLoopDecl],
     mut out: String,
 ) raises:
     """Handles `MarkerKind.WORLD_FUNC` (`@@@name(...)`, needs `sqrrl__
@@ -593,8 +698,228 @@ def handle_func_call_marker(
         if pending_decl:
             ctx.entity_to_type[pending_decl.value()] = registered.value()
         if pending_for_loop_decl and is_container_type(registered.value()):
-            _require_for_loop_entity_marking(sc, ctx, registered.value(), pending_for_loop_decl.value())
-            ctx.entity_to_type[pending_for_loop_decl.value()] = container_element_of(registered.value())
+            _require_for_loop_marking_matches(sc, ctx, registered.value(), pending_for_loop_decl.value())
+            ctx.entity_to_type[pending_for_loop_decl.value().name] = container_element_of(registered.value())
+    pending_decl = None
+    pending_for_loop_decl = None
+
+
+def handle_bare_call_chain(
+    mut sc: Scanner,
+    source: String,
+    marker_start: Int,
+    mut ctx: RewriteContext,
+    mut pending_decl: Optional[String],
+    mut pending_for_loop_decl: Optional[PendingForLoopDecl],
+    mut out: String,
+) raises:
+    """Handles `MarkerKind.BARE_CALL_CHAIN` -- a bare (never `@@`/`@@@`-
+    marked) top-level function's own call result, chained directly with
+    no intermediate variable (`make_note(@@b).@@ref.name`), found via
+    `Scanner.at_bare_call_chain`'s own *forward* check at the function
+    name's own position -- `self.pos` sits there, not at the call's
+    trailing marked step, by the time this runs (deliberately forward,
+    not a backward look from the marked step: the argument list can
+    itself contain a genuine `@@`-marked reference, which the scanner's
+    own left-to-right walk would otherwise already have found and
+    processed as its own independent marker before ever reaching a later
+    marker to look backward from -- confirmed via a real crash when this
+    was first built as a backward look instead, see `at_bare_call_
+    chain`'s own doc comment for the full story).
+
+    Mirrors `handle_func_call_marker`'s own call-site half almost
+    exactly (consume the call's argument list synchronously, rewrite any
+    `@@`-marked argument through `rewrite_markers`, then continue the
+    trailing chain via `_walk_access_chain`) -- the one real difference
+    is the registry consulted (`ctx.bare_function_returns`, built from
+    *every* bare function's own raw return-type text, not just an
+    entity-shaped one) and what happens when the function isn't actually
+    registered there: `handle_func_call_marker` raises (a `@@`-marked
+    call always names a real, validated entity-returning function by
+    construction), but a call reached only through this forward check
+    might genuinely not be one this mechanism can help with (its return
+    type isn't a plain struct or a container of one at all, or the name
+    doesn't resolve to a real function at all -- `at_bare_call_chain` is
+    purely syntactic, matching `<bare_ident>(...).`/`[` far more often
+    than it's actually acted on) -- silently falling back to copying the
+    call text through unchanged is correct there, not a bug: whatever
+    the *following* text's own error (or lack of one) would have said
+    before this mechanism existed still says exactly that, no worse off
+    than before."""
+    from squirrel_compiler.codegen.rewrite import rewrite_markers
+
+    var func_name = sc.scan_ident()
+    _ = sc.try_consume("(")
+    var arg_text = sc.scan_call_args_to_close()
+    var rewritten_args = rewrite_markers(arg_text, ctx)
+    var call_end_pos = sc.pos
+    var call_text = func_name + "(" + rewritten_args + ")"
+
+    if func_name not in ctx.bare_function_returns:
+        out += call_text
+        pending_decl = None
+        pending_for_loop_decl = None
+        return
+
+    var registered = ctx.bare_function_returns[func_name]
+    _finish_registered_call(
+        sc,
+        source,
+        marker_start,
+        ctx,
+        call_text,
+        call_end_pos,
+        registered,
+        func_name + "(...)",
+        False,
+        pending_decl,
+        pending_for_loop_decl,
+        out,
+    )
+
+
+def handle_bare_rooted_chain(
+    mut sc: Scanner,
+    source: String,
+    marker_start: Int,
+    mut ctx: RewriteContext,
+    mut pending_decl: Optional[String],
+    mut pending_for_loop_decl: Optional[PendingForLoopDecl],
+    mut out: String,
+) raises:
+    """Handles `MarkerKind.BARE_ROOTED_CHAIN` -- `<bare_ident>.<method>(
+    ...)`, found via `Scanner.at_bare_rooted_chain`'s own forward check
+    at the receiver's own position, not a marked step's: nothing here is
+    `@@`-marked at all, so neither the `@@`-triggered dispatch nor `bare_
+    root_before_dot`'s own backward look (limited to `.field`/`[index]`
+    hops, can't rewind through a call's own closing `)`) can recognize
+    this shape -- the bare-rooted analogue of `handle_bare_call_chain`
+    (a bare top-level function's own call) for a bare *receiver's* own
+    method call instead (`addr2.relocated(...).@@owner.name`, `addr2`
+    itself never `@@`-marked).
+
+    Also reached (with `pending_decl`/`pending_for_loop_decl` already
+    set) from `BARE_VAR_DECL_OVER_BARE_CHAIN`/`BARE_FOR_LOOP_OVER_BARE_
+    CHAIN` (`var x = addr2.get_thing()`/`for a in addr2.get_thing():`) --
+    those two markers only ever fire when this one is guaranteed to
+    match right after them (identical precondition, checked twice), so
+    `pending_decl`/`pending_for_loop_decl` are never left dangling
+    unconsumed into some later, unrelated marker.
+
+    Matches an *enormous* amount of completely ordinary, unrelated Mojo
+    (`some_string.upper()`, `some_list.append(...)`, any native method
+    call on any untracked local at all) -- when `receiver` isn't
+    actually a tracked bare local, silently, harmlessly no-ops (restores
+    `self.pos` to just one byte past the marker's own start, exactly as
+    if nothing had matched here at all, letting the ordinary byte-by-
+    byte scan reprocess the rest) rather than assuming, like every
+    *other* marker in this file safely can, that a match here is
+    inherently meaningful."""
+    var receiver = sc.scan_ident()
+    if receiver not in ctx.entity_to_type:
+        # Not tracked -- emit the identifier just scanned, verbatim, and
+        # leave `sc.pos` exactly where `scan_ident()` left it (right
+        # before the `.` that follows) for the ordinary scan to continue
+        # from. Emitting nothing here (an earlier version of this code
+        # just rewound `sc.pos` without emitting anything) silently
+        # *dropped* those bytes from the output entirely -- confirmed via
+        # a real compile: `profile.contact.emails.append(...)` corrupted
+        # to `profile.contact.e.append(...)` (and worse elsewhere in the
+        # same file), since the very next "between text" copy starts
+        # counting from wherever `sc.pos` ends up, never re-including
+        # what a handler consumed but didn't itself emit.
+        out += receiver
+        pending_decl = None
+        pending_for_loop_decl = None
+        return
+    var current_type = ctx.entity_to_type[receiver]
+    var expr = receiver
+    var prev_end_pos = marker_start + receiver.byte_length()
+    var steps = sc.scan_access_steps()
+    var tail = sc.scan_call_or_write_tail()
+    _walk_access_chain(
+        sc,
+        source,
+        marker_start,
+        ctx,
+        steps,
+        tail.is_call,
+        tail.write_value,
+        current_type,
+        expr,
+        prev_end_pos,
+        receiver,
+        pending_decl,
+        pending_for_loop_decl,
+        out,
+    )
+
+
+def _finish_registered_call(
+    mut sc: Scanner,
+    source: String,
+    marker_start: Int,
+    mut ctx: RewriteContext,
+    call_text: String,
+    call_end_pos: Int,
+    registered_type: String,
+    entity_label: String,
+    register_pending_decl_type: Bool,
+    mut pending_decl: Optional[String],
+    mut pending_for_loop_decl: Optional[PendingForLoopDecl],
+    mut out: String,
+) raises:
+    """Shared tail for a call whose own args have already been scanned and
+    rewritten (`call_text` is the fully reconstructed `<callee>(<args>)`
+    text, `call_end_pos` is `sc.pos` right after the closing `)`) and whose
+    return type (`registered_type`) is known: if a trailing chain follows
+    (`.field`/`[index]`/another call), recurse into `_walk_access_chain`
+    seeded with it, no intermediate variable required; otherwise emit the
+    call as-is. Extracted from three near-identical copies of this same
+    "scan args, rewrite, then continue-the-chain-or-not" tail -- `handle_
+    bare_call_chain` (a bare top-level function's call), `_handle_instance_
+    call`'s entity-returning-method branch, and its bare-method-returning-
+    a-plain-struct branch below -- once the bare-method case needed the
+    exact same logic a third time.
+
+    `register_pending_decl_type` is the one real difference between the
+    marked-entity-method case (`True`) and both bare cases (`False`): a
+    marked `var @@x = @@own.get_ref()` has no explicit type annotation of
+    its own to infer from, so the call's own registered return type is
+    what `ctx.entity_to_type`/the for-loop element type gets seeded from;
+    a bare `var x: Address = get_note()`/`for x in get_notes():` already
+    has (or requires) an explicit annotation via `PLAIN_VAR_DECL`/`PLAIN_
+    FOR_LOOP`'s own registration, so re-registering it here from the call
+    would be redundant, not wrong -- kept `False` anyway to match `handle_
+    bare_call_chain`'s own already-verified behavior exactly, rather than
+    changing two proven code paths while building a third."""
+    if sc.peek_trailing_chain_follows():
+        var steps = sc.scan_access_steps()
+        var tail = sc.scan_call_or_write_tail()
+        _walk_access_chain(
+            sc,
+            source,
+            marker_start,
+            ctx,
+            steps,
+            tail.is_call,
+            tail.write_value,
+            registered_type,
+            call_text,
+            call_end_pos,
+            entity_label,
+            pending_decl,
+            pending_for_loop_decl,
+            out,
+        )
+        return
+    out += call_text
+    if register_pending_decl_type:
+        if pending_decl:
+            ctx.entity_to_type[pending_decl.value()] = registered_type
+        if pending_for_loop_decl and is_container_type(registered_type):
+            _require_for_loop_marking_matches(sc, ctx, registered_type, pending_for_loop_decl.value())
+            ctx.entity_to_type[pending_for_loop_decl.value().name] = container_element_of(registered_type)
     pending_decl = None
     pending_for_loop_decl = None
 
@@ -610,7 +935,7 @@ def _handle_instance_call(
     entity_label: String,
     mut ctx: RewriteContext,
     mut pending_decl: Optional[String],
-    mut pending_for_loop_decl: Optional[String],
+    mut pending_for_loop_decl: Optional[PendingForLoopDecl],
     mut out: String,
 ) raises:
     """The terminal step of a chain is a call (`is_call`, checked by
@@ -643,7 +968,72 @@ def _handle_instance_call(
             )
         if not sc.try_consume("("):
             raise sc.err("InvalidSquirrelSyntax: expected '(' after '" + step.name + "'")
-        out += expr + "." + step.name + "("
+        # Args are always scanned/rewritten up front now (not left for the
+        # outer loop to reprocess piecemeal) -- needed regardless of
+        # whether the method turns out to be registered, since the
+        # unregistered branch below also needs `sc.pos` sitting right
+        # after the call's own `)` to peek at what follows it.
+        var arg_text = sc.scan_call_args_to_close()
+        var rewritten_args = rewrite_markers(arg_text, ctx)
+        var call_end_pos = sc.pos
+        var call_text = expr + "." + step.name + "(" + rewritten_args + ")"
+        if current_type in ctx.bare_method_returns and step.name in ctx.bare_method_returns[current_type]:
+            # A plain struct's own bare, hand-written method whose return
+            # type is registered (`ctx.bare_method_returns` -- a plain
+            # struct's own bare methods are merged into the very same map
+            # a real `@@struct`'s own already use, at `convert_directory.
+            # mojo`'s own build step; "always register, harmless"
+            # reasoning holds identically here) -- lets a trailing chain
+            # continue off its own call result with no intermediate
+            # variable (`addr2.get_extra().@@dept.name`), the plain-
+            # struct-owner analogue of the bare-method-on-a-real-struct
+            # branch further down this same function.
+            var registered_type = ctx.bare_method_returns[current_type][step.name]
+            _finish_registered_call(
+                sc,
+                source,
+                marker_start,
+                ctx,
+                call_text,
+                call_end_pos,
+                registered_type,
+                entity_label + "." + step.name + "(...)",
+                True,
+                pending_decl,
+                pending_for_loop_decl,
+                out,
+            )
+            return
+        # Unregistered -- still the common case (a real hand-written
+        # helper with no relation-bearing return type, or one discovery
+        # genuinely can't see at all: a trait-synthesized method like
+        # `.copy()`, or anything imported from outside this project).
+        # Ordinarily a silent, harmless passthrough -- but if a marked
+        # field immediately follows, that chain can *never* resolve (this
+        # call's own return type was never tracked), and letting it fall
+        # through would surface as a confusing, unrelated-looking error
+        # two steps removed from the actual cause (the scanner finding
+        # the marked field on its own and treating it as a stray,
+        # unrelated reference) -- raise a clear, specific one here
+        # instead, right at the actual cause.
+        var marked_field_ahead = sc.peek_marked_field_name()
+        if marked_field_ahead:
+            raise sc.err(
+                "InvalidSquirrelSyntax: can't chain '@@"
+                + marked_field_ahead.value()
+                + "' off '"
+                + step.name
+                + "(...)' -- its return type isn't tracked (it's either"
+                " declared outside this project, a Mojo-synthesized"
+                " method like '.copy()', or has no '-> Type' of its own"
+                " at all) -- bind the result to an explicitly-annotated"
+                " variable first ('var x: Type = "
+                + entity_label
+                + "."
+                + step.name
+                + "(...);')"
+            )
+        out += call_text
         pending_decl = None
         pending_for_loop_decl = None
         return
@@ -780,34 +1170,20 @@ def _handle_instance_call(
         ) if is_world_method else (
             expr + "." + step.name + "(" + rewritten_args + ")"
         )
-        if sc.peek_trailing_chain_follows():
-            var steps = sc.scan_access_steps()
-            var tail = sc.scan_call_or_write_tail()
-            _walk_access_chain(
-                sc,
-                source,
-                marker_start,
-                ctx,
-                steps,
-                tail.is_call,
-                tail.write_value,
-                registered_type,
-                call_text,
-                call_end_pos,
-                entity_label + "." + step.name + "(...)",
-                pending_decl,
-                pending_for_loop_decl,
-                out,
-            )
-            return
-        out += call_text
-        if pending_decl:
-            ctx.entity_to_type[pending_decl.value()] = registered_type
-        if pending_for_loop_decl and is_container_type(registered_type):
-            _require_for_loop_entity_marking(sc, ctx, registered_type, pending_for_loop_decl.value())
-            ctx.entity_to_type[pending_for_loop_decl.value()] = container_element_of(registered_type)
-        pending_decl = None
-        pending_for_loop_decl = None
+        _finish_registered_call(
+            sc,
+            source,
+            marker_start,
+            ctx,
+            call_text,
+            call_end_pos,
+            registered_type,
+            entity_label + "." + step.name + "(...)",
+            True,
+            pending_decl,
+            pending_for_loop_decl,
+            out,
+        )
         return
 
     if is_world_method:
@@ -830,6 +1206,49 @@ def _handle_instance_call(
         if sc.peek() != UInt8(ord(")")):
             out += ", "
         sc.pos = lookahead
+    elif current_type in ctx.bare_method_returns and step.name in ctx.bare_method_returns[current_type]:
+        # A bare (never `@@`/`@@@`-marked) method whose return type is
+        # registered (`ctx.bare_method_returns` -- built unconditionally
+        # for every unmarked method, so an irrelevant entry like `-> Int`
+        # is dead data, same "always register, harmless" reasoning as
+        # `bare_function_returns`) -- lets a trailing chain off its own
+        # call result continue with no intermediate variable (`@@own.
+        # get_note().@@ref.name`), the method analogue of `handle_bare_
+        # call_chain`'s support for a bare top-level function's call.
+        #
+        # `register_pending_decl_type=True` here, unlike `handle_bare_
+        # call_chain`'s own `False` -- that case is safe skipping it only
+        # because a *bare*-rooted `var x: T = f()`/`for x in f():` is
+        # always independently caught first by `PLAIN_VAR_DECL`/`PLAIN_
+        # FOR_LOOP`'s own explicit-annotation registration (a for-loop
+        # over a bare call never even reaches here: `BARE_CALL_CHAIN`
+        # only fires when a `.`/`[` trails the call, which a `for ... in
+        # f():`'s own `:` never does). An *entity*-rooted for-loop (`for a
+        # in @@own.get_homes():`) has no such earlier pathway at all --
+        # entity-rooted chains have never required an explicit annotation
+        # anywhere, type always flows from the chain itself (confirmed:
+        # dropping this without `True` left `a` unregistered, a real
+        # 'never constructed' error on a real compile, not hypothetical).
+        var registered_type = ctx.bare_method_returns[current_type][step.name]
+        var arg_text = sc.scan_call_args_to_close()
+        var rewritten_args = rewrite_markers(arg_text, ctx)
+        var call_end_pos = sc.pos
+        var call_text = expr + "." + step.name + "(" + rewritten_args + ")"
+        _finish_registered_call(
+            sc,
+            source,
+            marker_start,
+            ctx,
+            call_text,
+            call_end_pos,
+            registered_type,
+            entity_label + "." + step.name + "(...)",
+            True,
+            pending_decl,
+            pending_for_loop_decl,
+            out,
+        )
+        return
     else:
         out += expr + "." + step.name + "("
     pending_decl = None
@@ -843,7 +1262,7 @@ def _handle_table_level_call(
     fa: FieldAccess,
     mut ctx: RewriteContext,
     mut pending_decl: Optional[String],
-    mut pending_for_loop_decl: Optional[String],
+    mut pending_for_loop_decl: Optional[PendingForLoopDecl],
     mut out: String,
 ) raises:
     """`@@@Type.method(...)` -- unchanged dispatch from before the general
@@ -1052,7 +1471,7 @@ def _handle_table_level_call(
         fa.entity + "." + field + "(...)",
     )
     if is_list_returning and pending_for_loop_decl:
-        ctx.entity_to_type[pending_for_loop_decl.value()] = container_element_of(registered_type)
+        ctx.entity_to_type[pending_for_loop_decl.value().name] = container_element_of(registered_type)
     out += call_text
     pending_decl = None
     pending_for_loop_decl = None
@@ -1064,7 +1483,7 @@ def handle_name_ref(
     marker_start: Int,
     mut ctx: RewriteContext,
     mut pending_decl: Optional[String],
-    mut pending_for_loop_decl: Optional[String],
+    mut pending_for_loop_decl: Optional[PendingForLoopDecl],
     mut out: String,
 ) raises:
     """Handles the `MarkerKind.NAME_REF` fallback (a bare `@@name`).
@@ -1139,8 +1558,8 @@ def handle_name_ref(
                 )
     sc.pos = save
     if not is_decl and pending_for_loop_decl and nr.name in ctx.entity_to_type and is_container_type(ctx.entity_to_type[nr.name]):
-        _require_for_loop_entity_marking(sc, ctx, ctx.entity_to_type[nr.name], pending_for_loop_decl.value())
-        ctx.entity_to_type[pending_for_loop_decl.value()] = container_element_of(ctx.entity_to_type[nr.name])
+        _require_for_loop_marking_matches(sc, ctx, ctx.entity_to_type[nr.name], pending_for_loop_decl.value())
+        ctx.entity_to_type[pending_for_loop_decl.value().name] = container_element_of(ctx.entity_to_type[nr.name])
     pending_decl = String(nr.name) if is_decl else None
     pending_for_loop_decl = None
 
@@ -1152,32 +1571,99 @@ def _contains(items: List[String], value: String) -> Bool:
     return False
 
 
-def _require_for_loop_entity_marking(
-    sc: Scanner, ctx: RewriteContext, registered_type: String, loop_var: String
+def _any_step_marked_from(steps: List[AccessStep], from_i: Int) -> Bool:
+    """True if any of `steps[from_i:]` (this step and every one after it)
+    is `@@`/`@@@`-marked -- the "is it actually safe to roll back" check
+    the premature-leaf rollback (`_walk_access_chain`'s own FIELD/INDEX
+    branches) needs before handing `sc.pos` back to the ordinary scan:
+    safe only when nothing left to reprocess is a genuine marker the
+    scanner would just rediscover forever."""
+    for j in range(from_i, len(steps)):
+        if steps[j].marked or steps[j].marked_world:
+            return True
+    return False
+
+
+def _unresolvable_marked_step_err(sc: Scanner, current_type: String, steps: List[AccessStep], from_i: Int) -> Error:
+    """The error a premature-leaf rollback raises instead, once `_any_
+    step_marked_from` says rolling back would just re-expose a genuine
+    `@@`/`@@@` marker to the scanner forever. Names the first marked step
+    found from `from_i` onward, purely for a precise message -- which
+    step comes first doesn't change the underlying problem (`current_
+    type` itself isn't a known struct at all, so nothing marked reachable
+    through it can ever resolve)."""
+    var marked_name = String()
+    for j in range(from_i, len(steps)):
+        if steps[j].marked or steps[j].marked_world:
+            marked_name = steps[j].name
+            break
+    return sc.err(
+        "InvalidSquirrelSyntax: '@@"
+        + marked_name
+        + "' can't be resolved -- '"
+        + current_type
+        + "' isn't a known struct (real or plain), so none of its fields"
+        " can be '@@'-marked"
+    )
+
+
+def _require_for_loop_marking_matches(
+    sc: Scanner, ctx: RewriteContext, registered_type: String, decl: PendingForLoopDecl
 ) raises:
-    """`for @@x in <iterable>:`'s own marking-symmetry guard -- every
-    `pending_for_loop_decl` consumption site (bar table-level calls,
-    whose own registered type is always compiler-constructed and
-    guaranteed entity-shaped) calls this before registering the loop
-    variable's element type. Widening `@@`-marking eligibility to cover
-    a relation confined to position 1 (`Dict[String, @@Employee]`) made
-    this a real, previously-latent risk: iterating such a value/field/
-    call's result only ever exposes position 0 (the key), never
+    """`for @@x in <iterable>:`/`for x in <iterable>:`'s own marking-
+    symmetry guard, both directions -- every `pending_for_loop_decl`
+    consumption site (bar table-level calls, whose own registered type is
+    always compiler-constructed and guaranteed entity-shaped, and whose
+    own iterated root -- `@@@Type...` -- `BARE_FOR_ENTITY_LOOP` never
+    matches in the first place) calls this before registering the loop
+    variable's element type.
+
+    `decl.wants_marked` (`for @@x in ...:`): rejects when the iterated
+    result *isn't* entity-shaped -- widening `@@`-marking eligibility to
+    cover a relation confined to position 1 (`Dict[String, @@Employee]`)
+    made this a real, previously-latent risk: iterating such a value/
+    field/call's result only ever exposes position 0 (the key), never
     position 1, so a marked `@@x` would otherwise silently bind to a
     plain, non-entity value with no error at all -- confirmed via a real
     end-to-end compile of exactly this shape before this guard existed.
+
+    `not decl.wants_marked` (`for x in ...:`, rooted at an `@@`-marked
+    chain -- `BARE_FOR_ENTITY_LOOP`): the exact inverse -- rejects when
+    the iterated result genuinely *is* entity-shaped (a bare loop var
+    over `@@bob.@@members`/`@@bob.@@get_employees()`/a marked top-level
+    function's own call, all of which the per-step marking check already
+    lets through *before* ever reaching here, since that check only
+    validates the *step's* own marking, not the enclosing for-loop's) --
+    confirmed as a real, previously-unguarded risk once a bare loop var
+    over a marked-entity-rooted chain became possible at all (`bare_
+    method_returns`/a bound entity's own plain field): without this half,
+    `for a in @@bob.@@get_employees():` would silently accept an
+    unmarked `a` bound to a real entity.
+
     `is_entity_iterable_leaf`, not `is_directly_entity_reachable` --
     iteration is narrower than marking eligibility on purpose."""
-    if not is_entity_iterable_leaf(registered_type, ctx.struct_names, ctx.plain_struct_names):
+    var is_entity = is_entity_iterable_leaf(registered_type, ctx.struct_names)
+    if decl.wants_marked and not is_entity:
         raise sc.err(
             "InvalidSquirrelSyntax: '@@"
-            + loop_var
+            + decl.name
             + "' -- iterating this only ever yields a plain value here"
             " (any relation is only reachable by indexing, not"
             " iterating) -- write 'for "
-            + loop_var
+            + decl.name
             + " in ...:' (no '@@') instead of 'for @@"
-            + loop_var
+            + decl.name
+            + " in ...:'"
+        )
+    if not decl.wants_marked and is_entity:
+        raise sc.err(
+            "InvalidSquirrelSyntax: '"
+            + decl.name
+            + "' -- iterating this yields an '@@'-marked entity -- write"
+            " 'for @@"
+            + decl.name
+            + " in ...:' (with '@@') instead of 'for "
+            + decl.name
             + " in ...:'"
         )
 
