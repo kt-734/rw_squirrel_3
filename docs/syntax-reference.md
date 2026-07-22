@@ -74,29 +74,31 @@ A field typed `@@Type`, or a container of one, is a relation — an edge to
 another entity's table.
 
 ```
-@@members: List[@@Person]        # ordinary field, container-shaped
-@@backup: Set[@@Employee]
-@@lead: Optional[@@Employee]
-@@leads: Dict[String, @@Employee]   # relation in the *value* position
+members: List[@@Person]             # container-shaped, always bare
+backup: Set[@@Employee]
+lead: Optional[@@Employee]
+leads: Dict[String, @@Employee]     # relation in the *value* position, still bare
+@@primary: @@Employee               # a *single* relation, still marked
 multi @@projects: @@Project          # multi: one-at-a-time membership
 ```
 
-**Whether the field's own name needs `@@`:** a relation is *directly
-reachable* through a wrapper's own iteration/indexing surface when it sits
-in the first type argument (`List[@@T]`, `Set[@@T]`, `Optional[@@T]`) or,
-for a two-argument wrapper, the second (`Dict[K, @@T]` — real indexing
-reaches it even though iteration doesn't). A field whose relation is
-reachable this way *must* mark its own name with `@@`; one that isn't
-(nothing currently defines a "reachable" path past position 2) stays bare.
-This is enforced by the compiler, not a matter of style — an over- or
-under-marked field is a compile error.
+**Whether the field's own name needs `@@`:** only for a *single*
+(non-container) relation — `@@primary: @@Employee` above. A relation
+wrapped in any container (`List`/`Set`/`Optional`/`Dict`/a custom wrapper)
+is always bare: the type itself already says it's a relation (reachable
+through the wrapper's own first type argument, or — for a two-argument
+wrapper — the second, `Dict[K, @@T]`, real indexing reaching it even though
+iteration doesn't), so the field's own name doesn't need to repeat that.
+This is enforced by the compiler, not a matter of style — marking a
+container field's own name, or leaving a single relation field's own name
+bare, is a compile error either way.
 
 A relation field's value is always a live handle, chainable and indexable
 directly, no intermediate binding required:
 
 ```
-print(@@platform_team.@@members[0].name)
-for @@m in @@platform_team.@@members:
+print(@@platform_team.members[0].name)
+for @@m in @@platform_team.members:
     print(@@m.name)
 ```
 
@@ -180,10 +182,11 @@ any other parameter/field). A var-decl is more lenient in three ways:
 
 - `var x: Type = ...` — the explicit annotation, always works.
 - `var x = Type(...)` / `var x = List[Type]()` — no annotation at all,
-  inferred from a constructor-call-shaped initializer, the same way the
-  marked-entity system already infers a bare `var @@x = List[@@Type]()`
-  from its own container constructor rather than requiring `@@Type`
-  spelled out twice.
+  inferred from a constructor-call-shaped initializer, the same way a
+  bare `var x = List[@@Type]()` (a container constructor holding
+  entities — always bare, never marked, the container itself is never
+  the entity) infers its own element type without `@@Type` spelled out
+  twice.
 - `var x = some_function(...)` — also no annotation, inferred from the
   function/method's own *registered return type* (not its name) when
   it's one this project actually declares — `var addrs =
@@ -320,15 +323,24 @@ constructed:
 from schema.grid_module import Grid
 
 @@struct @@Team:
-    @@directory: Grid[String, @@Employee]
+    directory: Grid[String, @@Employee]
 ```
 
 ## Functions and methods
 
-A **top-level function** or **struct method** whose return type is (or
-contains, in a reachable position) an `@@`-marked value must mark its own
-name — `@@name` if it doesn't need the world, `@@@name` if it does (never
-both):
+A **top-level function**'s or **struct method**'s own name never signals
+its return shape — it can return anything at all (plain, a single
+relation, or a container of one) and stays bare either way:
+
+```
+def make_vendor(name: String) -> @@Vendor:
+    return @@some_existing_vendor
+```
+
+`@@@name` is the one spelling that remains, and it means only one thing:
+this function/method needs `sqrrl___world` (because it constructs a new
+entity, or calls something that does) — completely decoupled from what it
+returns:
 
 ```
 def @@@make_vendor(name: String) -> @@Vendor:
@@ -336,14 +348,29 @@ def @@@make_vendor(name: String) -> @@Vendor:
     return @@v
 ```
 
-Marking makes the call itself a real, walkable position — a marked call's
-result can be bound to a variable, iterated directly (`for @@x in
-func(...):`), or chained directly (`func(...)[0].field`), with no
-intermediate variable required either way.
+Either way, the call is a real, walkable position — its result can be
+bound to a variable, iterated directly (`for @@x in func(...):`), or
+chained directly (`func(...)[0].field`), with no intermediate variable
+required.
 
-A bare, unmarked function/method must *not* return an `@@`-marked value —
-both directions (over-marked, under-marked) are compile errors, checked at
-the signature, not deferred to a confusing error at some call site.
+**Binding a call's own entity-shaped result to a name that persists**
+(a var-decl or for-loop variable, not an immediate chain off the call)
+still needs `@@` on *that* name, regardless of whether the function/method
+itself is marked — the value itself is a real entity, and only a marked
+name's later field/method access gets rewritten correctly:
+
+```
+var @@lead = get_lead(@@eng)          # @@lead: bound to a single entity
+for @@m in get_team(@@eng):           # @@m: bound to one each iteration
+    print(@@m.name)
+
+var scores = Dict[String, @@Employee]()   # scores: a container, stays bare
+```
+
+This is the same rule relation fields follow (mark a name only when its
+own value is *directly* an entity, never when it's merely a container of
+one) — applied uniformly to local variables and loop variables too, not
+just fields.
 
 ## World scope and keepalive
 

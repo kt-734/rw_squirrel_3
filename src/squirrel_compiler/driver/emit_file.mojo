@@ -43,7 +43,6 @@ def emit_file(
     own_module_path: String,
     relation_schema: Dict[String, Dict[String, String]],
     struct_names: Dict[String, Bool],
-    function_returns: Dict[String, String],
     unique_fields: Dict[String, List[String]],
     indexed_fields: Dict[String, List[String]],
     multi_fields: Dict[String, List[String]],
@@ -54,7 +53,6 @@ def emit_file(
     plain_struct_names: Dict[String, Bool] = Dict[String, Bool](),
     plain_value_fields: Dict[String, Dict[String, String]] = Dict[String, Dict[String, String]](),
     json_used: Bool = False,
-    method_returns: Dict[String, Dict[String, String]] = Dict[String, Dict[String, String]](),
     bare_function_returns: Dict[String, String] = Dict[String, String](),
     bare_method_returns: Dict[String, Dict[String, String]] = Dict[String, Dict[String, String]](),
 ) raises -> String:
@@ -83,9 +81,9 @@ def emit_file(
     var transformed: String
     try:
         transformed = transform_source(
-            source, relation_schema, struct_names, function_returns, unique_fields, indexed_fields, multi_fields,
+            source, relation_schema, struct_names, unique_fields, indexed_fields, multi_fields,
             ordered_fields, world_methods, stats_fields, plain_struct_names, plain_value_fields, json_used,
-            method_returns=method_returns, bare_function_returns=bare_function_returns,
+            bare_function_returns=bare_function_returns,
             bare_method_returns=bare_method_returns,
         )
     except e:

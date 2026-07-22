@@ -2,6 +2,7 @@ from squirrel_compiler.parser.ast import Field, FieldModifier
 from squirrel_compiler.parser.text_utils import is_ident_char
 from squirrel_compiler.parser.relation_type_text import is_directly_entity_reachable
 from squirrel_compiler.parser.scanner import Scanner
+from squirrel_compiler.parser.type_expr import parse_type_expr
 
 
 def parse_struct_body(body: String, mut fields: List[Field]) raises -> String:
@@ -88,7 +89,24 @@ def parse_struct_body(body: String, mut fields: List[Field]) raises -> String:
             raise bs.err("InvalidSquirrelSyntax: empty field type")
 
         var type_is_relation = is_directly_entity_reachable(type_str)
-        if name_is_marked != type_is_relation:
+        var type_is_container = parse_type_expr(type_str).is_parameterized()
+        if type_is_relation and type_is_container:
+            # Mandatory marking dropped for a container-of-entity field
+            # (Part 2): the type itself (`List[@@Employee]`) already says
+            # this field is a relation, so the field's own name no longer
+            # needs `@@` too -- unlike a *single* relation field
+            # (`@@dept: @@Department`, unaffected, still required below),
+            # which has no container wrapper of its own for the type
+            # alone to carry that signal.
+            if name_is_marked:
+                raise bs.err(
+                    "InvalidSquirrelSyntax: '@@" + name + "' -- '@@'"
+                    " marking on a container field's own name is no"
+                    " longer used or needed (the type itself, '"
+                    + type_str + "', already says so); write it bare: '"
+                    + name + ": " + type_str + "'"
+                )
+        elif name_is_marked != type_is_relation:
             raise bs.err(
                 "InvalidSquirrelSyntax: @@ marking must match between field"
                 " name and type"
@@ -171,7 +189,19 @@ def parse_hand_written_struct_fields(body: String, mut fields: List[Field]) rais
         if type_str.startswith("Self."):
             type_str = String(type_str[byte=5 : type_str.byte_length()])
         var type_is_relation = is_directly_entity_reachable(type_str)
-        if name_is_marked != type_is_relation:
+        var type_is_container = parse_type_expr(type_str).is_parameterized()
+        if type_is_relation and type_is_container:
+            # Same relaxation as `parse_struct_body`'s own -- see its
+            # comment for the full "why."
+            if name_is_marked:
+                raise bs.err(
+                    "InvalidSquirrelSyntax: '@@" + name + "' -- '@@'"
+                    " marking on a container field's own name is no"
+                    " longer used or needed (the type itself, '"
+                    + type_str + "', already says so); write it bare: '"
+                    + name + ": " + type_str + "'"
+                )
+        elif name_is_marked != type_is_relation:
             raise bs.err(
                 "InvalidSquirrelSyntax: @@ marking must match between field"
                 " name and type"

@@ -57,15 +57,15 @@ def sqrrl__hire(mut sqrrl___world: sqrrl___World, name: String, email: String, t
     return sqrrl__e
 
 def sqrrl__hire_team(mut sqrrl___world: sqrrl___World, names: List[String], email_suffix: String, starting_years: UInt32, starting_salary: Float64, sqrrl__dept: sqrrl__Department) raises -> List[sqrrl__Employee]:
-    var sqrrl__team = List[sqrrl__Employee]()
+    var team = List[sqrrl__Employee]()
     var years = starting_years
     var salary = starting_salary
     for name in names:
         var sqrrl__emp = sqrrl__hire(sqrrl___world, name, name + email_suffix, "Engineer", years, salary, sqrrl__dept)
-        sqrrl__team.append(sqrrl__emp)
+        team.append(sqrrl__emp)
         years += 1
         salary += 5000.0
-    return sqrrl__team^
+    return team^
 
 def sqrrl__make_team(mut sqrrl___world: sqrrl___World, name: String, sqrrl__lead_person: sqrrl__Person, role: String) -> sqrrl__Team:
     var assignment = Assignment(sqrrl__person=sqrrl__lead_person, role=role)

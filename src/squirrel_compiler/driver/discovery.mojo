@@ -9,7 +9,7 @@ from squirrel_compiler.parser import (
 )
 from squirrel_compiler.driver.file_paths import module_path_for
 from squirrel_compiler.codegen import sqrrl_prefixed
-from squirrel_compiler.codegen.methods import world_marked_method_names, method_return_shapes, bare_method_returns
+from squirrel_compiler.codegen.methods import world_marked_method_names, bare_method_returns
 
 
 struct DiscoveredStruct(Copyable, Movable, ImplicitlyDeletable):
@@ -333,33 +333,18 @@ def build_world_methods(discovery: DiscoveryResult) raises -> Dict[String, List[
     return world_methods^
 
 
-def build_method_returns(discovery: DiscoveryResult) raises -> Dict[String, Dict[String, String]]:
-    """Struct name -> method name -> its `@@`-marked return's encoded
-    shape, for every `@@struct` declared project-wide -- mandatory-marking
-    extended to methods (mirrors `build_world_methods`'s own project-wide
-    scan): lets the rewrite engine's instance-call dispatch (`rewrite_
-    field_access.mojo`'s `_handle_instance_call`) treat a marked method
-    call as a real marker position, the same way `function_returns`
-    already lets `handle_func_call_marker` treat a marked top-level
-    function's call, even when the call site is in a different file than
-    the one declaring the method (same cross-file reasoning `world_
-    methods` already needs)."""
-    var method_returns = Dict[String, Dict[String, String]]()
-    for ds in discovery.structs:
-        method_returns[ds.parsed.name] = method_return_shapes(ds.parsed.method_body, ds.parsed.name)
-    return method_returns^
-
-
 def build_bare_method_returns(discovery: DiscoveryResult) raises -> Dict[String, Dict[String, String]]:
     """Struct name -> bare method name -> its raw, unstripped return-type
-    text, for every `@@struct` declared project-wide -- `build_method_
-    returns`'s counterpart for a bare (unmarked) method, the method
-    analogue of `driver/misc_builders.mojo`'s `build_bare_plain_function_
-    returns`: lets `_handle_instance_call` (`rewrite_field_access.mojo`)
-    continue a trailing chain off a bare method's own call result
-    (`@@own.get_note().@@ref.name`, no intermediate variable), the same
-    way `ctx.bare_function_returns`/`handle_bare_call_chain` already lets
-    one continue off a bare top-level function's own call result."""
+    text, for every `@@struct` declared project-wide -- the method
+    analogue of `driver/misc_builders.mojo`'s `build_bare_function_
+    returns`, covering every non-world method unconditionally (plain,
+    entity-shaped, or a container of either, since mandatory marking for
+    a method's own return shape is gone): lets `_handle_instance_call`
+    (`rewrite_field_access.mojo`) continue a trailing chain off a bare
+    method's own call result (`@@own.get_note().@@ref.name`, no
+    intermediate variable), the same way `ctx.bare_function_returns`/
+    `handle_bare_call_chain` already lets one continue off a bare
+    top-level function's own call result."""
     var bare_method_returns_out = Dict[String, Dict[String, String]]()
     for ds in discovery.structs:
         bare_method_returns_out[ds.parsed.name] = bare_method_returns(ds.parsed.method_body, ds.parsed.name)

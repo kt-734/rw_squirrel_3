@@ -23,6 +23,8 @@ from squirrel_compiler.codegen.rewrite_field_access import (
     handle_bare_call_chain,
     handle_bare_rooted_chain,
     PendingForLoopDecl,
+    _require_for_loop_marking_matches,
+    _finish_registered_call,
 )
 
 
@@ -330,11 +332,75 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
                 # name in the same Mojo scope, so there's no ambiguity to
                 # resolve, only a preference for the *real* type when a
                 # more specific one is available.
-                var registered_type = (
-                    ctx.bare_function_returns[pvd.type_text] if pvd.type_text in ctx.bare_function_returns
-                    else pvd.type_text
-                )
-                ctx.entity_to_type[pvd.name] = registered_type
+                # `render_relation_stripped()` -- `pvd.type_text` is
+                # captured raw (still `@@`-marked, e.g. `Dict[String,
+                # @@Employee]`) since this marker's own span swallows it
+                # whole, never letting the outer loop rediscover any `@@`
+                # inside as its own separate marker; every other producer
+                # of `ctx.entity_to_type` always stores the stripped form
+                # (`bare_function_returns`'s own values, a marked chain's
+                # resolved type, ...), so leaving this one raw silently
+                # desynced a later lookup (`current_type in ctx.struct_
+                # names` never matches a literal `"@@Employee"` string) --
+                # confirmed via a real compile: `var d = Dict[String,
+                # @@Employee](); d["k"].name` rolled back as an
+                # unresolvable leaf and copied `.name` through
+                # unrewritten instead of raising or resolving correctly.
+                # `var x = bare_func(...).chain.further:` -- a trailing
+                # chain off the call's own result, not just the call
+                # itself. `pvd.type_text`'s own registered return type
+                # (below) is only correct when *nothing* follows the
+                # call -- otherwise the chain walks *through* it to a
+                # different final type (`make_team(...).roster[0].
+                # mentor()` ends at `Employee`, not `make_team`'s own
+                # `Team`). Confirmed as a real, previously-silent bug:
+                # registering the call's own bare return type here
+                # unconditionally, then unconditionally clearing `pending_
+                # decl` below, stole the registration job from `BARE_
+                # CALL_CHAIN`'s own correct, chain-aware one (found next,
+                # when the outer loop reaches the call itself) without
+                # ever doing it right -- `x.field` afterward silently
+                # passed through unrewritten instead of raising or
+                # resolving. Detected here via a pure lookahead through
+                # the call's own already-known name and argument list
+                # (mirrors `at_plain_var_decl`'s own scan exactly, just
+                # continuing one step further to peek past the closing
+                # `)`), fully restored either way.
+                var chain_follows_call = False
+                if pvd.type_text in ctx.bare_function_returns:
+                    var lookahead_pos = sc.pos
+                    _ = sc.scan_ident()
+                    if sc.try_consume("("):
+                        _ = sc.scan_call_args_to_close()
+                        chain_follows_call = sc.peek_trailing_chain_follows()
+                    sc.pos = lookahead_pos
+                if chain_follows_call:
+                    pending_decl = Optional[String](pvd.name)
+                    pending_for_loop_decl = None
+                else:
+                    var registered_type = (
+                        ctx.bare_function_returns[pvd.type_text] if pvd.type_text in ctx.bare_function_returns
+                        else parse_type_expr(pvd.type_text).render_relation_stripped()
+                    )
+                    # Mandatory marking dropped for a bare function's own
+                    # return shape (Part 1) means `ctx.bare_function_
+                    # returns` can now hold a genuinely entity-shaped type
+                    # here too, not just a plain struct -- registering it
+                    # against this bare name is still safe: `at_bare_
+                    # rooted_chain`/`at_bare_var_decl_over_bare_chain`/
+                    # `at_bare_for_loop_over_bare_chain` (`parser/scanner.
+                    # mojo`) were widened to recognize a bare-rooted
+                    # *plain field* hop too, not just a method call, so a
+                    # later `x.field`/`for a in x.container_field:` off
+                    # this name resolves correctly either way (real
+                    # entity or plain struct) through the exact same,
+                    # already type-agnostic `_walk_access_chain`.
+                    ctx.entity_to_type[pvd.name] = registered_type
+                    pending_decl = None
+                    pending_for_loop_decl = None
+            else:
+                pending_decl = None
+                pending_for_loop_decl = None
             # Inferred: `type_text` is registration-only, never emitted --
             # the constructor call it came from is left unconsumed right
             # after `prefix_text`, for the ordinary scan to re-discover
@@ -344,8 +410,6 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
             out += pvd.prefix_text if pvd.type_is_inferred else (
                 pvd.prefix_text + rewritten_field_type(pvd.type_text, ctx.plain_struct_names)
             )
-            pending_decl = None
-            pending_for_loop_decl = None
 
         elif kind == MarkerKind.BARE_VAR_DECL_OVER_ENTITY:
             # `var <bare_name> = @@...:` -- the var-decl mirror of `BARE_
@@ -412,18 +476,73 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
             # `handle_func_call_marker` already use for their own calls.
             var pfl_start = sc.pos
             var pfl = sc.parse_plain_for_loop()
-            if pfl.is_call:
+            if pfl.is_call and sc.peek_trailing_chain_follows():
+                # `for bare_loop_var in bare_func(...).chain:` -- the call
+                # has a trailing chain before the loop's own `:`, so `pfl.
+                # container_name`'s own return type isn't the final
+                # iterated type at all (the chain walks *through* it --
+                # `make_team(...).roster` ends at `List[Employee]`, not
+                # `make_team`'s own `Team`). Confirmed as a real,
+                # previously-silent gap: `at_plain_for_loop` never matched
+                # this shape at all before (required an immediate `:`
+                # right after the call), so nothing set up `pending_for_
+                # loop_decl` -- the loop variable was left completely
+                # unregistered, `e.field` inside the loop body silently
+                # passing through unrewritten. Defers to the exact same
+                # chain-aware registration a direct chain (no for-loop at
+                # all) already gets via `_finish_registered_call`, rather
+                # than the inline, call-only registration just below.
+                var rewritten_args = rewrite_markers(pfl.arg_text, ctx)
+                var binding = (pfl.binding_prefix + " ") if pfl.binding_prefix.byte_length() > 0 else String()
+                var call_text = pfl.container_name + "(" + rewritten_args + ")"
+                var call_end_pos = sc.pos
+                out += "for " + binding + pfl.loop_var + " in "
+                if pfl.container_name in ctx.bare_function_returns:
+                    var pfl_pending_for_loop_decl = Optional[PendingForLoopDecl](
+                        PendingForLoopDecl(name=pfl.loop_var, wants_marked=False)
+                    )
+                    var pfl_registered_type = ctx.bare_function_returns[pfl.container_name]
+                    _finish_registered_call(
+                        sc,
+                        source,
+                        marker_start,
+                        ctx,
+                        call_text,
+                        call_end_pos,
+                        pfl_registered_type,
+                        pfl.container_name + "(...)",
+                        False,
+                        pending_decl,
+                        pfl_pending_for_loop_decl,
+                        out,
+                    )
+                else:
+                    out += call_text
+                    pending_decl = None
+                    pending_for_loop_decl = None
+            elif pfl.is_call:
                 var rewritten_args = rewrite_markers(pfl.arg_text, ctx)
                 var binding = (pfl.binding_prefix + " ") if pfl.binding_prefix.byte_length() > 0 else String()
                 out += "for " + binding + pfl.loop_var + " in " + pfl.container_name + "(" + rewritten_args + ")"
                 if pfl.container_name in ctx.bare_function_returns and is_container_type(ctx.bare_function_returns[pfl.container_name]):
+                    # Mandatory marking dropped for a bare function's own
+                    # return shape means this can now be a container of
+                    # real entities, not just plain structs -- registering
+                    # `pfl.loop_var` (bare) against the element type is
+                    # still safe either way: a later `x.field`/`x.method(
+                    # ...)` off this bare loop var resolves correctly
+                    # through `at_bare_rooted_chain`'s own widened trigger
+                    # (a plain-field hop, not just a call) and `_walk_
+                    # access_chain`'s already type-agnostic dispatch.
                     ctx.entity_to_type[pfl.loop_var] = container_element_of(ctx.bare_function_returns[pfl.container_name])
+                pending_decl = None
+                pending_for_loop_decl = None
             else:
                 if pfl.container_name in ctx.entity_to_type and is_container_type(ctx.entity_to_type[pfl.container_name]):
                     ctx.entity_to_type[pfl.loop_var] = container_element_of(ctx.entity_to_type[pfl.container_name])
                 out += String(source[byte = pfl_start : sc.pos])
-            pending_decl = None
-            pending_for_loop_decl = None
+                pending_decl = None
+                pending_for_loop_decl = None
 
         elif kind == MarkerKind.RETURN_TYPE:
             var nr = sc.parse_name_ref()
@@ -460,14 +579,44 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
             out += sqrrl_prefixed(name) + " in"
             pending_decl = None
             # `for @@x in @@get_list(...):`/`for @@x in @@@get_list(...):`
-            # -- mandatory-marking milestone: any function returning a
-            # container of `@@`-marked values is itself always `@@`/`@@@`-
-            # marked, so its own call is a real marker (`handle_func_call_
-            # marker`) that consumes `pending_for_loop_decl` exactly like
-            # every other marker already does -- no special-casing needed
-            # here at all, unlike when a bare (unmarked) function name
-            # could never itself be a marker-stop position.
+            # -- a call rooted at an `@@`/`@@@` marker is itself a real
+            # marker (`handle_func_call_marker`/`_walk_access_chain`) that
+            # consumes `pending_for_loop_decl` exactly like every other
+            # marker already does -- no special-casing needed here for
+            # that case.
             pending_for_loop_decl = Optional[PendingForLoopDecl](PendingForLoopDecl(name=name, wants_marked=True))
+            # `for @@x in bare_func(...):` -- a bare (never `@@`/`@@@`-
+            # marked) top-level function's own call, with *no* further
+            # trailing chain. `BARE_CALL_CHAIN`'s own forward check
+            # (`at_bare_call_chain`) requires a trailing `.`/`[` to fire
+            # at all (a direct chain off the call) -- a for-loop's own
+            # immediately-following `:` never provides one, so nothing
+            # would otherwise ever consume `pending_for_loop_decl` here.
+            # Handled inline, synchronously, mirroring `PLAIN_FOR_LOOP`'s
+            # own bare-call branch -- but only when no trailing chain
+            # actually follows the call: if one does, `BARE_CALL_CHAIN`'s
+            # own ordinary dispatch already handles it correctly the very
+            # next scanner iteration (already proven working this
+            # session), so this lookahead backs off and leaves `pending_
+            # for_loop_decl` untouched for it.
+            var fel_lookahead = sc.pos
+            sc.skip_trivia()
+            var fel_between = String(source[byte = fel_lookahead : sc.pos])
+            var fel_func_name = sc.scan_ident()
+            var fel_consumed = False
+            if fel_func_name.byte_length() > 0 and sc.peek() == UInt8(ord("(")) and fel_func_name in ctx.bare_function_returns:
+                sc.pos += 1
+                var fel_arg_text = sc.scan_call_args_to_close()
+                if sc.peek() != UInt8(ord(".")) and sc.peek() != UInt8(ord("[")):
+                    var fel_registered_type = ctx.bare_function_returns[fel_func_name]
+                    _require_for_loop_marking_matches(sc, ctx, fel_registered_type, pending_for_loop_decl.value())
+                    ctx.entity_to_type[name] = container_element_of(fel_registered_type)
+                    var fel_rewritten_args = rewrite_markers(fel_arg_text, ctx)
+                    out += fel_between + fel_func_name + "(" + fel_rewritten_args + ")"
+                    pending_for_loop_decl = None
+                    fel_consumed = True
+            if not fel_consumed:
+                sc.pos = fel_lookahead
 
         elif kind == MarkerKind.BARE_FOR_ENTITY_LOOP:
             # `for <bare_var> in @@...:` -- the bare-loop-var mirror of

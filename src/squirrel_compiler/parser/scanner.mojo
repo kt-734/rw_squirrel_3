@@ -129,6 +129,45 @@ struct Scanner(Movable):
             return True
         return False
 
+    def try_consume_word(mut self, literal: String) -> Bool:
+        """`try_consume`, but for a keyword literal specifically (`var`,
+        `ref`, `for`, `in`, ...): also requires the byte right after the
+        literal to not itself be an identifier character, so this never
+        matches a mere *prefix* of a longer identifier (`variance`,
+        `reference`, `informant`, ...) as if it were the bare keyword
+        plus a separate following name. `try_consume` alone doesn't check
+        this at all -- confirmed as a real, previously-silent bug: every
+        `try_consume("var")`/`try_consume("ref")` in this file's own
+        var-decl/for-loop fallback family matched the literal `var`/`ref`
+        prefix of a longer identifier unconditionally, silently stealing
+        it and leaving the *rest* of that identifier (`iance`, `erence`,
+        ...) to be misread as the actual declared name."""
+        var save = self.pos
+        if not self.try_consume(literal):
+            return False
+        if is_ident_char(self.peek()):
+            self.pos = save
+            return False
+        return True
+
+    def at_identifier_boundary(self) -> Bool:
+        """True if `self.pos` is not itself in the middle of a longer
+        identifier -- i.e., the byte immediately before it (if any) isn't
+        an identifier character. `find_next_marker`'s own outer loop
+        tries every fallback `at_*` check at literally every byte
+        position it hasn't already consumed, including *inside* an
+        ordinary identifier, not just at its own start; most such
+        positions self-exclude naturally (scanning from partway through
+        a word usually fails the rest of whatever shape is being
+        checked), but not always -- confirmed as a real, previously-
+        silent bug via `def foo() raises:` being misread as a fake
+        `raises: Type` field/param/var declaration, and every *suffix*
+        of "raises" ("aises", "ises", ...) matching the exact same way
+        since each still ends right before the same trailing `:`. Every
+        fallback check in this file's own var-decl/for-loop/bare-chain
+        family should call this first."""
+        return self.pos == 0 or not is_ident_char(self.byte_at(self.pos - 1))
+
     def skip_whitespace(mut self):
         while not self.at_end():
             var b = self.peek()
@@ -610,10 +649,36 @@ struct Scanner(Movable):
         ...)`, no `var`) must never be reinterpreted as a fresh
         declaration."""
         var save = self.pos
-        var had_var = self.try_consume("var")
+        if not self.at_identifier_boundary():
+            return False
+        var had_var = self.try_consume_word("var")
         self.skip_trivia()
         var name = self.scan_ident()
         if name.byte_length() == 0:
+            self.pos = save
+            return False
+        # A handful of Mojo keywords are themselves immediately followed
+        # by `:` in ordinary control flow (`else:`, `try:`, bare
+        # `except:`, `finally:`) or in a def's own signature (`raises:`,
+        # right after the closing `)`/`-> ReturnType`) -- `scan_ident()`
+        # has no keyword awareness at all, so without this check any of
+        # these gets misread as a fake `name: Type` field/param/var
+        # declaration (`type_name` scanning whatever real token happens
+        # to follow, e.g. `raises:\n    var scores = ...` reading "var"
+        # itself as the "field"'s own type). None of these can ever
+        # legitimately be a field/param/var name in real Mojo, so
+        # rejecting them here is always safe, never a missed match --
+        # confirmed as a real, previously-silent bug: this always could
+        # have misfired, but stayed invisible until a bare (never `@@`-
+        # marked) var-decl's own leading `var` keyword was what got
+        # silently swallowed as the bogus "type" -- the *real* `var
+        # scores = ...` line right after `raises:` was left with no
+        # `var` of its own for any marker to ever recognize again,
+        # leaving `scores` completely unregistered.
+        if (
+            name == "raises" or name == "else" or name == "try"
+            or name == "except" or name == "finally"
+        ):
             self.pos = save
             return False
         self.skip_trivia()
@@ -665,7 +730,7 @@ struct Scanner(Movable):
         that restores `self.pos` afterward, since it's for registration
         only, never emitted by this marker itself."""
         var start = self.pos
-        _ = self.try_consume("var")
+        _ = self.try_consume_word("var")
         self.skip_trivia()
         var name = self.scan_ident()
         self.skip_trivia()
@@ -705,16 +770,28 @@ struct Scanner(Movable):
         local/function is `rewrite.mojo`'s own handler's job) --
         conservative enough to never misfire on `for @@x in ...:`
         (`MarkerKind.FOR_ENTITY_LOOP`'s own shape, found via the `@@`-
-        triggered branches above, never reaching this fallback at
-        all)."""
+        triggered branches above, never reaching this fallback at all).
+
+        Also matches when the call itself is followed by a trailing
+        `.`/`[` chain, not just an immediate `:` (`for n in get_team(
+        @@eng).roster:`) -- `rewrite.mojo`'s own handler branches on
+        which shape this turned out to be: an immediate `:` still
+        registers inline as before; a trailing chain instead defers to
+        `BARE_CALL_CHAIN`'s own correct, chain-aware registration
+        (confirmed as a real, previously-silent gap: this never matched
+        at all before, so nothing set up `pending_for_loop_decl`, and
+        the loop variable was left completely unregistered -- `e.name`
+        inside the loop body silently passed through unrewritten)."""
         var save = self.pos
+        if not self.at_identifier_boundary():
+            return False
         if not (self.starts_with("for") and not is_ident_char(self.peek_at(3))):
             self.pos = save
             return False
         self.pos += 3
         self.skip_trivia()
-        _ = self.try_consume("var")
-        _ = self.try_consume("ref")
+        _ = self.try_consume_word("var")
+        _ = self.try_consume_word("ref")
         self.skip_trivia()
         var loop_var = self.scan_ident()
         if loop_var.byte_length() == 0:
@@ -730,11 +807,15 @@ struct Scanner(Movable):
         if container_name.byte_length() == 0:
             self.pos = save
             return False
+        var was_call = False
         if self.peek() == UInt8(ord("(")):
+            was_call = True
             self.pos += 1
             _ = self.scan_call_args_to_close()
         self.skip_trivia()
-        var matched = self.peek() == UInt8(ord(":"))
+        var matched = self.peek() == UInt8(ord(":")) or (
+            was_call and (self.peek() == UInt8(ord(".")) or self.peek() == UInt8(ord("[")))
+        )
         self.pos = save
         return matched
 
@@ -749,17 +830,17 @@ struct Scanner(Movable):
         needs its own argument list run through `rewrite_markers` (any
         `@@`-marked argument still needs rewriting), so the caller
         reconstructs that text itself rather than copying it raw."""
-        _ = self.try_consume("for")
+        _ = self.try_consume_word("for")
         self.skip_trivia()
         var binding_prefix = String()
-        if self.try_consume("var"):
+        if self.try_consume_word("var"):
             binding_prefix = "var"
-        elif self.try_consume("ref"):
+        elif self.try_consume_word("ref"):
             binding_prefix = "ref"
         self.skip_trivia()
         var loop_var = self.scan_ident()
         self.skip_trivia()
-        _ = self.try_consume("in")
+        _ = self.try_consume_word("in")
         self.skip_trivia()
         var container_name = self.scan_ident()
         var is_call = False
@@ -798,13 +879,15 @@ struct Scanner(Movable):
         only confirms a single `@@` immediately follows `in`. A pure
         lookahead, restoring `self.pos` either way."""
         var save = self.pos
+        if not self.at_identifier_boundary():
+            return False
         if not (self.starts_with("for") and not is_ident_char(self.peek_at(3))):
             self.pos = save
             return False
         self.pos += 3
         self.skip_trivia()
-        _ = self.try_consume("var")
-        _ = self.try_consume("ref")
+        _ = self.try_consume_word("var")
+        _ = self.try_consume_word("ref")
         self.skip_trivia()
         var loop_var = self.scan_ident()
         if loop_var.byte_length() == 0:
@@ -833,17 +916,17 @@ struct Scanner(Movable):
         own doc comment has the full "why" -- this handler reconstructs
         its own output text too, so dropping the prefix here would be the
         exact same silent bug)."""
-        _ = self.try_consume("for")
+        _ = self.try_consume_word("for")
         self.skip_trivia()
         var binding_prefix = String()
-        if self.try_consume("var"):
+        if self.try_consume_word("var"):
             binding_prefix = "var"
-        elif self.try_consume("ref"):
+        elif self.try_consume_word("ref"):
             binding_prefix = "ref"
         self.skip_trivia()
         var loop_var = self.scan_ident()
         self.skip_trivia()
-        _ = self.try_consume("in")
+        _ = self.try_consume_word("in")
         return BareForLoopHeader(loop_var=loop_var, binding_prefix=binding_prefix)
 
     def at_bare_var_decl_over_marked_chain(mut self) raises -> Bool:
@@ -869,7 +952,9 @@ struct Scanner(Movable):
         bare var, `addr = @@bob...`, no `var`, must never be mistaken for
         a fresh declaration)."""
         var save = self.pos
-        if not self.try_consume("var"):
+        if not self.at_identifier_boundary():
+            return False
+        if not self.try_consume_word("var"):
             self.pos = save
             return False
         self.skip_trivia()
@@ -896,7 +981,7 @@ struct Scanner(Movable):
         and the `@@` is left for the outer loop's own ordinary "between
         text" copy to reproduce verbatim). Returns the variable's own
         (bare) name."""
-        _ = self.try_consume("var")
+        _ = self.try_consume_word("var")
         self.skip_trivia()
         var name = self.scan_ident()
         self.skip_trivia()
@@ -940,12 +1025,21 @@ struct Scanner(Movable):
         own silent, harmless no-op has to hold up under that, not just
         the occasional false match."""
         var save = self.pos
-        if is_after_dot(self.source, save):
+        if is_after_dot(self.source, save) or not self.at_identifier_boundary():
             return False
         var receiver = self.scan_ident()
         if receiver.byte_length() == 0:
             self.pos = save
             return False
+        if self.peek() == UInt8(ord("[")):
+            # `<bare_ident>[...]` -- the chain's first hop is an index,
+            # not a dot at all (`scores_dict["senior"].name`, a bare
+            # local container indexed directly) -- `scan_access_steps()`
+            # already starts by checking for `[` first in its own loop,
+            # so this needs no further lookahead here, same reasoning as
+            # the `.`-rooted case just below.
+            self.pos = save
+            return True
         if self.peek() != UInt8(ord(".")):
             self.pos = save
             return False
@@ -954,9 +1048,23 @@ struct Scanner(Movable):
         if method_name.byte_length() == 0:
             self.pos = save
             return False
-        var matched = self.peek() == UInt8(ord("("))
+        # No longer requires a trailing `(` -- `handle_bare_rooted_chain`'s
+        # own `scan_access_steps()` already parses a plain `.field`/
+        # `[index]` hop exactly as generically as a `.method(...)` one (it
+        # was never call-specific, just never reached with anything else
+        # at the front before this widening), and `_walk_access_chain` is
+        # equally type-agnostic either way. Needed so a genuinely bare
+        # (never `@@`-marked) plain-struct local's own container-of-entity
+        # field can be read/iterated at all (`t.members`, no call anywhere
+        # in the whole chain) -- nothing else recognizes a bare `ident.
+        # field` with no call as a marker-worthy position, so `pending_
+        # for_loop_decl`/a later marked step through it would otherwise
+        # never resolve. Still safe: the handler already no-ops, silently
+        # and harmlessly, for any receiver that isn't actually a tracked
+        # bare local -- this widening only grows how often that no-op
+        # path is taken, not what it does.
         self.pos = save
-        return matched
+        return True
 
     def at_bare_var_decl_over_bare_chain(mut self) raises -> Bool:
         """True if `self.pos` starts `var <bare_name> = <bare_ident>.
@@ -983,7 +1091,9 @@ struct Scanner(Movable):
         sibling case exactly the way `at_plain_var_decl`'s own inferred
         branch already does."""
         var save = self.pos
-        if not self.try_consume("var"):
+        if not self.at_identifier_boundary():
+            return False
+        if not self.try_consume_word("var"):
             self.pos = save
             return False
         self.skip_trivia()
@@ -1001,6 +1111,9 @@ struct Scanner(Movable):
         if receiver.byte_length() == 0:
             self.pos = save
             return False
+        if self.peek() == UInt8(ord("[")):
+            self.pos = save
+            return True
         if self.peek() != UInt8(ord(".")):
             self.pos = save
             return False
@@ -1009,9 +1122,13 @@ struct Scanner(Movable):
         if method_name.byte_length() == 0:
             self.pos = save
             return False
-        var matched = self.peek() == UInt8(ord("("))
+        # No longer requires a trailing `(` -- see `at_bare_rooted_chain`'s
+        # own updated doc comment for the full "why" (this marker's own
+        # job is just to set `pending_decl` a step early; `BARE_ROOTED_
+        # CHAIN` is guaranteed to fire immediately after it either way,
+        # call or plain field, and consume it).
         self.pos = save
-        return matched
+        return True
 
     def at_bare_for_loop_over_bare_chain(mut self) raises -> Bool:
         """True if `self.pos` starts `for [var/ref ]<loop_var> in
@@ -1023,13 +1140,15 @@ struct Scanner(Movable):
         it's actually consumed, not leaked" reason `at_bare_var_decl_
         over_bare_chain`'s own doc comment explains in full."""
         var save = self.pos
+        if not self.at_identifier_boundary():
+            return False
         if not (self.starts_with("for") and not is_ident_char(self.peek_at(3))):
             self.pos = save
             return False
         self.pos += 3
         self.skip_trivia()
-        _ = self.try_consume("var")
-        _ = self.try_consume("ref")
+        _ = self.try_consume_word("var")
+        _ = self.try_consume_word("ref")
         self.skip_trivia()
         var loop_var = self.scan_ident()
         if loop_var.byte_length() == 0:
@@ -1045,6 +1164,9 @@ struct Scanner(Movable):
         if receiver.byte_length() == 0:
             self.pos = save
             return False
+        if self.peek() == UInt8(ord("[")):
+            self.pos = save
+            return True
         if self.peek() != UInt8(ord(".")):
             self.pos = save
             return False
@@ -1053,9 +1175,10 @@ struct Scanner(Movable):
         if method_name.byte_length() == 0:
             self.pos = save
             return False
-        var matched = self.peek() == UInt8(ord("("))
+        # No longer requires a trailing `(` -- see `at_bare_rooted_chain`'s
+        # own updated doc comment for the full "why."
         self.pos = save
-        return matched
+        return True
 
     def at_bare_call_chain(mut self) raises -> Bool:
         """True if `self.pos` starts `<bare_ident>(...)` (a call, its own
@@ -1105,7 +1228,7 @@ struct Scanner(Movable):
         lookup instead (`ctx.bare_method_returns[receiver_type][name]`,
         already correctly struct-scoped) -- never this flat map."""
         var save = self.pos
-        if is_after_dot(self.source, save):
+        if is_after_dot(self.source, save) or not self.at_identifier_boundary():
             return False
         var name = self.scan_ident()
         if name.byte_length() == 0 or self.peek() != UInt8(ord("(")):

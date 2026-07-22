@@ -215,12 +215,12 @@ def sqrrl__are_friends(mut sqrrl___world: sqrrl___World, sqrrl__one: sqrrl__Pers
 
 
 def sqrrl__all_friends(mut sqrrl___world: sqrrl___World, sqrrl__person: sqrrl__Person) raises -> Set[sqrrl__Person]:
-    var sqrrl__result = Set[sqrrl__Person]()
+    var result = Set[sqrrl__Person]()
     for sqrrl__g in sqrrl___world.Group.for_sqrrl__members(sqrrl__person):
         for sqrrl__p in sqrrl__g._inner[]._sqrrl__members:
             if sqrrl__p != sqrrl__person:
-                sqrrl__result.add(sqrrl__p)
-    return sqrrl__result^
+                result.add(sqrrl__p)
+    return result^
 
 
 def main() raises:

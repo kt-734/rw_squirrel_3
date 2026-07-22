@@ -208,6 +208,13 @@ def build_create_call(
     var first = True
     for f in fields:
         var declared_as_relation = f.name in type_relations
+        # A container-of-entity relation field (`members: List[@@Employee]`)
+        # is always bare now (Part 2, mandatory marking dropped) -- the
+        # type alone already says it's a relation, so a construct call's
+        # own `.members = ...` keyword is never marked either, unlike a
+        # *single* relation field (`@@dept: @@Department`), unaffected,
+        # still always marked both at declaration and here.
+        var declared_as_container_relation = declared_as_relation and is_container_type(type_relations[f.name])
         if f.is_relation and not declared_as_relation:
             raise Error(
                 source_location(source, marker_start)
@@ -221,7 +228,20 @@ def build_create_call(
                 + f.name
                 + "'"
             )
-        if not f.is_relation and declared_as_relation:
+        if declared_as_container_relation and f.is_relation:
+            raise Error(
+                source_location(source, marker_start)
+                + ": InvalidSquirrelSyntax: '"
+                + type_name
+                + "."
+                + f.name
+                + "' -- '@@' marking on a container relation field's own"
+                " name is no longer used or needed (the field's type"
+                " already says so); write '."
+                + f.name
+                + "' here (no '@@')"
+            )
+        if not declared_as_container_relation and not f.is_relation and declared_as_relation:
             raise Error(
                 source_location(source, marker_start)
                 + ": InvalidSquirrelSyntax: '"
@@ -266,6 +286,11 @@ def build_create_call(
             value += "^"
         if not first:
             args += ", "
-        args += param_name_for_construct_field(f.name, f.is_relation) + " = " + value
+        # `declared_as_relation` (the schema's own truth), not `f.is_
+        # relation` (the call site's own spelling) -- a container relation
+        # is unmarked at the call site now but still needs the relation's
+        # own storage-param convention, same `is_relation`-not-`step.
+        # marked` fix `_walk_access_chain` needed for the read side.
+        args += param_name_for_construct_field(f.name, declared_as_relation) + " = " + value
         first = False
     return String("sqrrl___world." + type_name + ".create(" + args + ")")

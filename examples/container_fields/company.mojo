@@ -292,10 +292,10 @@ def main() raises:
         var sqrrl__alice = sqrrl___world.Employee.create(name = "Alice")
         var sqrrl__bob = sqrrl___world.Employee.create(name = "Bob")
         var scores_dict = Dict[sqrrl__Employee, String]()
-        scores_dict[sqrrl__alice] = "lead"
-        scores_dict[sqrrl__bob] = "member"
+        scores_dict[sqrrl__alice] = "lead";
+        scores_dict[sqrrl__bob] = "member";
         var leads_dict = Dict[String, sqrrl__Employee]()
-        leads_dict["primary"] = sqrrl__alice
+        leads_dict["primary"] = sqrrl__alice;
         var sqrrl__eng = sqrrl___world.Department.create(name = "Engineering", sqrrl__members = [sqrrl__alice, sqrrl__bob], sqrrl__backup = Set(sqrrl__alice), sqrrl__lead = Optional(sqrrl__alice), tags = ["urgent", "core"], sqrrl__scores = scores_dict^, sqrrl__leads = leads_dict^, groups = [["a", "b"], ["c"]], ring = Ring[String](items=["x", "y"]), grid = Grid[String, Int](pairs=[("p", 1), ("q", 2)]))
 
         print(sqrrl__eng._inner[]._sqrrl__members[0]._inner[]._name)

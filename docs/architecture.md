@@ -23,10 +23,11 @@ choice, not a gap).
    (`misc_builders.check_single_world_scope_call`).
 4. **Build project-wide maps** — one small, focused builder per concern
    (`build_relation_schema`, `build_unique_fields`, `build_multi_fields`,
-   `build_function_returns`, `build_entity_symbols`, `build_function_symbols`,
-   `discover_raw_imports`, ...), each scanning either the parsed struct list
-   or every file's own raw text once. These are the tables the rewrite
-   engine consults to know what a given `@@`-marked name actually means.
+   `build_bare_function_returns`, `build_bare_method_returns`,
+   `build_entity_symbols`, `build_function_symbols`, `discover_raw_imports`,
+   ...), each scanning either the parsed struct list or every file's own raw
+   text once. These are the tables the rewrite engine consults to know what
+   a given name actually means, marked or bare alike.
 5. **Emit `sqrrl__world.mojo`** (`driver/world_module.mojo`) — the
    `sqrrl___World` struct (one table field per entity) and the
    leak-checking `sqrrl__check_no_leaks`.

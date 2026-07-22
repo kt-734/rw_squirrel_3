@@ -21,7 +21,7 @@ def @@@make_department(name: String) -> @@Department:
         .name = name,
         .tags = List[String](),
         .@@projects = Set[@@Project](),
-        .@@vendors = Set[@@Vendor](),
+        .vendors = Set[@@Vendor](),
         .skills = Set[String](),
     }
     return @@d
@@ -40,24 +40,24 @@ def @@@hire(name: String, email: String, title: String, years_employed: UInt32, 
     return @@e
 
 def @@@hire_team(names: List[String], email_suffix: String, starting_years: UInt32, starting_salary: Float64, @@dept: @@Department) raises -> List[@@Employee]:
-    var @@team = List[@@Employee]()
+    var team = List[@@Employee]()
     var years = starting_years
     var salary = starting_salary
     for name in names:
         var @@emp = @@@hire(name, name + email_suffix, "Engineer", years, salary, @@dept)
-        @@team.append(@@emp)
+        team.append(@@emp)
         years += 1
         salary += 5000.0
-    return @@team^
+    return team^
 
 def @@@make_team(name: String, @@lead_person: @@Person, role: String) -> @@Team:
     var assignment = Assignment(@@person=@@lead_person, role=role)
     var @@t = @@@Team {
         .name = name,
         .lead = assignment,
-        .@@members = List[@@Person](),
-        .@@advisor = None,
-        .@@directory = Grid[String, @@Employee](pairs=List[Tuple[String, @@Employee]]()),
+        .members = List[@@Person](),
+        .advisor = None,
+        .directory = Grid[String, @@Employee](pairs=List[Tuple[String, @@Employee]]()),
     }
     return @@t
 

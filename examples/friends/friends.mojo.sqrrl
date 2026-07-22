@@ -15,12 +15,12 @@ def @@@are_friends(@@one: @@Person, @@two: @@Person) raises -> Bool:
 
 
 def @@@all_friends(@@person: @@Person) raises -> Set[@@Person]:
-    var @@result = Set[@@Person]()
+    var result = Set[@@Person]()
     for @@g in @@@Group.for_@@members(@@person):
         for @@p in @@g.@@members:
             if @@p != @@person:
-                @@result.add(@@p)
-    return @@result^
+                result.add(@@p)
+    return result^
 
 
 def main() raises:

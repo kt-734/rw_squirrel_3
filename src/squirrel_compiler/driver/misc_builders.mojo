@@ -1,40 +1,31 @@
 from squirrel_compiler.parser import Scanner
-from squirrel_compiler.codegen import scan_entity_return_shape, scan_bare_return_type_text
+from squirrel_compiler.codegen import scan_bare_return_type_text
 from squirrel_compiler.driver.file_paths import module_path_for
 
 
-def build_function_returns(sqrrl_files: List[String]) raises -> Dict[String, String]:
-    """Function name -> the `@@Type` (or `Container[@@Type]`, encoded via
-    `scan_entity_return_shape`) it returns, for *every* top-level `def
-    funcName(...) -> <ReturnType>:` signature project-wide (a def's own
-    signature is assumed to fit on one line) -- mandatory-marking
-    milestone: any function whose return type involves an `@@`-marked
-    value must mark its own name too, `@@` if it doesn't also need
-    `sqrrl___world`, `@@@` if it does (never both) -- so this scans and
-    cross-validates *every* marking of a top-level `def`, not just
-    world-marked ones, raising a real `InvalidSquirrelSyntax` the moment a
-    mismatch is found (over-marked: `@@`-marked but doesn't actually
-    return an `@@`-marked value; under-marked: returns one but isn't
-    marked at all) -- enforced here, once, at signature-scan time, rather
-    than left to surface later as a confusing "isn't a registered
-    function" error at some arbitrary call site.
+def build_bare_function_returns(sqrrl_files: List[String]) raises -> Dict[String, String]:
+    """Top-level function name -> its return-type text (relation-stripped
+    -- see `scan_bare_return_type_text`'s own doc comment), for *every*
+    top-level `def funcName(...) -> <ReturnType>:` signature project-wide
+    (a def's own signature is assumed to fit on one line) -- mandatory
+    marking dropped: a function's own name no longer signals "returns an
+    entity-shaped value" at all, only whether it needs `sqrrl___world`
+    (`@@@`, still required for that -- world-marking is a separate,
+    unchanged axis). A function's return type can be anything at all now
+    -- plain, entity, or a container of either -- discovered here
+    unconditionally regardless of marking, the same "always register,
+    harmless" reasoning `PLAIN_VAR_DECL` already uses elsewhere: a direct
+    chain off any such function's own call result (`get_dept(@@alice).
+    name`, no intermediate variable), or a direct `for`/var-decl binding,
+    resolves through this one map either way (`BARE_CALL_CHAIN`/
+    `BARE_ROOTED_CHAIN`/`PLAIN_VAR_DECL`'s own inferred branch, all
+    already built and already type-agnostic).
 
-    This mandatory marking is what makes `rewrite_field_access.mojo`'s own
-    `handle_func_call_marker` able to resolve a *direct* access-chain off
-    a call's own return value at all (`@@get_dept(@@alice).name`, no
-    intermediate variable, no `for` loop) -- the call itself is now always
-    a real, unambiguous marker position the scanner stops at, never a
-    bare (unmarked) identifier it could never have stopped at regardless
-    of how this map were built.
-
-    A `def @@@funcName(...)` (three `@`s) is call-site/method-splicing's
-    own `WORLD_FUNC` shape (needs `sqrrl___world`); `def @@funcName(...)`
-    (exactly two `@`s) is `ENTITY_FUNC`'s (doesn't); a fully bare `def
-    funcName(...)` must return a plain, non-`@@` value, or this raises.
-
-    Adapted from rw_squirrel_2's own scanning shape -- the mandatory-
-    marking cross-validation itself is new, only ever scanning raw source
-    text, same as before."""
+    A plain `@@` (two `@`s, no world) on a top-level function's own name
+    is no longer a valid spelling at all -- it used to mean "returns an
+    entity, doesn't need world," which is now just... bare. Rejected here
+    with a migration message rather than silently accepted or left to
+    surface as a confusing downstream error."""
     var out = Dict[String, String]()
     for path in sqrrl_files:
         var f = open(path, "r")
@@ -50,85 +41,6 @@ def build_function_returns(sqrrl_files: List[String]) raises -> Dict[String, Str
             var is_entity_marked = sc.starts_with("def @@") and not is_world_marked
             var is_bare = sc.starts_with("def ") and not sc.starts_with("def @@")
             if is_world_marked or is_entity_marked or is_bare:
-                var line_start = sc.pos
-                var line_end = line_start
-                while line_end < len(bytes) and bytes[line_end] != UInt8(ord("\n")):
-                    line_end += 1
-                var line_sc = Scanner(String(source[byte = line_start : line_end]))
-                _ = line_sc.try_consume("def ")
-                if is_world_marked:
-                    _ = line_sc.try_consume("@@@")
-                elif is_entity_marked:
-                    _ = line_sc.try_consume("@@")
-                var func_name = line_sc.scan_ident()
-                var shaped_type = scan_entity_return_shape(
-                    String(line_sc.source[byte = line_sc.pos : line_sc.source.byte_length()])
-                )
-                if func_name.byte_length() > 0:
-                    if is_entity_marked and not shaped_type:
-                        raise Error(
-                            "InvalidSquirrelSyntax: "
-                            + path
-                            + ": '@@"
-                            + func_name
-                            + "' is marked '@@' but doesn't return an"
-                            " '@@'-marked value -- '@@' only marks a"
-                            " function that does; remove the '@@' marking"
-                        )
-                    if is_bare and shaped_type:
-                        raise Error(
-                            "InvalidSquirrelSyntax: "
-                            + path
-                            + ": '"
-                            + func_name
-                            + "' returns an '@@'-marked value but isn't"
-                            " itself marked -- write '@@"
-                            + func_name
-                            + "(...)' (or '@@@"
-                            + func_name
-                            + "(...)' if it also needs 'sqrrl___world')"
-                        )
-                    if shaped_type:
-                        out[func_name] = shaped_type.value()
-                sc.pos = line_end
-                continue
-            sc.pos += 1
-    return out^
-
-
-def build_bare_plain_function_returns(sqrrl_files: List[String]) raises -> Dict[String, String]:
-    """Bare (never `@@`/`@@@`-marked) top-level function name -> its raw,
-    unstripped return-type text, for every `def funcName(...) -> <Type>:`
-    signature project-wide whose own name carries no marking at all --
-    the counterpart `build_function_returns` doesn't track: a bare
-    function's return type is allowed to be anything at all (mandatory
-    marking only requires marking when the return is entity-*shaped*),
-    including a plain struct or a container of one, but until now
-    nothing recorded what that type actually *is* -- so a direct chain
-    off such a function's own call result (`make_note(@@b).@@ref.name`,
-    no intermediate variable) or a direct `for` loop over one (`for n in
-    get_notes():`) had no way to resolve, the bare-call analogue of
-    `PLAIN_VAR_DECL`'s own "no explicit signal, no registration" gap for
-    named variables.
-
-    Registers unconditionally, regardless of whether the return type
-    turns out to be a plain struct/container of one at all (`-> Int`
-    included) -- the exact same "always register, harmless" reasoning
-    `PLAIN_VAR_DECL` already uses: the consumer checks `plain_struct_
-    names`/`is_container_type` before ever acting on an entry, so an
-    irrelevant one is just dead, unused data."""
-    var out = Dict[String, String]()
-    for path in sqrrl_files:
-        var f = open(path, "r")
-        var source = f.read()
-        f.close()
-        var bytes = source.as_bytes()
-        var sc = Scanner(source)
-        while True:
-            sc.skip_trivia()
-            if sc.at_end():
-                break
-            if sc.starts_with("def ") and not sc.starts_with("def @@"):
                 var line_start = sc.pos
                 var line_end = line_start
                 while line_end < len(bytes) and bytes[line_end] != UInt8(ord("\n")):
@@ -153,7 +65,24 @@ def build_bare_plain_function_returns(sqrrl_files: List[String]) raises -> Dict[
                 if is_top_level:
                     var line_sc = Scanner(String(source[byte = line_start : line_end]))
                     _ = line_sc.try_consume("def ")
+                    if is_world_marked:
+                        _ = line_sc.try_consume("@@@")
+                    elif is_entity_marked:
+                        _ = line_sc.try_consume("@@")
                     var func_name = line_sc.scan_ident()
+                    if is_entity_marked:
+                        raise Error(
+                            "InvalidSquirrelSyntax: "
+                            + path
+                            + ": '@@"
+                            + func_name
+                            + "' -- '@@' marking on a function's own name is"
+                            " no longer used or needed; write it bare ('"
+                            + func_name
+                            + "(...)'), or '@@@"
+                            + func_name
+                            + "(...)' if it also needs 'sqrrl___world'"
+                        )
                     var raw_type = scan_bare_return_type_text(
                         String(line_sc.source[byte = line_sc.pos : line_sc.source.byte_length()])
                     )

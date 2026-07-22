@@ -2,5 +2,5 @@
     name: String
     tags: List[String]
     multi @@projects: @@Project
-    @@vendors: Set[@@Vendor]
+    vendors: Set[@@Vendor]
     multi skills: String

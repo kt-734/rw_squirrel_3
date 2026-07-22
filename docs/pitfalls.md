@@ -67,17 +67,35 @@ entity holding the reference needs `keepalive`, not the one being
 referenced. See
 [syntax-reference.md](syntax-reference.md#world-scope-and-keepalive).
 
-## `... is marked '@@' but doesn't return an '@@'-marked value` / `... returns an '@@'-marked value but isn't itself marked`
+## `'@@' marking on a function's own name is no longer used or needed`
 
-A top-level function's or method's own `@@`/`@@@` marking doesn't match
-what it actually returns — checked at the signature, both directions.
-Over-marked: drop the `@@`. Under-marked: add `@@` (if the function doesn't
-need `sqrrl___world`) or `@@@` (if it does — never both). This is checked
-independently of whether the function needs the world; a function can
-return an entity without touching the world (e.g. re-returning a parameter
-unchanged), and one that needs the world doesn't necessarily return
-anything entity-shaped at all (in which case it stays bare — `@@@` is
-about parameter-threading, not really about the return type).
+A top-level function's or method's own name is marked with a plain `@@`
+(not `@@@`) — the old spelling, from when a function's own name had to
+signal its return shape. That's gone: a function/method's own name only
+ever signals whether it needs `sqrrl___world` now (`@@@`, unchanged,
+decoupled from the return type entirely). Write the name bare
+(`make_vendor(...)`), or `@@@make_vendor(...)` if it genuinely constructs
+a new entity (or calls something that does). See
+[syntax-reference.md](syntax-reference.md#functions-and-methods).
+
+## `'@@' marking on a name bound to a container constructor is no longer used or needed`
+
+A `var`/`for` binding was marked (`var @@x = List[@@Type]()`) even though
+the value it's bound to is a *container*, never the entity itself — a
+`Dict`/`List`/`Set`/`Optional`/custom wrapper's own name is always bare,
+same as a container field's own name. Write it bare (`var x = List[
+@@Type]()`); a name bound *directly* to a single entity (`var @@lead =
+get_lead(@@eng)`) still needs `@@`, unaffected. See
+[syntax-reference.md](syntax-reference.md#functions-and-methods).
+
+## `'@@' marking on a container field's own name is no longer used or needed`
+
+A struct field whose type is a container of a relation (`members: List[
+@@Employee]`) had its own name marked (`@@members`) — the old spelling.
+The field's type already says it's a relation, so the name doesn't need
+to repeat that; write it bare. A *single* (non-container) relation field
+is unaffected — still always marked. See
+[syntax-reference.md](syntax-reference.md#relation-fields).
 
 ## A custom container's own `__iter__` crashes the *compiler*, not just fails to compile
 

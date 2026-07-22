@@ -1,6 +1,6 @@
 from squirrel_compiler.parser import Scanner, is_ident_char
 from squirrel_compiler.codegen.rewrite_context import RewriteContext
-from squirrel_compiler.codegen.helpers import scan_entity_return_shape, scan_bare_return_type_text
+from squirrel_compiler.codegen.helpers import scan_bare_return_type_text
 
 
 def _leading_indent(text: String) -> String:
@@ -55,18 +55,14 @@ def _split_method_spans(method_body: String) -> List[String]:
 struct _MethodHeader(Copyable, Movable):
     """One method's own parsed signature line, split from its body.
     `after_paren` is everything on the header line right after the method
-    name's own `(` -- e.g. `self, x: Int) -> String:`. `return_shape` is
-    the method's `@@`-marked return type's own encoded shape (see
-    `scan_entity_return_shape`), if it has one -- mandatory-marking
-    extended to methods: `is_entity_marked`/`is_world_marked` are cross-
-    validated against it exactly like `driver/misc_builders.mojo`'s
-    `build_function_returns` already does for top-level functions.
+    name's own `(` -- e.g. `self, x: Int) -> String:`. `is_entity_marked`
+    is set only to detect and reject the now-invalid old spelling (plain
+    `@@` on a method's own name) -- see `_parse_method_span`'s own raise.
     `bare_return_type` is the raw, unstripped return-type text (see
     `scan_bare_return_type_text`), captured unconditionally regardless of
-    marking -- `bare_method_returns`'s own counterpart for a bare method
-    that returns a plain struct or a container of one, the method
-    analogue of `driver/misc_builders.mojo`'s `build_bare_plain_function_
-    returns`."""
+    marking -- consumed by `bare_method_returns` for every non-world
+    method, plain or entity-shaped alike, since mandatory marking for a
+    method's own return shape is gone."""
 
     var indent: String
     var keyword: String
@@ -75,25 +71,20 @@ struct _MethodHeader(Copyable, Movable):
     var method_name: String
     var after_paren: String
     var body: String
-    var return_shape: Optional[String]
     var bare_return_type: Optional[String]
 
 
 def _parse_method_span(span: String, struct_name: String) raises -> _MethodHeader:
     """Splits one method's own `span` (as sliced by `_split_method_spans`)
     into its signature pieces, without rewriting anything -- shared by
-    `world_marked_method_names`/`method_return_shapes` (which only need
-    the name/marking/return shape) and `rewrite_method_body` (which needs
-    the rest too).
+    `world_marked_method_names`/`bare_method_returns` (which only need the
+    name/marking/return type) and `rewrite_method_body` (which needs the
+    rest too).
 
-    Mandatory-marking extended to methods (mirrors `driver/misc_builders.
-    mojo`'s `build_function_returns` for top-level functions): a method
-    whose return type is directly entity-iterable must mark its own name,
-    `@@` if it doesn't also need `sqrrl___world`, `@@@` if it does -- a
-    bare method returning an `@@`-marked value (previously silently
-    allowed, but with no way to bind/loop/chain off its result -- a real,
-    documented gap) is now rejected here, the same way a bare top-level
-    function already is."""
+    Mandatory marking for a method's own return shape is gone: a method's
+    own name only ever signals whether it needs `sqrrl___world` (`@@@`) --
+    plain `@@` on a method's own name is the old, now-invalid spelling,
+    rejected here with a migration error."""
     var bytes = span.as_bytes()
     var n = len(bytes)
     var header_end = 0
@@ -135,27 +126,18 @@ def _parse_method_span(span: String, struct_name: String) raises -> _MethodHeade
     var method_name = String(rest[byte = 0 : paren])
     var after_paren = String(rest[byte = paren + 1 : rest.byte_length()])
 
-    var return_shape = scan_entity_return_shape(after_paren)
     var bare_return_type = scan_bare_return_type_text(after_paren)
 
-    if is_entity_marked and not return_shape:
+    if is_entity_marked:
         raise Error(
             "InvalidSquirrelSyntax: method '@@"
             + method_name
             + "' on '@@struct @@"
             + struct_name
-            + "' is marked '@@' but doesn't return an '@@'-marked value --"
-            " '@@' only marks a method that does; remove the '@@' marking"
-        )
-    if not is_world_marked and not is_entity_marked and return_shape:
-        raise Error(
-            "InvalidSquirrelSyntax: method '"
-            + method_name
-            + "' on '@@struct @@"
-            + struct_name
-            + "' returns an '@@'-marked value but isn't itself marked --"
-            " write '@@" + method_name + "(...)' (or '@@@" + method_name
-            + "(...)' if it also needs 'sqrrl___world')"
+            + "' -- '@@' marking on a method's own name is no longer used"
+            " or needed; write it bare ('" + method_name + "(...)'), or"
+            " '@@@" + method_name + "(...)' if it also needs"
+            " 'sqrrl___world'"
         )
 
     return _MethodHeader(
@@ -166,7 +148,6 @@ def _parse_method_span(span: String, struct_name: String) raises -> _MethodHeade
         method_name=method_name,
         after_paren=after_paren,
         body=body,
-        return_shape=return_shape,
         bare_return_type=bare_return_type,
     )
 
@@ -228,46 +209,32 @@ def world_marked_method_names(method_body: String, struct_name: String) raises -
     return out^
 
 
-def method_return_shapes(method_body: String, struct_name: String) raises -> Dict[String, String]:
-    """Method name -> its `@@`-marked return's encoded shape, for every
-    entity-returning method declared in `method_body` -- what `build_
-    method_returns` (`driver/discovery.mojo`) scans project-wide, so the
-    rewrite engine's instance-call dispatch (`rewrite_field_access.mojo`'s
-    `_handle_instance_call`) can treat a marked method call as a real
-    marker position, the same way `handle_func_call_marker` already does
-    for a marked top-level function's call -- bind/loop/chain off its
-    return value, no intermediate variable required."""
-    var out = Dict[String, String]()
-    if method_body.strip().byte_length() == 0:
-        return out^
-    for span in _split_method_spans(method_body):
-        var header = _parse_method_span(span, struct_name)
-        if header.return_shape:
-            out[header.method_name] = header.return_shape.value()
-    return out^
-
-
 def bare_method_returns(method_body: String, struct_name: String) raises -> Dict[String, String]:
-    """Bare (never `@@`/`@@@`-marked) method name -> its raw, unstripped
-    return-type text, for every such method declared in `method_body` --
-    `method_return_shapes`'s counterpart for a bare method, the method
-    analogue of `driver/misc_builders.mojo`'s `build_bare_plain_function_
-    returns`: lets a chain off a bare method's own call result (`@@own.
-    get_note().@@ref.name`, no intermediate variable) resolve, the same
-    way a bare top-level function's call result already does via `ctx.
-    bare_function_returns`/`handle_bare_call_chain`.
+    """Method name -> its raw, unstripped return-type text, for *every*
+    method declared in `method_body`, world-marked (`@@@`) or bare alike
+    -- the method analogue of `driver/misc_builders.mojo`'s `build_bare_
+    function_returns`, which registers a top-level `def` the exact same
+    way regardless of `@@@`: lets a chain off a method's own call result
+    (`@@own.get_note().@@ref.name`, or `@@own.@@@rename_and_get().@@ref.
+    name`, no intermediate variable) resolve, the same way a bare or
+    world-marked top-level function's call result already does via `ctx.
+    bare_function_returns`/`handle_func_call_marker`/`handle_bare_call_
+    chain`.
 
-    Registers unconditionally for every unmarked method, regardless of
-    whether the return type turns out to be a plain struct/container of
-    one at all -- same "always register, harmless" reasoning as the
-    top-level-function counterpart: `_handle_instance_call` only acts on
+    Registers unconditionally for every method regardless of whether the
+    return type turns out to be plain, entity-shaped, or a container of
+    either -- mandatory `@@` marking for a method's own name is gone, so
+    a method's own name only ever signals whether it needs `sqrrl___
+    world` now (`is_world_marked`, a separate, unchanged axis, consulted
+    by `_handle_instance_call` to decide *how* to call it, not *whether*
+    its return value is registered). `_handle_instance_call` only acts on
     an entry once it's also confirmed a chain actually follows."""
     var out = Dict[String, String]()
     if method_body.strip().byte_length() == 0:
         return out^
     for span in _split_method_spans(method_body):
         var header = _parse_method_span(span, struct_name)
-        if not header.is_world_marked and not header.is_entity_marked and header.bare_return_type:
+        if header.bare_return_type:
             out[header.method_name] = header.bare_return_type.value()
     return out^
 

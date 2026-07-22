@@ -22,13 +22,6 @@ struct RewriteContext(Copyable, Movable):
     `world_marked_method_names`/`discovery.mojo`'s `build_world_methods`),
     letting instance-call dispatch tell whether calling a spliced user
     method needs `sqrrl___world` threaded as its own first argument.
-    `method_returns` (mandatory-marking extended to methods) is `function_
-    returns`'s per-struct parallel -- struct name -> method name -> its
-    `@@`-marked return's encoded shape (`codegen/methods.mojo`'s `method_
-    return_shapes`/`discovery.mojo`'s `build_method_returns`), letting
-    instance-call dispatch (`_handle_instance_call`) treat a marked
-    method call as a real marker position the same way `function_returns`
-    already lets `handle_func_call_marker` treat a marked function call.
     `stats_fields` (M4) lets table-level-call dispatch recognize
     `sum_<field>`/`avg_<field>` (need `is_stats`, unlike `min_`/`max_`/
     `median_`, which an `ordered` field earns for free -- see
@@ -39,12 +32,18 @@ struct RewriteContext(Copyable, Movable):
     clean compile-time check instead of an opaque downstream Mojo error.
 
     `bare_method_returns` is `bare_function_returns`'s per-struct parallel
-    for a bare (unmarked) method -- struct name -> method name -> its raw,
-    unstripped return-type text (`codegen/methods.mojo`'s `bare_method_
-    returns`/`discovery.mojo`'s `build_bare_method_returns`), letting
-    `_handle_instance_call` continue a trailing chain off a bare method's
-    own call result the same way `bare_function_returns` already lets
-    `handle_bare_call_chain` continue one off a bare function's.
+    -- struct name -> method name -> its relation-stripped return-type
+    text (`codegen/methods.mojo`'s `bare_method_returns`/`discovery.mojo`'s
+    `build_bare_method_returns`), letting `_handle_instance_call` continue
+    a trailing chain off a method's own call result the same way `bare_
+    function_returns` already lets `handle_bare_call_chain`/`handle_func_
+    call_marker` continue one off a function's. Mandatory marking dropped
+    for entity-shaped returns means both maps now cover *every* function/
+    method unconditionally -- world-marked or bare, plain or entity-shaped
+    alike -- a function/method's own name only ever signals whether it
+    needs `sqrrl___world` now (`@@@`, a separate, unchanged axis, still
+    consulted separately to decide *how* to call it), never its return
+    shape.
 
     `plain_struct_names`/`plain_value_fields` (plain-structs milestone) are
     the general access-chain walk's `owner_is_real`/`owner_is_plain`
@@ -60,13 +59,11 @@ struct RewriteContext(Copyable, Movable):
 
     var relation_schema: Dict[String, Dict[String, String]]
     var struct_names: Dict[String, Bool]
-    var function_returns: Dict[String, String]
     var unique_fields: Dict[String, List[String]]
     var indexed_fields: Dict[String, List[String]]
     var multi_fields: Dict[String, List[String]]
     var ordered_fields: Dict[String, List[String]]
     var world_methods: Dict[String, List[String]]
-    var method_returns: Dict[String, Dict[String, String]]
     var stats_fields: Dict[String, List[String]]
     var plain_struct_names: Dict[String, Bool]
     var plain_value_fields: Dict[String, Dict[String, String]]
@@ -88,13 +85,11 @@ struct RewriteContext(Copyable, Movable):
         return Self(
             relation_schema=self.relation_schema.copy(),
             struct_names=self.struct_names.copy(),
-            function_returns=self.function_returns.copy(),
             unique_fields=self.unique_fields.copy(),
             indexed_fields=self.indexed_fields.copy(),
             multi_fields=self.multi_fields.copy(),
             ordered_fields=self.ordered_fields.copy(),
             world_methods=self.world_methods.copy(),
-            method_returns=self.method_returns.copy(),
             stats_fields=self.stats_fields.copy(),
             plain_struct_names=self.plain_struct_names.copy(),
             plain_value_fields=self.plain_value_fields.copy(),

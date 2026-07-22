@@ -6,12 +6,12 @@ from grid_module import Grid
 
 @@struct @@Department:
     unique name: String
-    @@members: List[@@Employee]
-    @@backup: Set[@@Employee]
-    @@lead: Optional[@@Employee]
+    members: List[@@Employee]
+    backup: Set[@@Employee]
+    lead: Optional[@@Employee]
     tags: List[String]
-    @@scores: Dict[@@Employee, String]
-    @@leads: Dict[String, @@Employee]
+    scores: Dict[@@Employee, String]
+    leads: Dict[String, @@Employee]
     groups: List[List[String]]
     ring: Ring[String]
     grid: Grid[String, Int]
@@ -27,31 +27,31 @@ def main() raises:
         leads_dict["primary"] = @@alice
         var @@eng = @@@Department {
             .name = "Engineering",
-            .@@members = [@@alice, @@bob],
-            .@@backup = Set(@@alice),
-            .@@lead = Optional(@@alice),
+            .members = [@@alice, @@bob],
+            .backup = Set(@@alice),
+            .lead = Optional(@@alice),
             .tags = ["urgent", "core"],
-            .@@scores = scores_dict,
-            .@@leads = leads_dict,
+            .scores = scores_dict,
+            .leads = leads_dict,
             .groups = [["a", "b"], ["c"]],
             .ring = Ring[String](items=["x", "y"]),
             .grid = Grid[String, Int](pairs=[("p", 1), ("q", 2)]),
         }
 
-        print(@@eng.@@members[0].name)
-        print(@@eng.@@members[1].name)
-        print(len(@@eng.@@backup))
-        if @@eng.@@lead:
-            print(@@eng.@@lead.value()._inner[].get_name())
+        print(@@eng.members[0].name)
+        print(@@eng.members[1].name)
+        print(len(@@eng.backup))
+        if @@eng.lead:
+            print(@@eng.lead.value()._inner[].get_name())
         print(@@eng.tags[0], @@eng.tags[1])
-        print(@@eng.@@scores[@@alice])
-        print(@@eng.@@leads["primary"].name)
+        print(@@eng.scores[@@alice])
+        print(@@eng.leads["primary"].name)
         print(@@eng.groups[0][0], @@eng.groups[0][1], @@eng.groups[1][0])
         print(@@eng.ring[0], @@eng.ring[1])
         print(@@eng.grid["p"], @@eng.grid["q"])
 
-        @@eng.@@members[0].name = "Alicia"
-        print(@@eng.@@members[0].name)
+        @@eng.members[0].name = "Alicia"
+        print(@@eng.members[0].name)
 
         var dump = @@@to_json()
         print("dump:", dump)
@@ -72,14 +72,14 @@ def main() raises:
         if @@eng2.id() != eng_id:
             raise Error("id mismatch: eng")
 
-        print(@@eng2.@@members[0].name)
-        print(@@eng2.@@members[1].name)
-        print(len(@@eng2.@@backup))
-        if @@eng2.@@lead:
-            print(@@eng2.@@lead.value()._inner[].get_name())
+        print(@@eng2.members[0].name)
+        print(@@eng2.members[1].name)
+        print(len(@@eng2.backup))
+        if @@eng2.lead:
+            print(@@eng2.lead.value()._inner[].get_name())
         print(@@eng2.tags[0], @@eng2.tags[1])
-        print(@@eng2.@@scores[@@alice2])
-        print(@@eng2.@@leads["primary"].name)
+        print(@@eng2.scores[@@alice2])
+        print(@@eng2.leads["primary"].name)
         print(@@eng2.groups[0][0], @@eng2.groups[0][1], @@eng2.groups[1][0])
         print(@@eng2.ring[0], @@eng2.ring[1])
         print(@@eng2.grid["p"], @@eng2.grid["q"])

@@ -36,7 +36,7 @@ from schema.assignment import Assignment
 from schema.grid_module import Grid
 
 
-def sqrrl__promote(sqrrl__e: sqrrl__Employee, new_title: String) -> sqrrl__Employee:
+def promote(sqrrl__e: sqrrl__Employee, new_title: String) -> sqrrl__Employee:
     sqrrl__e._inner[].set_title(new_title);
     return sqrrl__e
 
@@ -80,10 +80,10 @@ def main() raises:
 
         # Set-wrapped *ordinary* relation field (not `multi`) -- a whole Set
         # assigned/read at once, unlike `multi`'s one-member-at-a-time API.
-        var sqrrl__eng_vendors = Set[sqrrl__Vendor]()
-        sqrrl__eng_vendors.add(sqrrl__acme)
-        sqrrl__eng_vendors.add(sqrrl__globex)
-        sqrrl__eng._inner[].set_sqrrl__vendors(sqrrl__eng_vendors^);
+        var eng_vendors = Set[sqrrl__Vendor]()
+        eng_vendors.add(sqrrl__acme)
+        eng_vendors.add(sqrrl__globex)
+        sqrrl__eng._inner[].set_sqrrl__vendors(eng_vendors^);
         print("eng vendor count (Set-wrapped ordinary field):", len(sqrrl__eng._inner[]._sqrrl__vendors))
 
         # `multi` on a *plain* (non-relation) field -- Set[String]-backed.
@@ -185,7 +185,7 @@ def main() raises:
         for sqrrl__p in sqrrl___world.Project.for_priority_between(1, 3):
             print("project in priority range:", sqrrl__p._inner[]._name)
 
-        var sqrrl__promoted_bob = sqrrl__promote(sqrrl__bob_emp, "Senior Sales Rep")
+        var sqrrl__promoted_bob = promote(sqrrl__bob_emp, "Senior Sales Rep")
         print("bob's new title:", sqrrl__promoted_bob._inner[]._title)
 
         var tags = List[String]()
@@ -209,7 +209,7 @@ def main() raises:
 
         # A wrapped relation field can be read, indexed, and have one
         # further field read off the indexed element, all in a single
-        # expression -- no intermediate `var @@x = @@platform_team.@@members;`
+        # expression -- no intermediate `var @@x = @@platform_team.members;`
         # binding needed first.
         print("platform team first member (read+index+field in one expr):", sqrrl__platform_team._inner[]._sqrrl__members[0]._inner[]._name)
 

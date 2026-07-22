@@ -47,7 +47,7 @@ an explicit import for another struct's type — see
     name: String
     tags: List[String]              # plain container field, no backward index
     multi @@projects: @@Project      # one-at-a-time membership
-    @@vendors: Set[@@Vendor]         # ordinary Set-wrapped relation
+    vendors: Set[@@Vendor]           # ordinary Set-wrapped relation, bare name
     multi skills: String             # multi on a *plain* field, Set[String]-backed
 ```
 
@@ -62,10 +62,11 @@ def @@@make_vendor(name: String) -> @@Vendor:
     return @@v
 ```
 
-`@@promote` (in `main.mojo.sqrrl`, not `factories.mojo.sqrrl`) is the one
-function in this example that's `@@`-marked, not `@@@`-marked: it mutates an
+`promote` (in `main.mojo.sqrrl`, not `factories.mojo.sqrrl`) is the one
+function in this example that's bare, not `@@@`-marked: it mutates an
 already-held employee's title and returns it, without needing the world
-itself.
+itself — a function's own name no longer needs marking just because it
+returns an entity.
 
 ## main.mojo.sqrrl highlights
 
@@ -85,9 +86,9 @@ itself.
   once nothing else references it either, it's gone, same as any other
   entity.
 - **A custom container with a relation in value position** —
-  `Team.@@directory: Grid[String, @@Employee]`, indexed
-  (`.@@directory["lead"].title`) and iterated (`for role in
-  .@@directory:` — bare loop variable, since iterating only ever yields
+  `Team.directory: Grid[String, @@Employee]` (bare field name, container-
+  shaped), indexed (`.directory["lead"].title`) and iterated (`for role in
+  .directory:` — bare loop variable, since iterating only ever yields
   keys, matching `Dict`'s own semantics).
 - **A whole-world JSON round-trip** at the end, reloading and re-verifying
   several entities' state (including the `Grid` field above) after

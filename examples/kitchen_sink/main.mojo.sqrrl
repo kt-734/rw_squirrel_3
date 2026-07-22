@@ -8,7 +8,7 @@ from schema.assignment import Assignment
 from schema.grid_module import Grid
 
 
-def @@promote(@@e: @@Employee, new_title: String) -> @@Employee:
+def promote(@@e: @@Employee, new_title: String) -> @@Employee:
     @@e.title = new_title
     return @@e
 
@@ -51,11 +51,11 @@ def main() raises:
 
         # Set-wrapped *ordinary* relation field (not `multi`) -- a whole Set
         # assigned/read at once, unlike `multi`'s one-member-at-a-time API.
-        var @@eng_vendors = Set[@@Vendor]()
-        @@eng_vendors.add(@@acme)
-        @@eng_vendors.add(@@globex)
-        @@eng.@@vendors = @@eng_vendors
-        print("eng vendor count (Set-wrapped ordinary field):", len(@@eng.@@vendors))
+        var eng_vendors = Set[@@Vendor]()
+        eng_vendors.add(@@acme)
+        eng_vendors.add(@@globex)
+        @@eng.vendors = eng_vendors
+        print("eng vendor count (Set-wrapped ordinary field):", len(@@eng.vendors))
 
         # `multi` on a *plain* (non-relation) field -- Set[String]-backed.
         _ = @@eng.add_to_skills("mojo")
@@ -156,7 +156,7 @@ def main() raises:
         for @@p in @@@Project.for_priority_between(1, 3):
             print("project in priority range:", @@p.name)
 
-        var @@promoted_bob = @@promote(@@bob_emp, "Senior Sales Rep")
+        var @@promoted_bob = promote(@@bob_emp, "Senior Sales Rep")
         print("bob's new title:", @@promoted_bob.title)
 
         var tags = List[String]()
@@ -174,20 +174,20 @@ def main() raises:
         var members = List[@@Person]()
         members.append(@@alice)
         members.append(@@bob)
-        @@platform_team.@@members = members
-        print("platform team member count:", len(@@platform_team.@@members))
+        @@platform_team.members = members
+        print("platform team member count:", len(@@platform_team.members))
         print("platform team lead role:", @@platform_team.lead.role)
 
         # A wrapped relation field can be read, indexed, and have one
         # further field read off the indexed element, all in a single
-        # expression -- no intermediate `var @@x = @@platform_team.@@members;`
+        # expression -- no intermediate `var @@x = @@platform_team.members;`
         # binding needed first.
-        print("platform team first member (read+index+field in one expr):", @@platform_team.@@members[0].name)
+        print("platform team first member (read+index+field in one expr):", @@platform_team.members[0].name)
 
         # Iterating a relation field's own read result directly (not a
         # bound variable, not a table-level `for_<field>`/`all()` call)
         # binds the loop variable the same way either of those already do.
-        for @@m in @@platform_team.@@members:
+        for @@m in @@platform_team.members:
             print("platform team member:", @@m.name)
 
         # A plain struct's own relation field, read through a fully
@@ -203,9 +203,9 @@ def main() raises:
         var lead_assignment: Assignment = @@platform_team.lead.copy()
         print("platform team lead person:", lead_assignment.@@person.name)
 
-        @@platform_team.@@advisor = Optional(@@promoted_bob)
-        if @@platform_team.@@advisor:
-            print("platform team advisor:", @@platform_team.@@advisor.value()._inner[].get_title())
+        @@platform_team.advisor = Optional(@@promoted_bob)
+        if @@platform_team.advisor:
+            print("platform team advisor:", @@platform_team.advisor.value()._inner[].get_title())
 
         # A hand-written, custom two-argument container (Grid, same shape
         # container_fields' own escape hatch already proved) with a
@@ -218,9 +218,9 @@ def main() raises:
         var directory_pairs = List[Tuple[String, @@Employee]]()
         directory_pairs.append(("lead", @@alice_emp))
         directory_pairs.append(("backup", @@bob_emp))
-        @@platform_team.@@directory = Grid[String, @@Employee](pairs=directory_pairs^)
-        print("platform team directory lookup (Grid value-position relation):", @@platform_team.@@directory["lead"].title)
-        for role in @@platform_team.@@directory:
+        @@platform_team.directory = Grid[String, @@Employee](pairs=directory_pairs^)
+        print("platform team directory lookup (Grid value-position relation):", @@platform_team.directory["lead"].title)
+        for role in @@platform_team.directory:
             print("platform team directory role (bare loop var, Grid yields keys only):", role)
 
         # keepalive: AuditLog entities survive with no local var and no
@@ -307,7 +307,7 @@ def main() raises:
         print("reloaded alice's rating survived:", @@reloaded_alice.profile.rating.value)
         print("reloaded audit log count:", len(@@@AuditLog.all()))
         for @@t in @@@Team.all():
-            print("reloaded team directory lookup survived (Grid value-position relation):", @@t.@@directory["lead"].title)
+            print("reloaded team directory lookup survived (Grid value-position relation):", @@t.directory["lead"].title)
 
         # `@@reloaded_alice` is a real, independently-held handle now --
         # everything else `@@@begin_init_from_json(...)` only retained

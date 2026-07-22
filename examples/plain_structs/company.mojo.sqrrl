@@ -68,7 +68,7 @@ struct Tagged[Kind: Copyable & ImplicitlyDeletable](Movable, ImplicitlyDeletable
     home: Address
     meta: Tagged[String]
     hometown: ExternalCity
-    @@box: Box[@@Employee]
+    box: Box[@@Employee]
 
 
 def owner_name(a: Address) raises -> String:
@@ -105,14 +105,14 @@ def main() raises:
             .home = addr,
             .meta = meta,
             .hometown = ExternalCity(name = "Ogdenville"),
-            .@@box = Box(@@bob),
+            .box = Box(@@bob),
         }
 
         print(@@alice.home.city)
         print(@@alice.home.@@owner.name)
         print(@@alice.meta.label, @@alice.meta.count)
         print(@@alice.hometown.name)
-        print(@@alice.@@box.value._inner[].get_name())
+        print(@@alice.box.value._inner[].get_name())
 
         @@alice.home.city = "Shelbyville"
         @@alice.home.@@owner = @@bob
@@ -124,8 +124,9 @@ def main() raises:
         # holding a plain-struct value directly (not reached through an
         # entity's own field this time). No explicit `: Address`
         # annotation needed here -- the constructor call on the right is
-        # itself enough to infer it from, the same way a marked entity's
-        # own `var @@x = List[@@Type]()` already can.
+        # itself enough to infer it from, the same way a bare `var x =
+        # List[@@Type]()` (a container constructor, always bare -- the
+        # container itself is never the entity) already can.
         var addr2 = Address(city = "Ogdenville", @@owner = @@bob)
         print(addr2.@@owner.name)
         addr2.@@owner = @@bob
@@ -198,7 +199,7 @@ def main() raises:
         print(@@alice2.home.@@owner.name)
         print(@@alice2.meta.label, @@alice2.meta.count)
         print(@@alice2.hometown.name)
-        print(@@alice2.@@box.value._inner[].get_name())
+        print(@@alice2.box.value._inner[].get_name())
         print(
             "reload OK: ids, plain-struct field, generic plain-struct field, undiscovered"
             " external plain-value field, and a generic plain-struct field whose own"

@@ -383,8 +383,15 @@ def _walk_access_chain(
 
         var is_relation = current_type in ctx.relation_schema and step.name in ctx.relation_schema[current_type]
         var is_plain_value = current_type in ctx.plain_value_fields and step.name in ctx.plain_value_fields[current_type]
+        # Mandatory marking dropped for a *container*-of-entity field
+        # (Part 2) -- its own name is always bare now, the type alone
+        # already says it's a relation (`field_parsing.mojo`'s own
+        # symmetry check enforces this at declaration time). A *single*
+        # relation field is unaffected -- still always marked, still
+        # `is_relation == step.marked` exactly as before this milestone.
+        var is_container_relation = is_relation and is_container_type(ctx.relation_schema[current_type][step.name])
 
-        if is_relation and not step.marked:
+        if is_relation and not is_container_relation and not step.marked:
             raise sc.err(
                 "InvalidSquirrelSyntax: '"
                 + current_type
@@ -395,6 +402,18 @@ def _walk_access_chain(
                 + "', not '."
                 + step.name
                 + "'"
+            )
+        if is_container_relation and step.marked:
+            raise sc.err(
+                "InvalidSquirrelSyntax: '"
+                + current_type
+                + "."
+                + step.name
+                + "' -- '@@' marking on a container relation field's own"
+                " name is no longer used or needed (the field's type"
+                " already says so); read it as '."
+                + step.name
+                + "' (no '@@')"
             )
         if step.marked and is_plain_value:
             raise sc.err(
@@ -430,9 +449,34 @@ def _walk_access_chain(
             )
 
         var deref = "" if owner_is_plain else "._inner[]"
+        # A *real* entity (`not owner_is_plain`) always renames a relation
+        # field's own storage to `storage_field_name_for_hop`, keyed on
+        # `is_relation` (schema truth) rather than `step.marked` (call-site
+        # spelling) -- needed so a now-bare container relation still gets
+        # the relation's own storage convention, not the plain-field one.
+        # Equivalent to the old `step.marked`-keyed check for every other
+        # case: a single relation still always has `is_relation ==
+        # step.marked`, unaffected by this milestone.
+        #
+        # A *plain*, hand-written struct's own field is never renamed at
+        # all by *this* general rewrite pass unless its own declared name
+        # was itself `@@`-marked in the source (`var @@person: @@Person`
+        # renders as `var sqrrl__person: sqrrl__Person` -- confirmed via
+        # `schema/assignment.mojo.sqrrl`'s own generated output) -- which,
+        # since mandatory marking dropped for a *container* relation
+        # field specifically, is no longer true for one of those (`var
+        # members: List[@@Employee]` keeps its own bare `members` name in
+        # the generated struct declaration too). So the access side has
+        # to mirror the *declaration* side's own rule exactly: renamed
+        # only for a *single* relation (`is_relation and not is_container_
+        # relation`), bare for everything else, container relations
+        # included -- `is_relation` alone (renaming a container relation
+        # too) would silently desync from the declaration and never
+        # resolve, confirmed via a real compile (`'Team' value has no
+        # attribute 'sqrrl__members'`) before this fix.
         var storage_name = (
-            (sqrrl_prefixed(step.name) if step.marked else step.name) if owner_is_plain
-            else (storage_field_name_for_hop(step.name) if step.marked else storage_field_name_for_plain(step.name))
+            (sqrrl_prefixed(step.name) if (is_relation and not is_container_relation) else step.name) if owner_is_plain
+            else (storage_field_name_for_hop(step.name) if is_relation else storage_field_name_for_plain(step.name))
         )
 
         if is_last:
@@ -574,64 +618,70 @@ def handle_func_call_marker(
     mut out: String,
 ) raises:
     """Handles `MarkerKind.WORLD_FUNC` (`@@@name(...)`, needs `sqrrl__
-    world`) and `MarkerKind.ENTITY_FUNC` (`@@name(...)`, doesn't -- both a
-    definition and a call site, same as `WORLD_FUNC` always covered).
+    world`) -- both a definition and a call site.
 
-    Mandatory-marking milestone: any function whose return type involves
-    an `@@`-marked value must mark its own name (`@@` if it doesn't also
-    need `sqrrl___world`, `@@@` if it does -- never both; `build_function_
-    returns` enforces this project-wide, at signature-scan time, so by the
-    time rewriting reaches a call site here `ctx.function_returns` is
-    already the full, validated truth). This is what makes a *direct*
-    access-chain off a call's own return value tractable at all --
-    `@@get_dept(@@alice).name`, no intermediate variable, no `for` loop --
-    since the call itself is now a real, unambiguous marker position the
-    scanner already stops at (`find_next_marker`'s own `@@ident(`
-    dispatch), unlike a *bare* (unmarked) function name, which it never
-    could.
+    Mandatory marking for a function's own *return shape* is gone: a
+    function's own name only ever signals whether it needs `sqrrl___
+    world` now (`@@@`, unchanged). `MarkerKind.ENTITY_FUNC` (plain
+    `@@name(...)`, `is_world=False`) is therefore the old, now-invalid
+    spelling -- rejected immediately with a migration error rather than
+    rewritten; a bare function's own return type (plain, entity, or a
+    container of either) is discovered project-wide regardless
+    (`ctx.bare_function_returns`/`handle_bare_call_chain`), so nothing
+    about `@@name(...)` was ever needed to make a direct chain off its
+    call result work.
 
-    A definition's own signature is rewritten exactly as before (`WORLD_
-    FUNC`'s pre-existing `self`/`mut sqrrl___world` injection, verbatim --
-    an `ENTITY_FUNC` definition needs none of that, just its own name
-    rewritten). A call site now consumes its *entire* argument list
-    synchronously (`scan_call_args_to_close`, recursively re-run through
-    `rewrite_markers` -- any `@@`-marked argument still rewrites exactly
-    as it always did) instead of letting the outer loop step through it
-    marker-by-marker, specifically so `sc.pos` lands right past the
-    matching `)` and a trailing `.field`/`[index]` chain (if any) can be
-    detected and handed to `_walk_access_chain`, seeded with the
-    function's own registered return type."""
+    A definition's own signature is rewritten exactly as before (`self`/
+    `mut sqrrl___world` injection). A call site consumes its *entire*
+    argument list synchronously (`scan_call_args_to_close`, recursively
+    re-run through `rewrite_markers` -- any `@@`-marked argument still
+    rewrites exactly as it always did) instead of letting the outer loop
+    step through it marker-by-marker, specifically so `sc.pos` lands
+    right past the matching `)` and a trailing `.field`/`[index]` chain
+    (if any) can be detected and handed to `_walk_access_chain`, seeded
+    with the function's own registered return type (looked up in `ctx.
+    bare_function_returns`, which also covers world-marked functions --
+    `build_bare_function_returns` registers every top-level `def`,
+    world-marked or bare alike, under its own bare name)."""
     from squirrel_compiler.codegen.rewrite import rewrite_markers
 
-    var func_name = sc.parse_world_func() if is_world else sc.parse_entity_func()
+    if not is_world:
+        var bad_name = sc.parse_entity_func()
+        raise sc.err(
+            "InvalidSquirrelSyntax: '@@"
+            + bad_name
+            + "(...)' -- '@@' marking on a function's own name is no"
+            " longer used or needed; write it bare ('" + bad_name
+            + "(...)'), or '@@@" + bad_name + "(...)' if it also needs"
+            " 'sqrrl___world'"
+        )
+
+    var func_name = sc.parse_world_func()
 
     if is_in_def_signature(source, marker_start):
-        if is_world:
-            sc.skip_whitespace()
-            var starts_with_self = sc.starts_with("self") and not is_ident_char(sc.peek_at(4))
-            var has_more_args = sc.peek() != UInt8(ord(")"))
-            if starts_with_self:
-                sc.pos += 4  # consume "self"
-                out += sqrrl_prefixed(func_name) + "(self, mut sqrrl___world: sqrrl___World"
-                sc.skip_trivia()
-                if sc.try_consume(","):
-                    out += ", "
-                ctx.world_declared = True
-                pending_decl = None
-                pending_for_loop_decl = None
-                return
-            out += sqrrl_prefixed(func_name) + "(mut sqrrl___world: sqrrl___World"
-            ctx.world_declared = True
-            if has_more_args:
+        sc.skip_whitespace()
+        var starts_with_self = sc.starts_with("self") and not is_ident_char(sc.peek_at(4))
+        var has_more_args = sc.peek() != UInt8(ord(")"))
+        if starts_with_self:
+            sc.pos += 4  # consume "self"
+            out += sqrrl_prefixed(func_name) + "(self, mut sqrrl___world: sqrrl___World"
+            sc.skip_trivia()
+            if sc.try_consume(","):
                 out += ", "
-        else:
-            out += sqrrl_prefixed(func_name) + "("
+            ctx.world_declared = True
+            pending_decl = None
+            pending_for_loop_decl = None
+            return
+        out += sqrrl_prefixed(func_name) + "(mut sqrrl___world: sqrrl___World"
+        ctx.world_declared = True
+        if has_more_args:
+            out += ", "
         pending_decl = None
         pending_for_loop_decl = None
         return
 
     # Call site.
-    if is_world and not ctx.world_declared:
+    if not ctx.world_declared:
         raise sc.err(
             "InvalidSquirrelSyntax: calling '@@@"
             + func_name
@@ -642,34 +692,19 @@ def handle_func_call_marker(
     var rewritten_args = rewrite_markers(arg_text, ctx)
     var call_end_pos = sc.pos
     var registered: Optional[String] = (
-        Optional[String](ctx.function_returns[func_name]) if func_name in ctx.function_returns else None
+        Optional[String](ctx.bare_function_returns[func_name]) if func_name in ctx.bare_function_returns else None
     )
-    if not is_world and not registered:
-        raise sc.err(
-            "InvalidSquirrelSyntax: '@@"
-            + func_name
-            + "(...)' -- '"
-            + func_name
-            + "' doesn't return an '@@'-marked value (or isn't defined) --"
-            " '@@' only marks a function that returns one; write '"
-            + func_name
-            + "(...)' (no '@@') otherwise"
-        )
-    var call_text: String
-    if is_world:
-        call_text = (
-            sqrrl_prefixed(func_name) + "(sqrrl___world"
-            + (", " + rewritten_args if arg_text.strip().byte_length() > 0 else "")
-            + ")"
-        )
-    else:
-        call_text = sqrrl_prefixed(func_name) + "(" + rewritten_args + ")"
+    var call_text = (
+        sqrrl_prefixed(func_name) + "(sqrrl___world"
+        + (", " + rewritten_args if arg_text.strip().byte_length() > 0 else "")
+        + ")"
+    )
 
     if sc.peek_trailing_chain_follows():
         if not registered:
             raise sc.err(
                 "InvalidSquirrelSyntax: can't continue an access chain off"
-                " '@@" + ("@" if is_world else "") + func_name
+                " '@@@" + func_name
                 + "(...)' -- '" + func_name + "' doesn't return an"
                 " '@@'-marked value"
             )
@@ -1086,18 +1121,14 @@ def _handle_instance_call(
 
     # A spliced user method (M3) -- lives directly on the wrapper, not
     # Inner, so `expr` (already wrapper-typed after walking any prior
-    # steps) needs no `._inner[]`. `step.marked` (plain `.@@name`) is
-    # call-site symmetry with an *entity-returning* method's own `@@`-
-    # marked declaration (mandatory-marking extended to methods --
-    # `ctx.method_returns`), the method-call parallel of `handle_func_
-    # call_marker`'s own `ENTITY_FUNC`; `step.marked_world` (`.@@@name`)
-    # is the same symmetry for a method that needs `sqrrl___world`
-    # (`ctx.world_methods`) -- a method can be neither, either, or (an
-    # entity-returning method that also needs `sqrrl___world`) the world
-    # one alone, `@@@` covering both at once, same as a top-level
-    # function's own marking never doubles up either.
+    # steps) needs no `._inner[]`. `step.marked_world` (`.@@@name`) is
+    # call-site symmetry with a method that needs `sqrrl___world`
+    # (`ctx.world_methods`) -- the method-call parallel of `handle_func_
+    # call_marker`'s own `WORLD_FUNC`. Mandatory marking for a method's
+    # own *return shape* is gone -- a plain `.@@name` (`step.marked`) is
+    # therefore always the old, now-invalid spelling, rejected below
+    # regardless of what the method actually returns.
     var is_world_method = current_type in ctx.world_methods and _contains(ctx.world_methods[current_type], step.name)
-    var is_entity_method = current_type in ctx.method_returns and step.name in ctx.method_returns[current_type]
     if is_world_method and not step.marked_world:
         raise sc.err(
             "InvalidSquirrelSyntax: '"
@@ -1122,31 +1153,14 @@ def _handle_instance_call(
             + step.name
             + "(...)'"
         )
-    if is_entity_method and not is_world_method and not step.marked:
+    if step.marked and not is_world_method:
         raise sc.err(
-            "InvalidSquirrelSyntax: '"
+            "InvalidSquirrelSyntax: '@@"
             + step.name
-            + "' on '"
-            + current_type
-            + "' returns an '@@'-marked value -- write '@@"
-            + step.name
-            + "(...)', not '"
-            + step.name
-            + "(...)'"
-        )
-    if step.marked and not is_entity_method:
-        raise sc.err(
-            "InvalidSquirrelSyntax: '"
-            + step.name
-            + "' isn't a relation field -- '@@"
-            + step.name
-            + "' marks a method that returns an '@@'-marked value; '"
-            + step.name
-            + "' on '"
-            + current_type
-            + "' doesn't, so call it as '"
-            + step.name
-            + "(...)' (no '@@')"
+            + "' -- '@@' marking on a method's own name is no longer"
+            " used or needed; write it bare ('" + step.name
+            + "(...)'), or '@@@" + step.name + "(...)' if it also"
+            " needs 'sqrrl___world'"
         )
     if not sc.try_consume("("):
         raise sc.err("InvalidSquirrelSyntax: expected '(' after '" + step.name + "'")
@@ -1158,8 +1172,23 @@ def _handle_instance_call(
             " to this function's own parameters first"
         )
 
-    if is_entity_method:
-        var registered_type = ctx.method_returns[current_type][step.name]
+    # `ctx.bare_method_returns` is built unconditionally for *every*
+    # method -- world-marked or not, plain, entity-shaped, or a container
+    # of either (mandatory marking for a method's own return shape is
+    # gone) -- so an irrelevant entry like `-> Int` is dead data, same
+    # "always register, harmless" reasoning as `bare_function_returns`;
+    # this is the sole place that decides whether a trailing chain off
+    # this call's own return value can continue with no intermediate
+    # variable (`@@own.get_note().@@ref.name`, or `@@own.@@@rename_and_
+    # get().@@ref.name`), the method analogue of `handle_bare_call_
+    # chain`/`handle_func_call_marker`'s own chain-continuation support
+    # for a top-level function's call.
+    var registered_method_type: Optional[String] = (
+        Optional[String](ctx.bare_method_returns[current_type][step.name])
+        if current_type in ctx.bare_method_returns and step.name in ctx.bare_method_returns[current_type]
+        else None
+    )
+    if registered_method_type:
         var arg_text = sc.scan_call_args_to_close()
         var rewritten_args = rewrite_markers(arg_text, ctx)
         var call_end_pos = sc.pos
@@ -1170,6 +1199,19 @@ def _handle_instance_call(
         ) if is_world_method else (
             expr + "." + step.name + "(" + rewritten_args + ")"
         )
+        # `register_pending_decl_type=True` here, unlike `handle_bare_
+        # call_chain`'s own `False` -- that case is safe skipping it only
+        # because a *bare*-rooted `var x: T = f()`/`for x in f():` is
+        # always independently caught first by `PLAIN_VAR_DECL`/`PLAIN_
+        # FOR_LOOP`'s own explicit-annotation registration (a for-loop
+        # over a bare call never even reaches here: `BARE_CALL_CHAIN`
+        # only fires when a `.`/`[` trails the call, which a `for ... in
+        # f():`'s own `:` never does). An *entity*-rooted for-loop (`for a
+        # in @@own.get_homes():`) has no such earlier pathway at all --
+        # entity-rooted chains have never required an explicit annotation
+        # anywhere, type always flows from the chain itself (confirmed:
+        # dropping this without `True` left `a` unregistered, a real
+        # 'never constructed' error on a real compile, not hypothetical).
         _finish_registered_call(
             sc,
             source,
@@ -1177,7 +1219,7 @@ def _handle_instance_call(
             ctx,
             call_text,
             call_end_pos,
-            registered_type,
+            registered_method_type.value(),
             entity_label + "." + step.name + "(...)",
             True,
             pending_decl,
@@ -1206,49 +1248,6 @@ def _handle_instance_call(
         if sc.peek() != UInt8(ord(")")):
             out += ", "
         sc.pos = lookahead
-    elif current_type in ctx.bare_method_returns and step.name in ctx.bare_method_returns[current_type]:
-        # A bare (never `@@`/`@@@`-marked) method whose return type is
-        # registered (`ctx.bare_method_returns` -- built unconditionally
-        # for every unmarked method, so an irrelevant entry like `-> Int`
-        # is dead data, same "always register, harmless" reasoning as
-        # `bare_function_returns`) -- lets a trailing chain off its own
-        # call result continue with no intermediate variable (`@@own.
-        # get_note().@@ref.name`), the method analogue of `handle_bare_
-        # call_chain`'s support for a bare top-level function's call.
-        #
-        # `register_pending_decl_type=True` here, unlike `handle_bare_
-        # call_chain`'s own `False` -- that case is safe skipping it only
-        # because a *bare*-rooted `var x: T = f()`/`for x in f():` is
-        # always independently caught first by `PLAIN_VAR_DECL`/`PLAIN_
-        # FOR_LOOP`'s own explicit-annotation registration (a for-loop
-        # over a bare call never even reaches here: `BARE_CALL_CHAIN`
-        # only fires when a `.`/`[` trails the call, which a `for ... in
-        # f():`'s own `:` never does). An *entity*-rooted for-loop (`for a
-        # in @@own.get_homes():`) has no such earlier pathway at all --
-        # entity-rooted chains have never required an explicit annotation
-        # anywhere, type always flows from the chain itself (confirmed:
-        # dropping this without `True` left `a` unregistered, a real
-        # 'never constructed' error on a real compile, not hypothetical).
-        var registered_type = ctx.bare_method_returns[current_type][step.name]
-        var arg_text = sc.scan_call_args_to_close()
-        var rewritten_args = rewrite_markers(arg_text, ctx)
-        var call_end_pos = sc.pos
-        var call_text = expr + "." + step.name + "(" + rewritten_args + ")"
-        _finish_registered_call(
-            sc,
-            source,
-            marker_start,
-            ctx,
-            call_text,
-            call_end_pos,
-            registered_type,
-            entity_label + "." + step.name + "(...)",
-            True,
-            pending_decl,
-            pending_for_loop_decl,
-            out,
-        )
-        return
     else:
         out += expr + "." + step.name + "("
     pending_decl = None
@@ -1510,39 +1509,56 @@ def handle_name_ref(
         sc.pos += 1  # consume '='
         sc.skip_trivia()
         if not sc.starts_with("@@"):
-            # Mandatory-marking milestone: a function that returns an
-            # `@@`-marked value is now *always* itself marked (`@@` or
-            # `@@@`, `handle_func_call_marker`'s own doc comment has the
-            # full rationale) -- so `var @@x = some_func(...)` unmarked
-            # here is never that case any more, just the one remaining
-            # unmarked shape that's still valid: a container constructor
-            # (`List[@@Type]()`). A marked call (`var @@x = @@get_dept(
-            # ...)`) instead falls straight through to the `pending_decl`
-            # this function already sets below -- consumed by `handle_
-            # func_call_marker` once it reaches that marker next, exactly
-            # like every other "@@"-prefixed initializer shape.
+            # Mandatory marking dropped for a function's own return shape
+            # (Part 1): a bare (never `@@`/`@@@`-marked) top-level
+            # function can now return an entity-shaped value too, so
+            # `var @@x = bare_func(...)` (checked just below, via `ctx.
+            # bare_function_returns`) is a real, valid shape now -- not
+            # just a container constructor (`List[@@Type]()`, the other
+            # branch here). A marked call (`var @@x = @@@get_dept(...)`)
+            # instead falls straight through to the `pending_decl` this
+            # function already sets below -- consumed by `handle_func_
+            # call_marker` once it reaches that marker next, exactly like
+            # every other "@@"-prefixed initializer shape.
             var lookahead = sc.pos
             var matched = False
             var wrapper = sc.scan_ident()
             sc.skip_trivia()
-            if wrapper.byte_length() > 0 and sc.peek() == UInt8(ord("[")):
-                # General, arbitrary-nesting inference -- reuses the same
-                # canonical machinery `is_directly_entity_reachable`/
-                # `render_relation_stripped` already gives every
-                # *declaration*-side marking-symmetry check, rather than
-                # a parallel, shallow (one-level-only) scan: `scan_
-                # bracketed_span` captures the full argument-list text
-                # depth-aware (nested wrappers included, `List[Dict[
-                # String, @@Employee]]()`), then the same recursive
-                # "position 1, or (>= 2 arguments) position 2" rule and
-                # the same `@@`-stripped encoding apply uniformly,
-                # regardless of how deep the relation is nested or which
-                # position it's ultimately reachable through.
+            if wrapper.byte_length() > 0 and wrapper in ctx.bare_function_returns and sc.peek() == UInt8(ord("(")):
+                # Pure lookahead only, same as the `[` branch just below
+                # -- `sc.pos = lookahead` right after discards all of
+                # this; the outer loop re-scans and emits the call's own
+                # text unchanged (a bare function's own name needs no
+                # `sqrrl__` prefixing), so there's no need to actually
+                # consume the argument list here at all.
+                matched = True
+                ctx.entity_to_type[nr.name] = ctx.bare_function_returns[wrapper]
+            elif wrapper.byte_length() > 0 and sc.peek() == UInt8(ord("[")):
+                # `var @@x = SomeWrapper[...]()` -- the old spelling for a
+                # container constructor's own destination. A container is
+                # never itself the entity (only its elements are), so a
+                # bare destination is the only valid one now, matching
+                # every other axis this refactor already dropped mandatory
+                # marking from (a function/method's own name, a struct
+                # field's own name) -- reuses the same canonical `is_
+                # directly_entity_reachable`/`scan_bracketed_span` this
+                # branch always has, just to detect the now-invalid shape
+                # and raise a clear migration error instead of accepting
+                # it silently.
                 var body = sc.scan_bracketed_span()
                 var full_type_text = wrapper + "[" + body + "]"
                 if is_directly_entity_reachable(full_type_text):
-                    matched = True
-                    ctx.entity_to_type[nr.name] = parse_type_expr(full_type_text).render_relation_stripped()
+                    sc.pos = lookahead
+                    raise sc.err(
+                        "InvalidSquirrelSyntax: '@@"
+                        + nr.name
+                        + "' -- '@@' marking on a name bound to a"
+                        " container constructor is no longer used or"
+                        " needed (the container itself, '" + full_type_text
+                        + "', is never the entity -- only its elements"
+                        " are); write it bare: 'var " + nr.name + " = "
+                        + full_type_text + "()'"
+                    )
             sc.pos = lookahead
             if not matched:
                 raise sc.err(

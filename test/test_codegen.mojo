@@ -4,7 +4,7 @@ from squirrel_compiler.codegen import transform_source
 from squirrel_compiler.driver.cycles import check_no_relation_cycles
 from squirrel_compiler.driver.discovery import DiscoveryResult, DiscoveredStruct, PlainStructDiscovery, build_relation_schema
 from squirrel_compiler.driver.topo_order import topo_sort_structs
-from squirrel_compiler.driver.misc_builders import build_function_returns
+from squirrel_compiler.driver.misc_builders import build_bare_function_returns
 from squirrel_compiler.driver.json_module import emit_json_module
 from squirrel_compiler.parser import ParsedStruct, Field, FieldModifier, TypeParam, parse_hand_written_struct_fields
 
@@ -13,7 +13,6 @@ def test_transform_plain_struct_and_script() raises:
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Person"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
     indexed_fields["Person"] = List[String]()
@@ -31,7 +30,7 @@ def test_transform_plain_struct_and_script() raises:
         + "        print(@@alice.name, @@alice.age)\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields
     )
     # Entity/table shape.
     assert_true("struct sqrrl__PersonInner" in out)
@@ -65,7 +64,6 @@ def test_transform_relation_field_read_and_write() raises:
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
     struct_names["Department"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
@@ -86,7 +84,7 @@ def test_transform_relation_field_read_and_write() raises:
         + "        @@alice.@@dept = @@ops\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields
     )
     assert_true("var _sqrrl__dept: sqrrl__Department" in out)
     # A relation field's set_<field>/get_<field> method NAMES carry sqrrl__
@@ -109,21 +107,24 @@ def test_transform_relation_field_read_and_write() raises:
 
 
 def test_transform_wrapped_relation_field_needs_move_assignment() raises:
-    """A `@@container` field (`@@members: List[@@Employee]`, non-`multi`)
-    isn't guaranteed `ImplicitlyCopyable` -- `List[T]` turned out NOT to be
+    """A container relation field (`members: List[@@Employee]`, non-
+    `multi`, bare name -- mandatory marking dropped, Part 2) isn't
+    guaranteed `ImplicitlyCopyable` -- `List[T]` turned out NOT to be
     ImplicitlyCopyable in this Mojo build (verified directly against the
     real compiler, contradicting an earlier spike that only checked a bare
     parameter, not a field assignment) -- so `set_<field>`/`create()` need
     the same `var`+`^` (move) treatment `multi`'s own `Set[T]` and a
     plain-struct-typed field already established, not the bare-copy
-    assumption an ordinary relation/leaf field safely uses."""
+    assumption an ordinary relation/leaf field safely uses. The internal
+    storage convention (`_sqrrl__members`) is unaffected by the field's
+    own name being bare now -- driven by `relation_schema` alone, never
+    by how the DSL source spelled the field."""
     var relation_schema = Dict[String, Dict[String, String]]()
     relation_schema["Department"] = Dict[String, String]()
     relation_schema["Department"]["members"] = "List[Employee]"
     var struct_names = Dict[String, Bool]()
     struct_names["Department"] = True
     struct_names["Employee"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
@@ -133,10 +134,10 @@ def test_transform_wrapped_relation_field_needs_move_assignment() raises:
         + "\n"
         + "@@struct @@Department:\n"
         + "    name: String\n"
-        + "    @@members: List[@@Employee]\n"
+        + "    members: List[@@Employee]\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields
     )
     assert_true("var _sqrrl__members: List[sqrrl__Employee]" in out)
     assert_true("def set_sqrrl__members(mut self, var v: List[sqrrl__Employee]):" in out)
@@ -151,7 +152,6 @@ def test_transform_multi_field() raises:
     var struct_names = Dict[String, Bool]()
     struct_names["Department"] = True
     struct_names["Project"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
     var multi_fields = Dict[String, List[String]]()
@@ -176,7 +176,7 @@ def test_transform_multi_field() raises:
         + "        print(len(@@matches))\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields, multi_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields, multi_fields
     )
     # Real Set-typed forward field.
     assert_true("var _sqrrl__projects: Set[sqrrl__Project]" in out)
@@ -242,7 +242,6 @@ def test_transform_multi_field_wholesale_write() raises:
     var struct_names = Dict[String, Bool]()
     struct_names["Department"] = True
     struct_names["Project"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
     var multi_fields = Dict[String, List[String]]()
@@ -265,7 +264,7 @@ def test_transform_multi_field_wholesale_write() raises:
         + "        @@eng.@@projects = Set(@@website, @@app)\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields, multi_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields, multi_fields
     )
     assert_true(
         "sqrrl__eng._inner[].set_sqrrl__projects(Set(sqrrl__website, sqrrl__app));" in out
@@ -283,7 +282,6 @@ def test_transform_multi_field_call_requires_marked_field_suffix() raises:
     var struct_names = Dict[String, Bool]()
     struct_names["Department"] = True
     struct_names["Project"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
     var multi_fields = Dict[String, List[String]]()
@@ -307,7 +305,7 @@ def test_transform_multi_field_call_requires_marked_field_suffix() raises:
     var raised = False
     try:
         _ = transform_source(
-            src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields, multi_fields
+            src, relation_schema, struct_names, unique_fields, indexed_fields, multi_fields
         )
     except:
         raised = True
@@ -326,7 +324,6 @@ def test_transform_multi_field_inline_construction() raises:
     var struct_names = Dict[String, Bool]()
     struct_names["Department"] = True
     struct_names["Project"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
     var multi_fields = Dict[String, List[String]]()
@@ -349,7 +346,7 @@ def test_transform_multi_field_inline_construction() raises:
         + "        print(len(@@eng.@@projects))\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields, multi_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields, multi_fields
     )
     # The embedded @@website/@@app markers inside Set(...) get rewritten the
     # same generic way any other construct-field value's markers do.
@@ -368,7 +365,6 @@ def test_transform_ordered_field_definition() raises:
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
     var multi_fields = Dict[String, List[String]]()
@@ -385,7 +381,7 @@ def test_transform_ordered_field_definition() raises:
         + "    pass\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields, multi_fields, ordered_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields, multi_fields, ordered_fields
     )
     assert_true("var years_employed: OrderedIndex[UInt32]" in out)
     # set_<field> is untouched -- same evict-old/add-new shape INDEXED uses.
@@ -414,7 +410,6 @@ def test_transform_ordered_field_range_query_call_sites() raises:
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
     var multi_fields = Dict[String, List[String]]()
@@ -437,7 +432,7 @@ def test_transform_ordered_field_range_query_call_sites() raises:
         + "        print(len(@@exact))\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields, multi_fields, ordered_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields, multi_fields, ordered_fields
     )
     assert_true("sqrrl___world.Employee.for_years_employed_greater_than(3)" in out)
     assert_true("sqrrl___world.Employee.for_years_employed_between(3, 4)" in out)
@@ -460,7 +455,6 @@ def test_transform_table_level_call_direct_chain_without_binding() raises:
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
     var multi_fields = Dict[String, List[String]]()
@@ -481,7 +475,7 @@ def test_transform_table_level_call_direct_chain_without_binding() raises:
         + "        print(@@@Employee.count())\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields, multi_fields, ordered_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields, multi_fields, ordered_fields
     )
     assert_true(
         'print(sqrrl___world.Employee.for_years_employed_greater_than(3)[0]._inner[]._name)' in out
@@ -501,7 +495,6 @@ def test_transform_method_without_world_marking() raises:
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Person"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
@@ -513,7 +506,7 @@ def test_transform_method_without_world_marking() raises:
         + "        return \"Hello, \" + self.name\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields
     )
     assert_true("def greeting(self) -> String:" in out)
     assert_true('return "Hello, " + self._inner[]._name' in out)
@@ -521,104 +514,106 @@ def test_transform_method_without_world_marking() raises:
 
 
 def test_transform_entity_func_return_registers_variable_type() raises:
-    """An `@@`-marked (not `@@@` -- mandatory-marking milestone: it only
-    ever hops through an existing relation, needing no `sqrrl___world` at
-    all) function's registered return type (`function_returns`) is
-    looked up when its call is the right-hand side of `var @@x = ...`,
-    via `MarkerKind.ENTITY_FUNC`/`handle_func_call_marker`, the same way
-    a world-marked function's call already was."""
+    """A bare (never `@@`/`@@@`-marked) function's registered return type
+    (`bare_function_returns`) is looked up when its call is the right-
+    hand side of `var @@x = ...`, via `MarkerKind.NAME_REF`/`handle_name_
+    ref`'s own bare-function-call branch -- mandatory marking dropped for
+    a function's own return shape means this works regardless of the
+    function's own name being marked at all; the *destination* still
+    needs `@@`, since the bound value itself is a real entity."""
     var relation_schema = Dict[String, Dict[String, String]]()
     relation_schema["Employee"] = Dict[String, String]()
     relation_schema["Employee"]["dept"] = "Department"
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
     struct_names["Department"] = True
-    var function_returns = Dict[String, String]()
-    function_returns["get_dept"] = "Department"
+    var bare_function_returns = Dict[String, String]()
+    bare_function_returns["get_dept"] = "Department"
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
     var src = String(
-        "def @@get_dept(@@e: @@Employee) -> @@Department:\n"
+        "def get_dept(@@e: @@Employee) -> @@Department:\n"
         + "    return @@e.@@dept\n"
         + "\n"
         + "def foo(@@e: @@Employee) raises:\n"
-        + "    var @@d = @@get_dept(@@e)\n"
+        + "    var @@d = get_dept(@@e)\n"
         + "    print(@@d.name)\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields,
+        bare_function_returns=bare_function_returns,
     )
-    assert_true("var sqrrl__d = sqrrl__get_dept(sqrrl__e)" in out)
+    assert_true("var sqrrl__d = get_dept(sqrrl__e)" in out)
     assert_true("print(sqrrl__d._inner[]._name)" in out)
 
 
 def test_transform_entity_func_direct_chain_without_binding() raises:
-    """The mandatory-marking milestone's whole point: a *direct* access-
-    chain off an `@@`-marked function's own return value, with no
-    intermediate variable and not inside a `for` loop --
-    `@@get_dept(@@alice).name` -- resolves correctly. Confirmed broken
-    before this milestone via a real end-to-end run: the call itself was
-    never a marker at all (a bare, unmarked function name is never a
-    position `find_next_marker` can stop at), so `.name` passed through
-    completely unrewritten regardless of any variable-binding-based fix."""
+    """A *direct* access-chain off a bare function's own return value,
+    with no intermediate variable and not inside a `for` loop --
+    `get_dept(@@alice).name` -- resolves correctly via `BARE_CALL_CHAIN`/
+    `handle_bare_call_chain`, no marking on the function's own name
+    needed at all."""
     var relation_schema = Dict[String, Dict[String, String]]()
     relation_schema["Employee"] = Dict[String, String]()
     relation_schema["Employee"]["dept"] = "Department"
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
     struct_names["Department"] = True
-    var function_returns = Dict[String, String]()
-    function_returns["get_dept"] = "Department"
+    var bare_function_returns = Dict[String, String]()
+    bare_function_returns["get_dept"] = "Department"
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
     var src = String(
-        "def @@get_dept(@@e: @@Employee) -> @@Department:\n"
+        "def get_dept(@@e: @@Employee) -> @@Department:\n"
         + "    return @@e.@@dept\n"
         + "\n"
         + "def foo(@@e: @@Employee) raises:\n"
-        + "    print(@@get_dept(@@e).name)\n"
+        + "    print(get_dept(@@e).name)\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields,
+        bare_function_returns=bare_function_returns,
     )
-    assert_true("print(sqrrl__get_dept(sqrrl__e)._inner[]._name)" in out)
+    assert_true("print(get_dept(sqrrl__e)._inner[]._name)" in out)
 
 
-def test_build_function_returns_recognizes_entity_marked_signature() raises:
-    """`build_function_returns` scans a `def @@funcName(...) -> @@Type:`
-    (mandatory-marking milestone: `@@`, not `@@@` -- this function never
-    needs `sqrrl___world`) the same way it already scanned a world-marked
-    one, covering both a bare-entity and a container return type."""
-    var path = String("/tmp/test_build_function_returns_entity_marked.mojo.sqrrl")
+def test_build_bare_function_returns_recognizes_bare_and_world_marked_signatures() raises:
+    """`build_bare_function_returns` scans a bare `def funcName(...) ->
+    Type:` and a world-marked `def @@@funcName(...) -> Type:` the same
+    way, registering both under their own bare name unconditionally --
+    mandatory marking dropped for a function's own return shape means
+    marking no longer decides *whether* this map registers it, only
+    `@@@` (a separate, unrelated axis: needs `sqrrl___world` or not)."""
+    var path = String("/tmp/test_build_bare_function_returns_signatures.mojo.sqrrl")
     var f = open(path, "w")
     f.write(
-        "def @@get_dept(@@e: @@Employee) -> @@Department:\n"
+        "def get_dept(@@e: @@Employee) -> @@Department:\n"
         + "    return @@e.@@dept\n"
         + "\n"
-        + "def @@get_members(@@d: @@Department) -> List[@@Employee]:\n"
-        + "    return @@d.@@members\n"
+        + "def @@@get_members(@@d: @@Department) -> List[@@Employee]:\n"
+        + "    return @@d.members\n"
     )
     f.close()
     var files = List[String]()
     files.append(path)
-    var out = build_function_returns(files)
+    var out = build_bare_function_returns(files)
     assert_true("get_dept" in out)
     assert_equal(out["get_dept"], "Department")
     assert_true("get_members" in out)
     assert_equal(out["get_members"], "List[Employee]")
 
 
-def test_build_function_returns_rejects_unmarked_entity_returning_function() raises:
-    """Mandatory marking, the under-marked direction: a fully bare `def
-    funcName(...) -> @@Type:` (no `@@`/`@@@` on its own name at all) is a
-    hard `InvalidSquirrelSyntax` -- any function returning an `@@`-marked
-    value must mark its own name too."""
-    var path = String("/tmp/test_build_function_returns_unmarked.mojo.sqrrl")
+def test_build_bare_function_returns_rejects_old_plain_marked_spelling() raises:
+    """The old mandatory-marking spelling -- a plain `@@` (not `@@@`) on
+    a top-level function's own name -- is now itself the invalid one:
+    `@@` used to mean "returns an entity, doesn't need world," which is
+    just bare now. `InvalidSquirrelSyntax`, not silently accepted."""
+    var path = String("/tmp/test_build_bare_function_returns_old_marked.mojo.sqrrl")
     var f = open(path, "w")
     f.write(
-        "def get_dept(@@e: @@Employee) -> @@Department:\n"
+        "def @@get_dept(@@e: @@Employee) -> @@Department:\n"
         + "    return @@e.@@dept\n"
     )
     f.close()
@@ -626,29 +621,7 @@ def test_build_function_returns_rejects_unmarked_entity_returning_function() rai
     files.append(path)
     var raised = False
     try:
-        _ = build_function_returns(files)
-    except:
-        raised = True
-    assert_true(raised)
-
-
-def test_build_function_returns_rejects_overmarked_function() raises:
-    """Mandatory marking, the over-marked direction: a `def @@funcName(
-    ...) -> String:` (marked `@@` but its return type isn't `@@`-shaped
-    at all) is a hard `InvalidSquirrelSyntax` too -- `@@` only marks a
-    function that actually returns an `@@`-marked value."""
-    var path = String("/tmp/test_build_function_returns_overmarked.mojo.sqrrl")
-    var f = open(path, "w")
-    f.write(
-        "def @@get_name(@@e: @@Employee) -> String:\n"
-        + "    return @@e.name\n"
-    )
-    f.close()
-    var files = List[String]()
-    files.append(path)
-    var raised = False
-    try:
-        _ = build_function_returns(files)
+        _ = build_bare_function_returns(files)
     except:
         raised = True
     assert_true(raised)
@@ -666,7 +639,6 @@ def test_transform_method_self_write_and_relation_hop_and_word_boundary() raises
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
     struct_names["Department"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
@@ -684,7 +656,7 @@ def test_transform_method_self_write_and_relation_hop_and_word_boundary() raises
         + "        print(myself)\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields
     )
     assert_true(
         "self._inner[].set_title(self._inner[]._sqrrl__dept._inner[]._name);" in out
@@ -703,7 +675,6 @@ def test_transform_method_world_marked_threads_world() raises:
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Person"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
@@ -715,7 +686,7 @@ def test_transform_method_world_marked_threads_world() raises:
         + "        return @@@Person.count()\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields
     )
     assert_true("def headcount(self, mut sqrrl___world: sqrrl___World) -> Int:" in out)
     assert_true("return sqrrl___world.Person.count()" in out)
@@ -728,7 +699,6 @@ def test_transform_method_table_level_call_without_world_marking_rejected() rais
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Person"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
@@ -742,7 +712,7 @@ def test_transform_method_table_level_call_without_world_marking_rejected() rais
     var raised = False
     try:
         _ = transform_source(
-            src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+            src, relation_schema, struct_names, unique_fields, indexed_fields
         )
     except:
         raised = True
@@ -760,7 +730,6 @@ def test_transform_calling_spliced_methods_from_script() raises:
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Person"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
     var multi_fields = Dict[String, List[String]]()
@@ -786,7 +755,7 @@ def test_transform_calling_spliced_methods_from_script() raises:
         + "        print(@@alice.@@@greeting())\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields,
+        src, relation_schema, struct_names, unique_fields, indexed_fields,
         multi_fields, ordered_fields, world_methods
     )
     assert_true("sqrrl__alice.entity_id()" in out)
@@ -807,7 +776,6 @@ def test_transform_world_method_call_site_keeps_string_literal_argument() raises
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Person"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
     var multi_fields = Dict[String, List[String]]()
@@ -829,7 +797,7 @@ def test_transform_world_method_call_site_keeps_string_literal_argument() raises
         + "        @@alice.@@@rename(\"Renamed\")\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields,
+        src, relation_schema, struct_names, unique_fields, indexed_fields,
         multi_fields, ordered_fields, world_methods
     )
     assert_true('sqrrl__alice.rename(sqrrl___world, "Renamed")' in out)
@@ -842,7 +810,6 @@ def test_transform_spliced_method_call_site_marking_mismatch_rejected() raises:
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Person"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
     var multi_fields = Dict[String, List[String]]()
@@ -869,7 +836,7 @@ def test_transform_spliced_method_call_site_marking_mismatch_rejected() raises:
     var raised_missing = False
     try:
         _ = transform_source(
-            missing_marker_src, relation_schema, struct_names, function_returns, unique_fields,
+            missing_marker_src, relation_schema, struct_names, unique_fields,
             indexed_fields, multi_fields, ordered_fields, world_methods
         )
     except:
@@ -894,7 +861,7 @@ def test_transform_spliced_method_call_site_marking_mismatch_rejected() raises:
     var raised_extra = False
     try:
         _ = transform_source(
-            extra_marker_src, relation_schema, struct_names, function_returns, unique_fields,
+            extra_marker_src, relation_schema, struct_names, unique_fields,
             indexed_fields, multi_fields, ordered_fields, world_methods
         )
     except:
@@ -902,47 +869,15 @@ def test_transform_spliced_method_call_site_marking_mismatch_rejected() raises:
     assert_true(raised_extra)
 
 
-def test_transform_method_bare_entity_return_rejected() raises:
-    """Mandatory-marking extended to methods: a bare method returning an
-    `@@`-marked value is now rejected, the same way a bare top-level
-    function already is (`build_function_returns`) -- previously silently
-    allowed, but with no way to bind/loop/chain off its result at the call
-    site (a real, documented gap: a method's own return value was never
-    registered as an entity anywhere)."""
-    var relation_schema = Dict[String, Dict[String, String]]()
-    var struct_names = Dict[String, Bool]()
-    struct_names["Employee"] = True
-    struct_names["Department"] = True
-    var function_returns = Dict[String, String]()
-    var unique_fields = Dict[String, List[String]]()
-    var indexed_fields = Dict[String, List[String]]()
-
-    var src = String(
-        "@@struct @@Department:\n"
-        + "    unique name: String\n"
-        + "\n"
-        + "    def get_lead(self) -> @@Employee:\n"
-        + "        return self.name\n"
-    )
-    var raised = False
-    try:
-        _ = transform_source(
-            src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
-        )
-    except:
-        raised = True
-    assert_true(raised)
-
-
-def test_transform_method_entity_marked_without_entity_return_rejected() raises:
-    """The over-marked direction: a method marked `@@` whose return type
-    isn't `@@`-shaped at all is rejected -- `@@` only marks a method that
-    actually returns an entity, mirroring `build_function_returns`'s own
-    over-marked check for top-level functions."""
+def test_transform_method_old_plain_marked_spelling_rejected() raises:
+    """Mandatory marking dropped for a method's own return shape means a
+    plain `@@` (not `@@@`) on a method's own name is now itself the
+    invalid spelling -- `@@` used to mean "returns an entity, doesn't
+    need world," which is just bare now, mirroring `build_bare_function_
+    returns`'s own rejection for top-level functions."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Person"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
@@ -956,34 +891,32 @@ def test_transform_method_entity_marked_without_entity_return_rejected() raises:
     var raised = False
     try:
         _ = transform_source(
-            src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+            src, relation_schema, struct_names, unique_fields, indexed_fields
         )
     except:
         raised = True
     assert_true(raised)
 
 
-def test_transform_entity_marked_method_call_binds_and_reads() raises:
-    """An `@@`-marked (no `sqrrl___world` needed) method's call site is a
-    real marker position -- `var @@x = @@d.@@get_lead()` registers `@@x`'s
-    type from `ctx.method_returns`, the method-call parallel of a marked
+def test_transform_bare_method_call_binds_and_reads() raises:
+    """A bare (never `@@`/`@@@`-marked) method's call site is a real
+    marker position -- `var @@x = @@d.get_lead()` registers `@@x`'s type
+    from `ctx.bare_method_returns`, the method-call parallel of a bare
     top-level function's own call-site registration
-    (`handle_func_call_marker`)."""
+    (`handle_bare_call_chain`) -- mandatory marking dropped for a
+    method's own return shape means this works with no marking on the
+    method's own name at all."""
     var relation_schema = Dict[String, Dict[String, String]]()
     relation_schema["Department"] = Dict[String, String]()
     relation_schema["Department"]["lead"] = "Employee"
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
     struct_names["Department"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
-    var multi_fields = Dict[String, List[String]]()
-    var ordered_fields = Dict[String, List[String]]()
-    var world_methods = Dict[String, List[String]]()
-    var method_returns = Dict[String, Dict[String, String]]()
-    method_returns["Department"] = Dict[String, String]()
-    method_returns["Department"]["get_lead"] = "Employee"
+    var bare_method_returns = Dict[String, Dict[String, String]]()
+    bare_method_returns["Department"] = Dict[String, String]()
+    bare_method_returns["Department"]["get_lead"] = "Employee"
 
     var src = String(
         "@@struct @@Employee:\n"
@@ -993,42 +926,38 @@ def test_transform_entity_marked_method_call_binds_and_reads() raises:
         + "    unique name: String\n"
         + "    @@lead: @@Employee\n"
         + "\n"
-        + "    def @@get_lead(self) -> @@Employee:\n"
+        + "    def get_lead(self) -> @@Employee:\n"
         + "        return self.@@lead\n"
         + "\n"
         + "def foo(@@d: @@Department) raises:\n"
-        + "    var @@x = @@d.@@get_lead()\n"
+        + "    var @@x = @@d.get_lead()\n"
         + "    print(@@x.name)\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields,
-        multi_fields, ordered_fields, world_methods, method_returns=method_returns
+        src, relation_schema, struct_names, unique_fields, indexed_fields,
+        bare_method_returns=bare_method_returns,
     )
     assert_true("def get_lead(self) -> sqrrl__Employee:" in out)
     assert_true("var sqrrl__x = sqrrl__d.get_lead()" in out)
     assert_true("print(sqrrl__x._inner[]._name)" in out)
 
 
-def test_transform_entity_marked_method_call_direct_chain() raises:
+def test_transform_bare_method_call_direct_chain() raises:
     """The method-call parallel of `test_transform_entity_func_direct_
-    chain_without_binding`: a *direct* access-chain off an `@@`-marked
-    method's own return value, no intermediate variable, no `for` loop --
-    `@@d.@@get_lead().name`."""
+    chain_without_binding`: a *direct* access-chain off a bare method's
+    own return value, no intermediate variable, no `for` loop --
+    `@@d.get_lead().name`."""
     var relation_schema = Dict[String, Dict[String, String]]()
     relation_schema["Department"] = Dict[String, String]()
     relation_schema["Department"]["lead"] = "Employee"
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
     struct_names["Department"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
-    var multi_fields = Dict[String, List[String]]()
-    var ordered_fields = Dict[String, List[String]]()
-    var world_methods = Dict[String, List[String]]()
-    var method_returns = Dict[String, Dict[String, String]]()
-    method_returns["Department"] = Dict[String, String]()
-    method_returns["Department"]["get_lead"] = "Employee"
+    var bare_method_returns = Dict[String, Dict[String, String]]()
+    bare_method_returns["Department"] = Dict[String, String]()
+    bare_method_returns["Department"]["get_lead"] = "Employee"
 
     var src = String(
         "@@struct @@Employee:\n"
@@ -1038,23 +967,23 @@ def test_transform_entity_marked_method_call_direct_chain() raises:
         + "    unique name: String\n"
         + "    @@lead: @@Employee\n"
         + "\n"
-        + "    def @@get_lead(self) -> @@Employee:\n"
+        + "    def get_lead(self) -> @@Employee:\n"
         + "        return self.@@lead\n"
         + "\n"
         + "def foo(@@d: @@Department) raises:\n"
-        + "    print(@@d.@@get_lead().name)\n"
+        + "    print(@@d.get_lead().name)\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields,
-        multi_fields, ordered_fields, world_methods, method_returns=method_returns
+        src, relation_schema, struct_names, unique_fields, indexed_fields,
+        bare_method_returns=bare_method_returns,
     )
     assert_true("print(sqrrl__d.get_lead()._inner[]._name)" in out)
 
 
-def test_transform_entity_marked_method_call_for_loop_registers_element_type() raises:
-    """A direct `for @@x in @@d.@@get_team():` (no intermediate binding)
-    over an `@@`-marked method's own `List[@@Employee]` return registers
-    the loop variable's element type, the same way a marked top-level
+def test_transform_bare_method_call_for_loop_registers_element_type() raises:
+    """A direct `for @@x in @@d.get_team():` (no intermediate binding)
+    over a bare method's own `List[@@Employee]` return registers the
+    loop variable's element type, the same way a bare top-level
     function's own container-returning call already does."""
     var relation_schema = Dict[String, Dict[String, String]]()
     relation_schema["Department"] = Dict[String, String]()
@@ -1062,15 +991,11 @@ def test_transform_entity_marked_method_call_for_loop_registers_element_type() r
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
     struct_names["Department"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
-    var multi_fields = Dict[String, List[String]]()
-    var ordered_fields = Dict[String, List[String]]()
-    var world_methods = Dict[String, List[String]]()
-    var method_returns = Dict[String, Dict[String, String]]()
-    method_returns["Department"] = Dict[String, String]()
-    method_returns["Department"]["get_team"] = "List[Employee]"
+    var bare_method_returns = Dict[String, Dict[String, String]]()
+    bare_method_returns["Department"] = Dict[String, String]()
+    bare_method_returns["Department"]["get_team"] = "List[Employee]"
 
     var src = String(
         "@@struct @@Employee:\n"
@@ -1078,46 +1003,41 @@ def test_transform_entity_marked_method_call_for_loop_registers_element_type() r
         + "\n"
         + "@@struct @@Department:\n"
         + "    unique name: String\n"
-        + "    @@team: List[@@Employee]\n"
+        + "    team: List[@@Employee]\n"
         + "\n"
-        + "    def @@get_team(self) -> List[@@Employee]:\n"
-        + "        return self.@@team.copy()\n"
+        + "    def get_team(self) -> List[@@Employee]:\n"
+        + "        return self.team.copy()\n"
         + "\n"
         + "def foo(@@d: @@Department) raises:\n"
-        + "    for @@m in @@d.@@get_team():\n"
+        + "    for @@m in @@d.get_team():\n"
         + "        print(@@m.name)\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields,
-        multi_fields, ordered_fields, world_methods, method_returns=method_returns
+        src, relation_schema, struct_names, unique_fields, indexed_fields,
+        bare_method_returns=bare_method_returns,
     )
     assert_true("for sqrrl__m in sqrrl__d.get_team():" in out)
     assert_true("print(sqrrl__m._inner[]._name)" in out)
 
 
-def test_transform_entity_method_call_site_marking_mismatch_rejected() raises:
-    """Both directions of call-site/declaration marking mismatch for an
-    entity-returning method: calling it without `@@`, and marking a plain
-    (non-entity-returning) method's call site with `@@` it doesn't need --
-    the method-call parallel of `test_transform_spliced_method_call_site_
-    marking_mismatch_rejected` (which covers the `@@@`/world direction)."""
+def test_transform_old_marked_method_call_site_rejected() raises:
+    """Mandatory marking dropped for a method's own return shape means
+    the old call-site spelling (`.@@method()`, non-world) is now itself
+    always invalid, regardless of whether the method actually returns an
+    entity or not -- the single check that replaces both directions of
+    the old marking-mismatch pair. Exercised against both an entity-
+    returning method and a plain one, since neither spelling is ever
+    valid now."""
     var relation_schema = Dict[String, Dict[String, String]]()
     relation_schema["Department"] = Dict[String, String]()
     relation_schema["Department"]["lead"] = "Employee"
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
     struct_names["Department"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
-    var multi_fields = Dict[String, List[String]]()
-    var ordered_fields = Dict[String, List[String]]()
-    var world_methods = Dict[String, List[String]]()
-    var method_returns = Dict[String, Dict[String, String]]()
-    method_returns["Department"] = Dict[String, String]()
-    method_returns["Department"]["get_lead"] = "Employee"
 
-    var missing_marker_src = String(
+    var entity_returning_src = String(
         "@@struct @@Employee:\n"
         + "    unique name: String\n"
         + "\n"
@@ -1125,36 +1045,24 @@ def test_transform_entity_method_call_site_marking_mismatch_rejected() raises:
         + "    unique name: String\n"
         + "    @@lead: @@Employee\n"
         + "\n"
-        + "    def @@get_lead(self) -> @@Employee:\n"
+        + "    def get_lead(self) -> @@Employee:\n"
         + "        return self.@@lead\n"
-        + "\n"
-        + "    def entity_id(self) -> UInt32:\n"
-        + "        return self.id()\n"
         + "\n"
         + "def foo(@@d: @@Department) raises:\n"
-        + "    var @@x = @@d.get_lead()\n"
-        + "    print(@@x.name)\n"
+        + "    print(@@d.@@get_lead().name)\n"
     )
-    var raised_missing = False
+    var raised_entity = False
     try:
         _ = transform_source(
-            missing_marker_src, relation_schema, struct_names, function_returns, unique_fields,
-            indexed_fields, multi_fields, ordered_fields, world_methods, method_returns=method_returns
+            entity_returning_src, relation_schema, struct_names, unique_fields, indexed_fields,
         )
     except:
-        raised_missing = True
-    assert_true(raised_missing)
+        raised_entity = True
+    assert_true(raised_entity)
 
-    var extra_marker_src = String(
-        "@@struct @@Employee:\n"
+    var plain_returning_src = String(
+        "@@struct @@Department:\n"
         + "    unique name: String\n"
-        + "\n"
-        + "@@struct @@Department:\n"
-        + "    unique name: String\n"
-        + "    @@lead: @@Employee\n"
-        + "\n"
-        + "    def @@get_lead(self) -> @@Employee:\n"
-        + "        return self.@@lead\n"
         + "\n"
         + "    def entity_id(self) -> UInt32:\n"
         + "        return self.id()\n"
@@ -1162,28 +1070,28 @@ def test_transform_entity_method_call_site_marking_mismatch_rejected() raises:
         + "def foo(@@d: @@Department) raises:\n"
         + "    print(@@d.@@entity_id())\n"
     )
-    var raised_extra = False
+    var raised_plain = False
     try:
         _ = transform_source(
-            extra_marker_src, relation_schema, struct_names, function_returns, unique_fields,
-            indexed_fields, multi_fields, ordered_fields, world_methods, method_returns=method_returns
+            plain_returning_src, relation_schema, struct_names, unique_fields, indexed_fields,
         )
     except:
-        raised_extra = True
-    assert_true(raised_extra)
+        raised_plain = True
+    assert_true(raised_plain)
 
 
-def test_transform_world_and_entity_marked_method_threads_world_and_registers_type() raises:
-    """A `@@@`-marked method can *also* return an `@@`-marked value --
-    `@@@` alone covers both "needs sqrrl___world" and "registers a return
-    type for the call site", never doubling up with a separate `@@`.
-    `sqrrl___world` is threaded as the call's own first argument, and the
-    call site is still a real marker position (bind, here)."""
+def test_transform_world_marked_method_returning_entity_threads_world_and_registers_type() raises:
+    """A `@@@`-marked method can return an `@@`-marked value too --
+    mandatory marking dropped for a method's own return shape means
+    `@@@` now means only one thing, "needs sqrrl___world", completely
+    decoupled from what it returns. `sqrrl___world` is threaded as the
+    call's own first argument, and the call site is still a real marker
+    position (bind, here) via `ctx.bare_method_returns` -- which, unlike
+    a plain, never-marked method, also covers world-marked ones."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
     struct_names["Department"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
     var multi_fields = Dict[String, List[String]]()
@@ -1191,9 +1099,9 @@ def test_transform_world_and_entity_marked_method_threads_world_and_registers_ty
     var world_methods = Dict[String, List[String]]()
     world_methods["Department"] = List[String]()
     world_methods["Department"].append("make_employee")
-    var method_returns = Dict[String, Dict[String, String]]()
-    method_returns["Department"] = Dict[String, String]()
-    method_returns["Department"]["make_employee"] = "Employee"
+    var bare_method_returns = Dict[String, Dict[String, String]]()
+    bare_method_returns["Department"] = Dict[String, String]()
+    bare_method_returns["Department"]["make_employee"] = "Employee"
 
     var src = String(
         "@@struct @@Employee:\n"
@@ -1212,8 +1120,8 @@ def test_transform_world_and_entity_marked_method_threads_world_and_registers_ty
         + "        print(@@x.name)\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields,
-        multi_fields, ordered_fields, world_methods, method_returns=method_returns
+        src, relation_schema, struct_names, unique_fields, indexed_fields,
+        multi_fields, ordered_fields, world_methods, bare_method_returns=bare_method_returns
     )
     assert_true(
         "def make_employee(self, mut sqrrl___world: sqrrl___World, name: String) raises -> sqrrl__Employee:" in out
@@ -1222,18 +1130,17 @@ def test_transform_world_and_entity_marked_method_threads_world_and_registers_ty
     assert_true("print(sqrrl__x._inner[]._name)" in out)
 
 
-def test_transform_method_entity_return_recurses_through_nested_container() raises:
-    """`scan_entity_return_shape` recurses through first-argument position
-    at any depth (`List[List[@@Employee]]`), not just one wrapper deep --
-    same rule `is_directly_entity_reachable` already applies everywhere
-    else `@@`-marking symmetry is decided. A bare method returning this
-    nested shape is rejected (under-marked) exactly like a single-level
-    container return already is."""
+def test_transform_bare_method_entity_return_recurses_through_nested_container() raises:
+    """`scan_bare_return_type_text` recurses/strips through first-argument
+    position at any depth (`List[List[@@Employee]]`), not just one
+    wrapper deep. A bare method returning this nested shape is now
+    accepted with no marking at all -- the old marked spelling (`@@
+    get_groups`) is what's rejected now, mandatory marking on a method's
+    own name being gone."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
     struct_names["Department"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
@@ -1244,14 +1151,10 @@ def test_transform_method_entity_return_recurses_through_nested_container() rais
         + "    def get_groups(self) -> List[List[@@Employee]]:\n"
         + "        return List[List[sqrrl__Employee]]()\n"
     )
-    var raised = False
-    try:
-        _ = transform_source(
-            bare_src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
-        )
-    except:
-        raised = True
-    assert_true(raised)
+    var out = transform_source(
+        bare_src, relation_schema, struct_names, unique_fields, indexed_fields
+    )
+    assert_true("def get_groups(self) -> List[List[sqrrl__Employee]]:" in out)
 
     var marked_src = String(
         "@@struct @@Department:\n"
@@ -1260,26 +1163,27 @@ def test_transform_method_entity_return_recurses_through_nested_container() rais
         + "    def @@get_groups(self) -> List[List[@@Employee]]:\n"
         + "        return List[List[sqrrl__Employee]]()\n"
     )
-    var out = transform_source(
-        marked_src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
-    )
-    assert_true("def get_groups(self) -> List[List[sqrrl__Employee]]:" in out)
+    var raised = False
+    try:
+        _ = transform_source(
+            marked_src, relation_schema, struct_names, unique_fields, indexed_fields
+        )
+    except:
+        raised = True
+    assert_true(raised)
 
 
-def test_transform_method_value_position_relation_return_needs_marking() raises:
+def test_transform_bare_method_value_position_relation_return_needs_no_marking() raises:
     """A relation confined to a container's *second* argument position
-    (`Dict[String, @@Employee]`, the value) *is* directly entity-reachable
-    now (widened: real Mojo indexing yields it, even though iteration
-    doesn't) -- a bare method returning this shape is rejected (under-
-    marked), the method-call parallel of `is_directly_entity_reachable`'s
-    own rule already applied to top-level functions, struct fields, and
-    def/var entity-params. Marking it correctly (`@@scores`) is accepted
-    and renders normally."""
+    (`Dict[String, @@Employee]`, the value) is now accepted bare, same as
+    a first-position container return -- mandatory marking for a
+    method's own return shape is gone regardless of which position the
+    relation is reachable through. The old marked spelling (`@@scores`)
+    is what's rejected now."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
     struct_names["Department"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
@@ -1290,14 +1194,10 @@ def test_transform_method_value_position_relation_return_needs_marking() raises:
         + "    def scores(self) -> Dict[String, @@Employee]:\n"
         + "        return Dict[String, sqrrl__Employee]()\n"
     )
-    var raised = False
-    try:
-        _ = transform_source(
-            bare_src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
-        )
-    except:
-        raised = True
-    assert_true(raised)
+    var out = transform_source(
+        bare_src, relation_schema, struct_names, unique_fields, indexed_fields
+    )
+    assert_true("def scores(self) -> Dict[String, sqrrl__Employee]:" in out)
 
     var marked_src = String(
         "@@struct @@Department:\n"
@@ -1306,10 +1206,14 @@ def test_transform_method_value_position_relation_return_needs_marking() raises:
         + "    def @@scores(self) -> Dict[String, @@Employee]:\n"
         + "        return Dict[String, sqrrl__Employee]()\n"
     )
-    var out = transform_source(
-        marked_src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
-    )
-    assert_true("def scores(self) -> Dict[String, sqrrl__Employee]:" in out)
+    var raised = False
+    try:
+        _ = transform_source(
+            marked_src, relation_schema, struct_names, unique_fields, indexed_fields
+        )
+    except:
+        raised = True
+    assert_true(raised)
 
 
 def test_transform_trait_list_appears_on_wrapper() raises:
@@ -1319,7 +1223,6 @@ def test_transform_trait_list_appears_on_wrapper() raises:
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Person"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
@@ -1331,7 +1234,7 @@ def test_transform_trait_list_appears_on_wrapper() raises:
         + "        return self.id()\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields
     )
     assert_true(
         "struct sqrrl__Person(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable, HasId):" in out
@@ -1347,7 +1250,6 @@ def test_transform_table_level_call_requires_world_marked_entity() raises:
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Person"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
     indexed_fields["Person"] = List[String]()
@@ -1365,7 +1267,7 @@ def test_transform_table_level_call_requires_world_marked_entity() raises:
     var raised = False
     try:
         _ = transform_source(
-            src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+            src, relation_schema, struct_names, unique_fields, indexed_fields
         )
     except:
         raised = True
@@ -1379,7 +1281,6 @@ def test_transform_instance_access_rejects_world_marked_entity() raises:
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Person"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
@@ -1395,7 +1296,7 @@ def test_transform_instance_access_rejects_world_marked_entity() raises:
     var raised = False
     try:
         _ = transform_source(
-            src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+            src, relation_schema, struct_names, unique_fields, indexed_fields
         )
     except:
         raised = True
@@ -1415,7 +1316,6 @@ def test_transform_keepalive_struct() raises:
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Project"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
@@ -1424,7 +1324,7 @@ def test_transform_keepalive_struct() raises:
         + "    name: String\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields
     )
     assert_true("self.storage[].keepalive_add(id, inner.copy())" in out)
     assert_true("return sqrrl__Project(inner^)" in out)
@@ -1438,7 +1338,6 @@ def test_transform_non_keepalive_struct_has_no_keepalive_machinery() raises:
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Project"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
@@ -1447,7 +1346,7 @@ def test_transform_non_keepalive_struct_has_no_keepalive_machinery() raises:
         + "    name: String\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields
     )
     assert_false("keepalive" in out)
     assert_true("return sqrrl__Project(inner^)" in out)
@@ -1462,7 +1361,6 @@ def test_transform_equatable_struct() raises:
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Person"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
@@ -1472,7 +1370,7 @@ def test_transform_equatable_struct() raises:
         + "    age: UInt32\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields
     )
     assert_true("def value_eq(self, other: Self) -> Bool:" in out)
     assert_true("if self._inner[].get_name() != other._inner[].get_name():" in out)
@@ -1484,7 +1382,6 @@ def test_transform_non_equatable_struct_has_no_value_eq() raises:
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Person"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
@@ -1493,7 +1390,7 @@ def test_transform_non_equatable_struct_has_no_value_eq() raises:
         + "    name: String\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields
     )
     assert_false("value_eq" in out)
 
@@ -1509,7 +1406,6 @@ def test_transform_value_eq_and_dont_keepalive_called_as_instance_methods() rais
     var struct_names = Dict[String, Bool]()
     struct_names["Project"] = True
     struct_names["Person"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     unique_fields["Project"] = List[String]()
     unique_fields["Project"].append("name")
@@ -1531,7 +1427,7 @@ def test_transform_value_eq_and_dont_keepalive_called_as_instance_methods() rais
         + "        print(released, @@alice.value_eq(@@bob))\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields
     )
     assert_true("sqrrl__handle.dont_keepalive()" in out)
     assert_true("sqrrl__alice.value_eq(sqrrl__bob)" in out)
@@ -1545,7 +1441,6 @@ def test_transform_value_eq_as_table_level_call_rejected() raises:
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Person"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
@@ -1562,7 +1457,7 @@ def test_transform_value_eq_as_table_level_call_rejected() raises:
     var raised = False
     try:
         _ = transform_source(
-            src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+            src, relation_schema, struct_names, unique_fields, indexed_fields
         )
     except:
         raised = True
@@ -1581,7 +1476,6 @@ def test_transform_grouping_query_definitions() raises:
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
     struct_names["Department"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     unique_fields["Employee"] = List[String]()
     unique_fields["Employee"].append("ssn")
@@ -1600,7 +1494,7 @@ def test_transform_grouping_query_definitions() raises:
         + "    indexed @@dept: @@Department\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields
     )
     # Plain indexed field.
     assert_true("def count_name(self, value: String) -> Int:" in out)
@@ -1628,7 +1522,6 @@ def test_transform_grouping_query_call_sites() raises:
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
     struct_names["Department"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
     indexed_fields["Employee"] = List[String]()
@@ -1659,7 +1552,7 @@ def test_transform_grouping_query_call_sites() raises:
         + "            print(@@d.name)\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields
     )
     assert_true('sqrrl___world.Employee.count_name("alice")' in out)
     assert_true("sqrrl___world.Employee.group_by_name()" in out)
@@ -1685,7 +1578,6 @@ def test_transform_group_by_relation_field_requires_marked_suffix() raises:
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
     struct_names["Department"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
     indexed_fields["Employee"] = List[String]()
@@ -1705,7 +1597,7 @@ def test_transform_group_by_relation_field_requires_marked_suffix() raises:
     var raised = False
     try:
         _ = transform_source(
-            src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+            src, relation_schema, struct_names, unique_fields, indexed_fields
         )
     except:
         raised = True
@@ -1716,7 +1608,6 @@ def test_transform_count_by_rejected_for_unique_field() raises:
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Person"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     unique_fields["Person"] = List[String]()
     unique_fields["Person"].append("ssn")
@@ -1733,7 +1624,7 @@ def test_transform_count_by_rejected_for_unique_field() raises:
     var raised = False
     try:
         _ = transform_source(
-            src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+            src, relation_schema, struct_names, unique_fields, indexed_fields
         )
     except:
         raised = True
@@ -1751,7 +1642,6 @@ def test_transform_aggregates_definitions() raises:
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
     struct_names["Department"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
     indexed_fields["Employee"] = List[String]()
@@ -1773,7 +1663,7 @@ def test_transform_aggregates_definitions() raises:
         + "    stats salary: Float64\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields,
+        src, relation_schema, struct_names, unique_fields, indexed_fields,
         multi_fields, ordered_fields, world_methods, stats_fields
     )
     # Whole-table -- all five kinds, unconditional.
@@ -1803,7 +1693,6 @@ def test_transform_ordered_field_earns_min_max_median_without_stats() raises:
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
     var multi_fields = Dict[String, List[String]]()
@@ -1817,7 +1706,7 @@ def test_transform_ordered_field_earns_min_max_median_without_stats() raises:
         + "    ordered years_employed: UInt32\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields,
+        src, relation_schema, struct_names, unique_fields, indexed_fields,
         multi_fields, ordered_fields
     )
     assert_true("def min_years_employed(self) raises -> UInt32:" in out)
@@ -1838,7 +1727,6 @@ def test_transform_aggregate_skips_self_grouping() raises:
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
     indexed_fields["Employee"] = List[String]()
@@ -1856,7 +1744,7 @@ def test_transform_aggregate_skips_self_grouping() raises:
         + "    indexed stats salary: Float64\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields,
+        src, relation_schema, struct_names, unique_fields, indexed_fields,
         multi_fields, ordered_fields, world_methods, stats_fields
     )
     assert_false("sum_salary_by_salary" in out)
@@ -1875,7 +1763,6 @@ def test_transform_multi_field_excluded_from_aggregation_but_still_groupable() r
     var struct_names = Dict[String, Bool]()
     struct_names["Department"] = True
     struct_names["Project"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
     var multi_fields = Dict[String, List[String]]()
@@ -1896,7 +1783,7 @@ def test_transform_multi_field_excluded_from_aggregation_but_still_groupable() r
         + "    multi stats @@projects: @@Project\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields,
+        src, relation_schema, struct_names, unique_fields, indexed_fields,
         multi_fields, ordered_fields, world_methods, stats_fields
     )
     assert_false("sum_sqrrl__projects" in out)
@@ -1913,7 +1800,6 @@ def test_transform_entity_gets_json_serializable_conformance() raises:
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Person"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
@@ -1922,7 +1808,7 @@ def test_transform_entity_gets_json_serializable_conformance() raises:
         + "    name: String\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields, json_used=True
+        src, relation_schema, struct_names, unique_fields, indexed_fields, json_used=True
     )
     assert_true("sqrrl___JsonSerializable" in out)
     assert_true("def sqrrl__to_json(self) -> String:" in out)
@@ -1943,7 +1829,6 @@ def test_transform_entity_omits_json_serializable_when_project_never_uses_json()
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Person"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
@@ -1952,7 +1837,7 @@ def test_transform_entity_omits_json_serializable_when_project_never_uses_json()
         + "    name: String\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields
     )
     assert_true("sqrrl___JsonSerializable" not in out)
     assert_true("sqrrl__to_json" not in out)
@@ -1970,7 +1855,6 @@ def test_transform_begin_and_end_init_from_json() raises:
     ASAP-destruction fix, not a bare reassignment)."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
@@ -1982,7 +1866,7 @@ def test_transform_begin_and_end_init_from_json() raises:
         + "        @@@end_init_from_json()\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields
     )
     assert_true(
         "var sqrrl___temp_keep_alives = sqrrl___begin_init_from_json(sqrrl___world, dump)" in out
@@ -1993,7 +1877,6 @@ def test_transform_begin_and_end_init_from_json() raises:
 def test_transform_init_from_json_and_to_json() raises:
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
@@ -2004,7 +1887,7 @@ def test_transform_init_from_json_and_to_json() raises:
         + "        @@@init_from_json(dump)\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields
     )
     assert_true("sqrrl___world_to_json(sqrrl___world)" in out)
     assert_true("sqrrl___init_from_json(sqrrl___world, dump)" in out)
@@ -2015,7 +1898,6 @@ def test_transform_json_markers_need_world() raises:
     other world-needing construct already enforces."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
@@ -2026,7 +1908,7 @@ def test_transform_json_markers_need_world() raises:
     var raised = False
     try:
         _ = transform_source(
-            src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+            src, relation_schema, struct_names, unique_fields, indexed_fields
         )
     except:
         raised = True
@@ -2036,7 +1918,6 @@ def test_transform_json_markers_need_world() raises:
 def test_transform_end_init_from_json_without_begin_rejected() raises:
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
@@ -2048,7 +1929,7 @@ def test_transform_end_init_from_json_without_begin_rejected() raises:
     var raised = False
     try:
         _ = transform_source(
-            src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+            src, relation_schema, struct_names, unique_fields, indexed_fields
         )
     except:
         raised = True
@@ -2061,7 +1942,6 @@ def test_transform_repeat_begin_init_from_json_without_end_rejected() raises:
     plan's judgment call #2)."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
@@ -2075,7 +1955,7 @@ def test_transform_repeat_begin_init_from_json_without_end_rejected() raises:
     var raised = False
     try:
         _ = transform_source(
-            src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+            src, relation_schema, struct_names, unique_fields, indexed_fields
         )
     except:
         raised = True
@@ -2099,7 +1979,6 @@ def test_transform_plain_struct_field_declaration_rewrites() raises:
     doesn't recognize."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
     var plain_struct_names = Dict[String, Bool]()
@@ -2114,7 +1993,6 @@ def test_transform_plain_struct_field_declaration_rewrites() raises:
         src,
         relation_schema,
         struct_names,
-        function_returns,
         unique_fields,
         indexed_fields,
         plain_struct_names=plain_struct_names,
@@ -2125,21 +2003,15 @@ def test_transform_plain_struct_field_declaration_rewrites() raises:
     assert_false("@@Employee" in out)
 
 
-def test_transform_plain_struct_wrapped_relation_field_declaration_rewrites() raises:
-    """A hand-written plain struct's own `var @@members: List[@@Employee]`
-    field declaration -- a *wrapped* relation, not a bare one -- used to
-    raise outright ("a wrapped/container relation field isn't supported
-    as a hand-written struct's own field declaration yet"), an explicit,
-    honest gap the code itself flagged. Renders the same way the bare
-    case already does -- name `sqrrl__`-prefixed, wrapper kept as-is, the
-    relation-typed argument also `sqrrl__`-prefixed. `parse_entity_param`'s
-    own scanner now scans the full type text generally (`scan_entity_
-    param_type_text`) -- a 2-argument wrapper (`Dict[@@K, V]`) or a
-    relation nested inside a further container works the same way, see
-    the dedicated tests below."""
+def test_transform_plain_struct_container_relation_field_declaration_stays_bare() raises:
+    """A hand-written plain struct's own `var members: List[@@Employee]`
+    field declaration -- a *container* relation -- mandatory marking
+    dropped (Part 2) means the field's own name stays bare (never
+    `sqrrl__`-prefixed, unlike a *single* relation field's own name,
+    still always renamed) while the type itself still resolves
+    `@@Employee` -> `sqrrl__Employee` correctly wherever it appears."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
     var plain_struct_names = Dict[String, Bool]()
@@ -2147,18 +2019,17 @@ def test_transform_plain_struct_wrapped_relation_field_declaration_rewrites() ra
 
     var src = String(
         "struct Roster(Movable, ImplicitlyDeletable):\n"
-        + "    var @@members: List[@@Employee]\n"
+        + "    var members: List[@@Employee]\n"
     )
     var out = transform_source(
         src,
         relation_schema,
         struct_names,
-        function_returns,
         unique_fields,
         indexed_fields,
         plain_struct_names=plain_struct_names,
     )
-    assert_true("var sqrrl__members: List[sqrrl__Employee]" in out)
+    assert_true("var members: List[sqrrl__Employee]" in out)
     assert_false("@@members" in out)
     assert_false("@@Employee" in out)
 
@@ -2179,7 +2050,6 @@ def test_transform_plain_struct_field_with_value_position_relation_stays_unmarke
     than a single-wrapper-only special case."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
     var plain_struct_names = Dict[String, Bool]()
@@ -2193,7 +2063,6 @@ def test_transform_plain_struct_field_with_value_position_relation_stays_unmarke
         src,
         relation_schema,
         struct_names,
-        function_returns,
         unique_fields,
         indexed_fields,
         plain_struct_names=plain_struct_names,
@@ -2202,34 +2071,29 @@ def test_transform_plain_struct_field_with_value_position_relation_stays_unmarke
     assert_false("@@" in out)
 
 
-def test_transform_plain_struct_field_value_position_needs_marking() raises:
+def test_transform_plain_struct_container_relation_field_marking_symmetry() raises:
     """The value-position rule, widened: `Dict[String, @@Employee]`'s
-    relation *is* directly entity-reachable now (real Mojo indexing
-    yields it), so a plain-struct field of this shape must be marked
-    (`@@members`) -- a *bare* `members: Dict[String, @@Employee]` is now
-    the rejected direction instead (under-marked). This marking-symmetry
-    check is `parse_hand_written_struct_fields`'s own (run at discovery
-    time, not by `transform_source` directly -- a hand-written struct's
-    body is ordinary Mojo text as far as the per-file rewrite pass is
-    concerned; only the discovery-time field-list scan validates it), so
-    it's tested directly here rather than through `transform_source`,
-    which never re-derives a plain struct's own field list from raw
-    source at all (it only ever consumes an already-built `plain_value_
-    fields` map, passed in as a test parameter everywhere else in this
-    file)."""
+    relation *is* directly entity-reachable (real Mojo indexing yields
+    it) *and* container-shaped, so mandatory marking (Part 2) makes the
+    *bare* spelling the accepted one now, and the *old* marked spelling
+    (`@@members`) the rejected direction instead -- the exact inverse of
+    the pre-Part-2 behavior. This marking-symmetry check is `parse_hand_
+    written_struct_fields`'s own (run at discovery time, not by
+    `transform_source` directly), so it's tested directly here rather
+    than through `transform_source`."""
     var bare_fields = List[Field]()
+    parse_hand_written_struct_fields("    var members: Dict[String, @@Employee]\n", bare_fields)
+    assert_equal(len(bare_fields), 1)
+    assert_equal(bare_fields[0].name, "members")
+    assert_equal(bare_fields[0].type_str, "Dict[String, @@Employee]")
+
+    var marked_fields = List[Field]()
     var raised = False
     try:
-        parse_hand_written_struct_fields("    var members: Dict[String, @@Employee]\n", bare_fields)
+        parse_hand_written_struct_fields("    var @@members: Dict[String, @@Employee]\n", marked_fields)
     except:
         raised = True
     assert_true(raised)
-
-    var marked_fields = List[Field]()
-    parse_hand_written_struct_fields("    var @@members: Dict[String, @@Employee]\n", marked_fields)
-    assert_equal(len(marked_fields), 1)
-    assert_equal(marked_fields[0].name, "members")
-    assert_equal(marked_fields[0].type_str, "Dict[String, @@Employee]")
 
 
 def test_transform_entity_param_dict_key_position_registers_type() raises:
@@ -2241,7 +2105,6 @@ def test_transform_entity_param_dict_key_position_registers_type() raises:
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
@@ -2251,7 +2114,7 @@ def test_transform_entity_param_dict_key_position_registers_type() raises:
         + "        print(@@e.name)\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields
     )
     assert_true("def foo(sqrrl__scores: Dict[sqrrl__Employee, String]) raises:" in out)
     assert_true("print(sqrrl__e._inner[]._name)" in out)
@@ -2271,7 +2134,6 @@ def test_transform_entity_param_value_position_needs_marking() raises:
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
@@ -2280,7 +2142,7 @@ def test_transform_entity_param_value_position_needs_marking() raises:
         + "    pass\n"
     )
     var out = transform_source(
-        marked_src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        marked_src, relation_schema, struct_names, unique_fields, indexed_fields
     )
     assert_true("def foo(sqrrl__scores: Dict[String, sqrrl__Employee]) raises:" in out)
 
@@ -2300,7 +2162,6 @@ def test_transform_method_entity_param_beyond_self_registers_type() raises:
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
     struct_names["Department"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
@@ -2312,7 +2173,7 @@ def test_transform_method_entity_param_beyond_self_registers_type() raises:
         + "        return @@e.name\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields
     )
     assert_true("def greet(self, sqrrl__e: sqrrl__Employee) -> String:" in out)
     assert_true("return sqrrl__e._inner[]._name" in out)
@@ -2329,7 +2190,6 @@ def test_transform_struct_field_referencing_plain_struct_renders_bare_type() rai
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Person"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
     var plain_struct_names = Dict[String, Bool]()
@@ -2347,7 +2207,6 @@ def test_transform_struct_field_referencing_plain_struct_renders_bare_type() rai
         src,
         relation_schema,
         struct_names,
-        function_returns,
         unique_fields,
         indexed_fields,
         plain_struct_names=plain_struct_names,
@@ -2372,7 +2231,6 @@ def test_transform_real_plain_real_hop_chain_read_and_write() raises:
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
     struct_names["Person"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
     var plain_struct_names = Dict[String, Bool]()
@@ -2400,7 +2258,6 @@ def test_transform_real_plain_real_hop_chain_read_and_write() raises:
         src,
         relation_schema,
         struct_names,
-        function_returns,
         unique_fields,
         indexed_fields,
         plain_struct_names=plain_struct_names,
@@ -2433,7 +2290,6 @@ def test_transform_generic_plain_struct_field_access_not_treated_as_container() 
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Person"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
     var plain_struct_names = Dict[String, Bool]()
@@ -2454,7 +2310,6 @@ def test_transform_generic_plain_struct_field_access_not_treated_as_container() 
         src,
         relation_schema,
         struct_names,
-        function_returns,
         unique_fields,
         indexed_fields,
         plain_struct_names=plain_struct_names,
@@ -2479,17 +2334,16 @@ def test_transform_for_loop_over_container_field_registers_element_type() raises
     var struct_names = Dict[String, Bool]()
     struct_names["Department"] = True
     struct_names["Employee"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
     var src = String(
         "def foo(@@eng: @@Department) raises:\n"
-        + "    for @@e in @@eng.@@members:\n"
+        + "    for @@e in @@eng.members:\n"
         + "        print(@@e.name)\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields
     )
     assert_true("for sqrrl__e in " in out)
     assert_true("sqrrl__e._inner[]._name" in out)
@@ -2513,17 +2367,16 @@ def test_transform_for_loop_over_indexed_container_field_registers_element_type(
     var struct_names = Dict[String, Bool]()
     struct_names["Department"] = True
     struct_names["Employee"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
     var src = String(
         "def foo(@@eng: @@Department) raises:\n"
-        + "    for @@e in @@eng.@@groups[0]:\n"
+        + "    for @@e in @@eng.groups[0]:\n"
         + "        print(@@e.name)\n"
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields
     )
     assert_true("for sqrrl__e in " in out)
     assert_true("sqrrl__e._inner[]._name" in out)
@@ -2547,7 +2400,6 @@ def test_transform_dict_value_position_field_index_then_field_access() raises:
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
     struct_names["Department"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
     var plain_value_fields = Dict[String, Dict[String, String]]()
@@ -2559,7 +2411,7 @@ def test_transform_dict_value_position_field_index_then_field_access() raises:
         + '    print(@@eng.scores["senior"].name)\n'
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields,
+        src, relation_schema, struct_names, unique_fields, indexed_fields,
         plain_value_fields=plain_value_fields,
     )
     assert_true('print(sqrrl__eng._inner[]._scores["senior"]._inner[]._name)' in out)
@@ -2577,7 +2429,6 @@ def test_transform_custom_two_argument_wrapper_index_yields_second_argument() ra
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
     struct_names["Department"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
     var plain_value_fields = Dict[String, Dict[String, String]]()
@@ -2589,37 +2440,27 @@ def test_transform_custom_two_argument_wrapper_index_yields_second_argument() ra
         + '    print(@@eng.scores["senior"].name)\n'
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields,
+        src, relation_schema, struct_names, unique_fields, indexed_fields,
         plain_value_fields=plain_value_fields,
     )
     assert_true('print(sqrrl__eng._inner[]._scores["senior"]._inner[]._name)' in out)
 
 
-def test_transform_function_value_position_return_needs_marking_and_chains_directly() raises:
-    """Mandatory marking, widened: a function whose return type has its
-    only relation in a two-argument wrapper's *second* position (`Dict[
-    String, @@Employee]`) must now mark its own name too -- previously
-    stayed correctly bare (relation unreachable at all under the old,
-    iteration-only rule), but the widened rule makes indexing a real
-    reachability path, so leaving it bare is now under-marked. Once
-    marked, its call is a real marker position exactly like a first-
-    position-returning function's -- direct indexing/chaining works, no
-    intermediate variable or explicit type annotation required."""
+def test_transform_bare_function_value_position_return_chains_directly() raises:
+    """A bare function whose return type has its only relation in a
+    two-argument wrapper's *second* position (`Dict[String, @@Employee]`)
+    needs no marking at all now -- registers in `build_bare_function_
+    returns` the same as any other bare function, and its call is a
+    real marker position via `BARE_CALL_CHAIN` -- direct indexing/
+    chaining works, no intermediate variable required. The old marked
+    spelling (`@@scores_for`) is what's rejected now."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
     struct_names["Department"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
-    # The bare/marked cross-validation is `build_function_returns`'s own
-    # job (a signature-scan pass over raw files, run before `transform_
-    # source` -- which only ever *consumes* an already-built `function_
-    # returns` map, never re-derives it from source), so it's tested
-    # directly here rather than through `transform_source`, matching
-    # `test_build_function_returns_rejects_unmarked_entity_returning_
-    # function`'s own established pattern.
     var bare_path = String("/tmp/test_value_position_return_bare.mojo.sqrrl")
     var bf = open(bare_path, "w")
     bf.write(
@@ -2629,12 +2470,9 @@ def test_transform_function_value_position_return_needs_marking_and_chains_direc
     bf.close()
     var bare_files = List[String]()
     bare_files.append(bare_path)
-    var raised = False
-    try:
-        _ = build_function_returns(bare_files)
-    except:
-        raised = True
-    assert_true(raised)
+    var registered = build_bare_function_returns(bare_files)
+    assert_true("scores_for" in registered)
+    assert_equal(registered["scores_for"], "Dict[String, Employee]")
 
     var marked_path = String("/tmp/test_value_position_return_marked.mojo.sqrrl")
     var mf = open(marked_path, "w")
@@ -2645,51 +2483,70 @@ def test_transform_function_value_position_return_needs_marking_and_chains_direc
     mf.close()
     var marked_files = List[String]()
     marked_files.append(marked_path)
-    var registered = build_function_returns(marked_files)
-    assert_true("scores_for" in registered)
-    assert_equal(registered["scores_for"], "Dict[String, Employee]")
+    var raised = False
+    try:
+        _ = build_bare_function_returns(marked_files)
+    except:
+        raised = True
+    assert_true(raised)
 
-    function_returns["scores_for"] = "Dict[String, Employee]"
+    var bare_function_returns = Dict[String, String]()
+    bare_function_returns["scores_for"] = "Dict[String, Employee]"
     var call_src = String(
         "def foo(@@eng: @@Department) raises:\n"
-        + '    print(@@scores_for(@@eng)["senior"].name)\n'
+        + '    print(scores_for(@@eng)["senior"].name)\n'
     )
     var out = transform_source(
-        call_src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        call_src, relation_schema, struct_names, unique_fields, indexed_fields,
+        bare_function_returns=bare_function_returns,
     )
-    assert_true('print(sqrrl__scores_for(sqrrl__eng)["senior"]._inner[]._name)' in out)
+    assert_true('print(scores_for(sqrrl__eng)["senior"]._inner[]._name)' in out)
 
 
 def test_transform_container_constructor_infers_second_position_relation() raises:
-    """`handle_name_ref`'s own unmarked-RHS container-constructor
-    inference, widened to match: `var @@x = Dict[String, @@Employee]()`
-    infers `@@x`'s type from the *second* argument, the same way `var
-    @@x = List[@@Employee]()` already inferred it from the first --
-    mirrors `is_directly_entity_reachable`'s own position 1-or-2 rule
-    for declarations, applied here to a bare container constructor's own
-    inferred type instead."""
+    """`PLAIN_VAR_DECL`'s own inferred-from-constructor branch: `var
+    scores = Dict[String, @@Employee]()` infers the type from the
+    *second* argument, the same way `var x = List[@@Employee]()` already
+    infers it from the first -- mirrors `is_directly_entity_reachable`'s
+    own position 1-or-2 rule for declarations. A container constructor's
+    own destination is always bare now -- the old marked spelling
+    (`var @@scores = ...`) is what's rejected (`handle_name_ref`'s own
+    check: the container itself is never the entity)."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
     var src = String(
         "def foo() raises:\n"
+        + "    var scores = Dict[String, @@Employee]()\n"
+        + '    print(scores["senior"].name)\n'
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, unique_fields, indexed_fields
+    )
+    assert_true("var scores = Dict[String, sqrrl__Employee]()" in out)
+    assert_true('print(scores["senior"]._inner[]._name)' in out)
+
+    var marked_src = String(
+        "def foo() raises:\n"
         + "    var @@scores = Dict[String, @@Employee]()\n"
         + '    print(@@scores["senior"].name)\n'
     )
-    var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
-    )
-    assert_true("var sqrrl__scores = Dict[String, sqrrl__Employee]()" in out)
-    assert_true('print(sqrrl__scores["senior"]._inner[]._name)' in out)
+    var raised = False
+    try:
+        _ = transform_source(
+            marked_src, relation_schema, struct_names, unique_fields, indexed_fields
+        )
+    except:
+        raised = True
+    assert_true(raised)
 
 
 def test_transform_container_constructor_infers_nested_relation() raises:
     """The constructor inference is fully general, not one-level-only --
-    `var @@x = List[Dict[String, @@Employee]]()` (the relation nested
+    `var rosters = List[Dict[String, @@Employee]]()` (the relation nested
     two levels down, in the *inner* wrapper's second position) is
     inferred correctly, since the inference reuses `is_directly_entity_
     reachable`/`render_relation_stripped` directly (the same recursive
@@ -2699,67 +2556,70 @@ def test_transform_container_constructor_infers_nested_relation() raises:
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
-    var function_returns = Dict[String, String]()
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
     var src = String(
         "def foo() raises:\n"
-        + "    var @@rosters = List[Dict[String, @@Employee]]()\n"
-        + '    print(@@rosters[0]["senior"].name)\n'
+        + "    var rosters = List[Dict[String, @@Employee]]()\n"
+        + '    print(rosters[0]["senior"].name)\n'
     )
     var out = transform_source(
-        src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        src, relation_schema, struct_names, unique_fields, indexed_fields
     )
-    assert_true("var sqrrl__rosters = List[Dict[String, sqrrl__Employee]]()" in out)
-    assert_true('print(sqrrl__rosters[0]["senior"]._inner[]._name)' in out)
+    assert_true("var rosters = List[Dict[String, sqrrl__Employee]]()" in out)
+    assert_true('print(rosters[0]["senior"]._inner[]._name)' in out)
 
 
 def test_transform_for_loop_over_value_position_call_rejects_marked_variable() raises:
-    """The for-loop-variable-marking guard: `for @@x in <a marked call
+    """The for-loop-variable-marking guard: `for @@x in <a bare call
     whose only relation is in a two-argument wrapper's second
     position>:` is rejected -- iterating it only ever yields the *key*
     (real Dict iteration semantics), never the entity, so `@@x` would
     otherwise silently bind to a plain, non-entity value with no error
-    at all. A *bare* `for x in ...:` is the correct, accepted form."""
+    at all. A *bare* `for x in ...:` is the correct, accepted form. The
+    function's own name is bare in both cases now -- mandatory marking
+    for a function's return shape is gone, unrelated to this guard."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
     struct_names["Department"] = True
-    var function_returns = Dict[String, String]()
-    function_returns["scores_for"] = "Dict[String, Employee]"
+    var bare_function_returns = Dict[String, String]()
+    bare_function_returns["scores_for"] = "Dict[String, Employee]"
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
     var marked_loop_src = String(
-        "def @@scores_for(@@d: @@Department) -> Dict[String, @@Employee]:\n"
+        "def scores_for(@@d: @@Department) -> Dict[String, @@Employee]:\n"
         + "    return @@d.name\n"
         + "\n"
         + "def foo(@@eng: @@Department) raises:\n"
-        + "    for @@x in @@scores_for(@@eng):\n"
+        + "    for @@x in scores_for(@@eng):\n"
         + "        print(@@x.name)\n"
     )
     var raised = False
     try:
         _ = transform_source(
-            marked_loop_src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+            marked_loop_src, relation_schema, struct_names, unique_fields, indexed_fields,
+            bare_function_returns=bare_function_returns,
         )
     except:
         raised = True
     assert_true(raised)
 
     var bare_loop_src = String(
-        "def @@scores_for(@@d: @@Department) -> Dict[String, @@Employee]:\n"
+        "def scores_for(@@d: @@Department) -> Dict[String, @@Employee]:\n"
         + "    return @@d.name\n"
         + "\n"
         + "def foo(@@eng: @@Department) raises:\n"
-        + "    for key in @@scores_for(@@eng):\n"
+        + "    for key in scores_for(@@eng):\n"
         + "        print(key)\n"
     )
     var out = transform_source(
-        bare_loop_src, relation_schema, struct_names, function_returns, unique_fields, indexed_fields
+        bare_loop_src, relation_schema, struct_names, unique_fields, indexed_fields,
+        bare_function_returns=bare_function_returns,
     )
-    assert_true("for key in sqrrl__scores_for(sqrrl__eng):" in out)
+    assert_true("for key in scores_for(sqrrl__eng):" in out)
 
 
 def test_check_no_relation_cycles_through_plain_struct_rejected() raises:

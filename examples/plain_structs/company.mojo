@@ -354,8 +354,9 @@ def main() raises:
         # holding a plain-struct value directly (not reached through an
         # entity's own field this time). No explicit `: Address`
         # annotation needed here -- the constructor call on the right is
-        # itself enough to infer it from, the same way a marked entity's
-        # own `var @@x = List[@@Type]()` already can.
+        # itself enough to infer it from, the same way a bare `var x =
+        # List[@@Type]()` (a container constructor, always bare -- the
+        # container itself is never the entity) already can.
         var addr2 = Address(city = "Ogdenville", sqrrl__owner = sqrrl__bob)
         print(addr2.sqrrl__owner._inner[]._name)
         addr2.sqrrl__owner = sqrrl__bob;

@@ -10,7 +10,6 @@ from squirrel_compiler.driver.discovery import (
     build_multi_fields,
     build_ordered_fields,
     build_world_methods,
-    build_method_returns,
     build_bare_method_returns,
     build_plain_struct_bare_method_returns,
     build_stats_fields,
@@ -22,8 +21,7 @@ from squirrel_compiler.driver.discovery import (
 )
 from squirrel_compiler.driver.cycles import check_no_relation_cycles
 from squirrel_compiler.driver.misc_builders import (
-    build_function_returns,
-    build_bare_plain_function_returns,
+    build_bare_function_returns,
     build_function_symbols,
     check_single_world_scope_call,
     project_uses_json,
@@ -67,14 +65,12 @@ def convert_directory(target_root: String) raises:
     ensure_init_files(sqrrl_files, target_root)
 
     var relation_schema = build_relation_schema(discovery, plain_struct_fields)
-    var function_returns = build_function_returns(sqrrl_files)
-    var bare_function_returns = build_bare_plain_function_returns(sqrrl_files)
+    var bare_function_returns = build_bare_function_returns(sqrrl_files)
     var unique_fields = build_unique_fields(discovery)
     var indexed_fields = build_indexed_fields(discovery)
     var multi_fields = build_multi_fields(discovery)
     var ordered_fields = build_ordered_fields(discovery)
     var world_methods = build_world_methods(discovery)
-    var method_returns = build_method_returns(discovery)
     var bare_method_returns = build_bare_method_returns(discovery)
     # A plain struct's own bare methods are discovered separately (`plain_
     # struct_discovery`, not `discovery`'s own `@@struct`-only list) but
@@ -138,9 +134,9 @@ def convert_directory(target_root: String) raises:
         var out_path = mojo_output_path(path)
         var own_module_path = module_path_for(path, target_root)
         var generated = emit_file(
-            path, own_module_path, relation_schema, struct_names, function_returns, unique_fields,
+            path, own_module_path, relation_schema, struct_names, unique_fields,
             indexed_fields, multi_fields, ordered_fields, world_methods, stats_fields, entity_symbols,
-            plain_struct_names, plain_value_fields, json_used, method_returns=method_returns,
+            plain_struct_names, plain_value_fields, json_used,
             bare_function_returns=bare_function_returns, bare_method_returns=bare_method_returns,
         )
         out_paths.append(out_path)

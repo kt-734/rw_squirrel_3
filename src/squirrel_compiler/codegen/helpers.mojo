@@ -437,16 +437,25 @@ def scan_entity_return_shape(text: String) raises -> Optional[String]:
 
 
 def scan_bare_return_type_text(text: String) raises -> Optional[String]:
-    """Like `scan_entity_return_shape`, but returns the raw return-type
-    text unconditionally (not just when it's entity-shaped, and not
-    relation-stripped) -- the counterpart for a *bare* function or method,
-    whose return type might be a plain struct or a container of one
-    instead of (or as well as) an entity, which `is_directly_entity_
-    reachable` alone would say no to. Shared by `driver/misc_builders.
-    mojo`'s `build_bare_plain_function_returns` (top-level defs) and
-    `codegen/methods.mojo`'s `_parse_method_span` (struct methods) -- same
-    "identical scan once positioned right after the name" reasoning as
-    `scan_entity_return_shape` itself."""
+    """Like `scan_entity_return_shape`, but returns the return-type text
+    unconditionally (not just when it's entity-shaped) -- the counterpart
+    for a *bare* function or method, whose return type might be a plain
+    struct, an entity, or a container of either, which `is_directly_
+    entity_reachable` alone would say no to for the plain cases. Shared by
+    `driver/misc_builders.mojo`'s `build_bare_function_returns` (top-level
+    defs) and `codegen/methods.mojo`'s `_parse_method_span` (struct
+    methods) -- same "identical scan once positioned right after the
+    name" reasoning as `scan_entity_return_shape` itself.
+
+    Still runs the captured text through `render_relation_stripped()`
+    (mandatory marking dropped for entity-shaped returns: a bare function
+    can now return `@@Employee`/`List[@@Employee]` directly, and this is
+    the one place that text gets `@@`-stripped before landing in `ctx.
+    entity_to_type`/`bare_function_returns`/`bare_method_returns`, which
+    everywhere else store the bare, unmarked form -- `Employee`, not
+    `@@Employee`). A no-op for a genuinely plain type (no `@@` anywhere to
+    strip), so this one shared scan now correctly covers all three shapes
+    -- plain, entity, and container-of-either -- uniformly."""
     var sc = Scanner(text)
     var found_arrow = False
     while not sc.at_end():
@@ -460,4 +469,4 @@ def scan_bare_return_type_text(text: String) raises -> Optional[String]:
     var type_text = sc.scan_bracket_depth_aware_span(":")
     if type_text.byte_length() == 0:
         return None
-    return Optional[String](type_text)
+    return Optional[String](parse_type_expr(type_text).render_relation_stripped())
