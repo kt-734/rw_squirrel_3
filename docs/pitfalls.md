@@ -97,6 +97,16 @@ to repeat that; write it bare. A *single* (non-container) relation field
 is unaffected — still always marked. See
 [syntax-reference.md](syntax-reference.md#relation-fields).
 
+## `'@@' marking on a name bound to a container is no longer used or needed`
+
+A def/method parameter, or a var-decl with an explicit type, whose type
+is a container of a relation (`extra: List[@@Employee]`) had its own name
+marked (`@@extra`) — the old spelling, same axis as a container field's
+own name above. The type already says it's a relation, so the name
+doesn't need to repeat that; write it bare. A *single* (non-container)
+relation is unaffected — still always marked (`@@e: @@Employee`). See
+[syntax-reference.md](syntax-reference.md#functions-and-methods).
+
 ## A custom container's own `__iter__` crashes the *compiler*, not just fails to compile
 
 If a hand-written container's `__iter__` uses `Iterable`/`__has_next__`

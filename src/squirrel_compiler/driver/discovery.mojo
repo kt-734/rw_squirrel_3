@@ -14,14 +14,40 @@ from squirrel_compiler.codegen.methods import world_marked_method_names, bare_me
 
 struct DiscoveredStruct(Copyable, Movable, ImplicitlyDeletable):
     """One `@@struct` found during the directory walk, tagged with the
-    dotted module path of the file that declared it."""
+    dotted module path of the file that declared it.
+
+    `full_source`: the *entire* declaring file's own raw text (every
+    struct from the same file carries its own copy -- same duplication
+    `module_path` already has, one entry per struct, not deduplicated
+    per file) -- `world_marked_method_names`/`bare_method_returns`
+    (`codegen/methods.mojo`) need it, alongside `parsed.method_body_
+    start_offset`, to report a real file location if a method's own
+    header turns out malformed during this project-wide discovery pass,
+    which runs well before the main per-file transform (and its own
+    file-path-prefixing catch) even starts.
+
+    `file_path`: the real `.mojo.sqrrl` path (not `module_path`, a
+    dotted module name) -- `build_world_methods`/`build_bare_method_
+    returns` use it to prefix a caught error the same way `discover_
+    structs`'s own catch already does, since nothing wraps *their* own
+    per-struct calls with a file path otherwise."""
 
     var module_path: String
     var parsed: ParsedStruct
+    var full_source: String
+    var file_path: String
 
-    def __init__(out self, var module_path: String, var parsed: ParsedStruct):
+    def __init__(
+        out self,
+        var module_path: String,
+        var parsed: ParsedStruct,
+        var full_source: String = String(),
+        var file_path: String = String(),
+    ):
         self.module_path = module_path^
         self.parsed = parsed^
+        self.full_source = full_source^
+        self.file_path = file_path^
 
 
 struct DiscoveryResult(Movable):
@@ -53,7 +79,7 @@ def discover_structs(sqrrl_files: List[String], target_root: String) raises -> D
             while sc.find_next_struct_decl():
                 var parsed = sc.parse_struct()
                 module_of[parsed.name] = module_path
-                discovered.append(DiscoveredStruct(module_path, parsed^))
+                discovered.append(DiscoveredStruct(module_path, parsed^, source, path))
         except e:
             raise Error(path + ": " + String(e))
 
@@ -329,7 +355,12 @@ def build_world_methods(discovery: DiscoveryResult) raises -> Dict[String, List[
     relation-schema resolution already needs)."""
     var world_methods = Dict[String, List[String]]()
     for ds in discovery.structs:
-        world_methods[ds.parsed.name] = world_marked_method_names(ds.parsed.method_body, ds.parsed.name)
+        try:
+            world_methods[ds.parsed.name] = world_marked_method_names(
+                ds.parsed.method_body, ds.parsed.name, ds.full_source, ds.parsed.method_body_start_offset
+            )
+        except e:
+            raise Error(ds.file_path + ": " + String(e))
     return world_methods^
 
 
@@ -347,7 +378,12 @@ def build_bare_method_returns(discovery: DiscoveryResult) raises -> Dict[String,
     top-level function's own call result."""
     var bare_method_returns_out = Dict[String, Dict[String, String]]()
     for ds in discovery.structs:
-        bare_method_returns_out[ds.parsed.name] = bare_method_returns(ds.parsed.method_body, ds.parsed.name)
+        try:
+            bare_method_returns_out[ds.parsed.name] = bare_method_returns(
+                ds.parsed.method_body, ds.parsed.name, ds.full_source, ds.parsed.method_body_start_offset
+            )
+        except e:
+            raise Error(ds.file_path + ": " + String(e))
     return bare_method_returns_out^
 
 
@@ -379,9 +415,16 @@ def build_plain_struct_bare_method_returns(
     "struct name -> bare method name -> return type" maps)."""
     var out = Dict[String, Dict[String, String]]()
     for struct_name in plain_struct_discovery.method_body.keys():
-        out[String(struct_name)] = bare_method_returns(
-            plain_struct_discovery.method_body[String(struct_name)], String(struct_name)
-        )
+        # No real file offset available for a hand-written plain struct's
+        # own method text (unlike `@@struct`'s `method_body_start_offset`)
+        # -- `full_source=method_body, offset=0` is the same "line 1 of
+        # the isolated text" resolution this path already had; no worse
+        # than before, and `_parse_method_span`'s '@@'-marking migration
+        # raise never fires here anyway (a plain struct's own method is
+        # never `@@`/`@@@`-marked in practice, per this function's own
+        # docstring above).
+        var body = plain_struct_discovery.method_body[String(struct_name)]
+        out[String(struct_name)] = bare_method_returns(body, String(struct_name), body, 0)
     return out^
 
 

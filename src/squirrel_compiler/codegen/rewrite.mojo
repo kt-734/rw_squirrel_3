@@ -83,7 +83,13 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
             var parsed = sc.parse_struct()
             out += emit_entity_inner(parsed, ctx.plain_struct_names)
             out += "\n\n"
-            out += emit_entity(parsed, rewrite_method_body(parsed.method_body, parsed.name, ctx), ctx.json_used)
+            out += emit_entity(
+                parsed,
+                rewrite_method_body(
+                    parsed.method_body, parsed.name, ctx, source, parsed.method_body_start_offset
+                ),
+                ctx.json_used,
+            )
             out += "\n\n"
             out += emit_indexes(parsed, ctx.plain_struct_names)
             out += "\n\n"
@@ -295,6 +301,24 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
             # the value's own local/parameter name.
             var pvd_start = sc.pos
             var pvd = sc.parse_plain_var_decl()
+            if pvd.type_text.startswith("@@"):
+                # `<bare_name>: @@Type` -- a single relation whose type
+                # carries `@@` but whose own name doesn't (`at_plain_var_
+                # decl`/`parse_plain_var_decl` now claim this shape
+                # instead of declining it, specifically so this handler
+                # can raise a clear error here, with the real name and
+                # type both in hand, instead of the confusing "was never
+                # constructed or bound" a stray, unclaimed `@@Type` used
+                # to surface as three bytes later). A container (`List[
+                # @@Type]`) never reaches here -- its own `type_text`
+                # starts with the wrapper's name, not `@@`.
+                raise sc.err(
+                    "InvalidSquirrelSyntax: '"
+                    + pvd.name + ": " + pvd.type_text
+                    + "' -- a single relation needs '@@' on the name too,"
+                    " not just the type; write '@@" + pvd.name + ": "
+                    + pvd.type_text + "' instead"
+                )
             var is_param = is_in_def_signature(source, pvd_start)
             # `type_is_inferred` (`var addresses = List[Address]()`, no
             # explicit annotation) only ever matches a var-decl by
@@ -615,6 +639,39 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
                     out += fel_between + fel_func_name + "(" + fel_rewritten_args + ")"
                     pending_for_loop_decl = None
                     fel_consumed = True
+            elif (
+                fel_func_name.byte_length() > 0
+                and fel_func_name in ctx.entity_to_type
+                and is_container_type(ctx.entity_to_type[fel_func_name])
+            ):
+                # `for @@x in <bare_name>:` -- no call, no `@@`-rooted
+                # chain, just a bare local/parameter's own name directly
+                # (a container-of-entity parameter, now that its own
+                # marking is bare same as a container field's, or an
+                # equally-bare local var-decl/constructor). Mirrors `PLAIN_
+                # FOR_LOOP`'s own identical check for an *unmarked* loop
+                # var over the same shape (`pfl.container_name in ctx.
+                # entity_to_type`, above) -- previously only a bare
+                # function *call*'s own return type was checked here, so
+                # `for @@e in scores:` (`scores: Dict[@@Employee, String]`,
+                # a bare parameter or local, no call involved at all) left
+                # `e` completely unregistered, a real "was never
+                # constructed" error on a real compile. Only fires when
+                # nothing follows the name but trivia then `:` -- a
+                # trailing `.field`/`[index]` is a different, chain-rooted
+                # shape this lookahead deliberately leaves untouched,
+                # restored below same as the call branch's own failed
+                # attempt.
+                var fel_after_name = sc.pos
+                sc.skip_trivia()
+                if sc.peek() == UInt8(ord(":")):
+                    var fel_registered_type = ctx.entity_to_type[fel_func_name]
+                    _require_for_loop_marking_matches(sc, ctx, fel_registered_type, pending_for_loop_decl.value())
+                    ctx.entity_to_type[name] = container_element_of(fel_registered_type)
+                    out += fel_between + fel_func_name
+                    pending_for_loop_decl = None
+                    fel_consumed = True
+                sc.pos = fel_after_name
             if not fel_consumed:
                 sc.pos = fel_lookahead
 

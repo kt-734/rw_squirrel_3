@@ -16,6 +16,7 @@ from squirrel_compiler.parser.ast import (
 )
 from squirrel_compiler.parser.text_utils import (
     is_ident_char,
+    is_ident_start_char,
     source_location,
     line_indent_of,
     is_after_arrow,
@@ -28,6 +29,7 @@ from squirrel_compiler.parser.text_utils import (
 )
 from squirrel_compiler.parser.field_parsing import parse_struct_body, parse_hand_written_struct_fields
 from squirrel_compiler.parser.relation_type_text import is_directly_entity_reachable
+from squirrel_compiler.parser.type_expr import parse_type_expr
 
 
 def parse_construct_fields(body: String) raises -> List[ConstructField]:
@@ -565,8 +567,9 @@ struct Scanner(Movable):
         if not self.try_consume(":"):
             raise self.err("InvalidSquirrelSyntax: expected ':' after struct name")
         var body = self.scan_indented_block(header_indent)
+        var body_start = self.pos - body.byte_length()
         var struct_fields = List[Field]()
-        var method_body = parse_hand_written_struct_fields(body, struct_fields)
+        var method_body = parse_hand_written_struct_fields(body, self.source, body_start, struct_fields)
         return ParsedStruct(name=name, fields=struct_fields^, method_body=method_body^, type_params=type_params^)
 
     def peek_empty_call_follows(mut self) -> Bool:
@@ -654,7 +657,20 @@ struct Scanner(Movable):
         var had_var = self.try_consume_word("var")
         self.skip_trivia()
         var name = self.scan_ident()
-        if name.byte_length() == 0:
+        if name.byte_length() == 0 or not is_ident_start_char(name.as_bytes()[0]):
+            # The digit-leading case (`0`, `42`) is a real, confirmed
+            # gap on its own: `scan_ident()` has no start/continuation
+            # distinction, so a bare numeric literal immediately before
+            # some unrelated `:` (`if @@d.count() > 0:`, the `0` and the
+            # if-statement's own trailing colon) used to get read as a
+            # plausible "name:" -- harmless only because the type scan
+            # that followed could never resolve to anything real, until
+            # the type happened to look like `@@Type` (crossing right
+            # over the newline into the *next*, completely unrelated
+            # statement, since `skip_trivia` treats newlines as trivia
+            # too) and got accepted as a genuine mismatch to report.
+            # Confirmed via a real compile: `if @@@Department.count() >
+            # 0:\n    @@self.name = ...` misread as `0: @@self`.
             self.pos = save
             return False
         # A handful of Mojo keywords are themselves immediately followed
@@ -685,6 +701,29 @@ struct Scanner(Movable):
         if self.peek() == UInt8(ord(":")):
             self.pos += 1
             self.skip_trivia()
+            if self.starts_with("@@"):
+                # `<bare_name>: @@Type` -- a single relation whose *name*
+                # was left unmarked (only the type carries `@@`), a real
+                # name/type marking mismatch. `scan_ident()` below would
+                # stop dead at the `@` and read as empty, the same as any
+                # other malformed shape -- previously falling through
+                # this lookahead entirely (`return False`) and leaving the
+                # embedded `@@Type` to be discovered several bytes later,
+                # on its own, as if it were a freestanding, already-bound
+                # `@@`-name *reference* rather than a type annotation --
+                # confirmed via a real compile: surfaced as a deeply
+                # confusing "'@@Employee' is referenced but was never
+                # constructed or bound" instead of any hint that the
+                # *name* needed marking. Claimed here instead (`return
+                # True`) so `parse_plain_var_decl`/`rewrite.mojo`'s own
+                # handler -- which has the full name *and* type in hand --
+                # can raise a clear, dedicated mismatch error. A container
+                # (`List[@@Type]`) never reaches this branch at all --
+                # its own type text starts with the wrapper's name, not
+                # `@@`, so it falls through to the ordinary `scan_ident()`
+                # path below unaffected, same as it always has.
+                self.pos = save
+                return True
             var type_name = self.scan_ident()
             if type_name.byte_length() == 0:
                 self.pos = save
@@ -739,9 +778,20 @@ struct Scanner(Movable):
             self.skip_trivia()
             var prefix_text = String(self.source[byte = start : self.pos])
             var type_start = self.pos
-            _ = self.scan_ident()
-            if self.peek() == UInt8(ord("[")):
-                _ = self.scan_bracketed_span()
+            if self.starts_with("@@"):
+                # `<bare_name>: @@Type` -- the name/type marking mismatch
+                # `at_plain_var_decl` now claims instead of declining (see
+                # its own comment) -- captured verbatim, `@@` included, so
+                # `rewrite.mojo`'s own handler can raise a clear, specific
+                # error with both the real name and type in hand, instead
+                # of silently landing on an empty `type_text` here (`scan_
+                # ident()` alone stops dead at the `@`).
+                self.pos += 2
+                _ = self.scan_ident()
+            else:
+                _ = self.scan_ident()
+                if self.peek() == UInt8(ord("[")):
+                    _ = self.scan_bracketed_span()
             var type_text = String(self.source[byte = type_start : self.pos])
             return PlainVarDecl(
                 name=name, prefix_text=prefix_text, type_text=type_text, type_is_inferred=False
@@ -1277,8 +1327,10 @@ struct Scanner(Movable):
         if not self.try_consume(":"):
             raise self.err("InvalidSquirrelSyntax: expected ':' after struct name")
         var body = self.scan_indented_block(header_indent)
+        var body_start = self.pos - body.byte_length()
         var struct_fields = List[Field]()
-        var method_body = parse_struct_body(body, struct_fields)
+        var method_body_start_offset = 0
+        var method_body = parse_struct_body(body, self.source, body_start, struct_fields, method_body_start_offset)
         return ParsedStruct(
             name=name,
             fields=struct_fields^,
@@ -1286,6 +1338,7 @@ struct Scanner(Movable):
             is_equatable=is_equatable,
             trait_list=trait_list^,
             method_body=method_body^,
+            method_body_start_offset=method_body_start_offset,
         )
 
     def find_next_marker(mut self) raises -> MarkerKind:
@@ -1587,24 +1640,37 @@ struct Scanner(Movable):
 
     def parse_entity_param(mut self) raises -> EntityParam:
         """Requires `self.pos` at the `@@` of `@@name: <type>` -- `<type>`
-        may be a bare relation (`@@Type`) or any container/argument shape
-        a `@@struct`'s own field declaration already supports (`List[
+        is scanned generally via `scan_entity_param_type_text` (arbitrary
+        container/argument nesting, not just a single wrapper/argument),
+        but a marked name only ever accepts a *single* (non-container)
+        relation now (`@@e: @@Employee`); every container shape (`List[
         @@Type]`, `Dict[String, @@Type]`, `List[Dict[String, @@Type]]`,
-        ...), scanned generally via `scan_entity_param_type_text` rather
-        than the old single-wrapper, single-argument-only grammar.
+        ...) is rejected below regardless of which position the relation
+        is confined to, key or value -- the container's own type text
+        already says it's a relation, so a container-typed name is always
+        bare, same as a struct field's own name (`field_parsing.mojo`'s
+        identical rule) or a local var-decl's.
 
-        Marking symmetry (mandatory-marking-narrowing milestone, "or
-        methods or functions" -- the same rule `field_parsing.mojo`
-        already enforces for a struct's own fields applies equally to a
-        `def`'s own parameter and a `var`-decl's own explicit type): the
-        name is marked here by construction (the `@@` this method itself
-        just consumed), so the type must actually be `is_directly_entity_
-        iterable` too, or this raises -- `@@name: Dict[String, @@Type]`
-        (a relation confined to the value position) is exactly as invalid
-        here as an unmarked struct field naming a directly-iterable type
-        would be; write the plain, unmarked form (`name: Dict[String,
-        @@Type]`) instead, letting the embedded `@@Type` resolve via the
-        ordinary type-position rewrite."""
+        Two raises below, in order: first, the name is marked here by
+        construction (the `@@` this method itself just consumed), so the
+        type must actually be reachable as an entity at all (`@@name:
+        Dict[String, @@Type]` used to be exactly as invalid as an
+        unmarked struct field naming a directly-iterable type -- a
+        relation confined to the value position isn't reachable through
+        marking at all, only through indexing) -- write the plain,
+        unmarked form instead, letting the embedded `@@Type` resolve via
+        the ordinary type-position rewrite. Second (mandatory-marking-
+        removal milestone, extending the parameter axis to match fields/
+        returns/locals): even when the type *is* reachable as an entity,
+        marking is only ever valid on a genuinely single, non-container
+        type -- a container that happens to be directly reachable (`List[
+        @@Type]`, `Dict[@@Type, V]`) is rejected too, not accepted the way
+        it used to be, since the type itself already carries that signal
+        now. This function's own caller reaches it from three contexts --
+        a def parameter, a var-decl's own explicit type, or a hand-written
+        plain struct's own field declaration -- so both raises' own
+        messages stay neutral on which one it was rather than assuming
+        "parameter" specifically."""
         if not self.try_consume("@@"):
             raise self.err("InvalidSquirrelSyntax: expected '@@'")
         var name = self.scan_ident()
@@ -1631,6 +1697,30 @@ struct Scanner(Movable):
                 + ": "
                 + type_text
                 + "' (no '@@' on the name)"
+            )
+        if parse_type_expr(type_text).is_parameterized():
+            # Same relaxation `field_parsing.mojo` already applies to a
+            # struct's own fields (Part 2 of the mandatory-marking-removal
+            # milestone) -- a container of a relation (`List[@@Employee]`,
+            # a Dict with the relation in either argument position) is
+            # always bare now, on a name bound this way same as everywhere
+            # else; the type itself already says it's a relation, so the
+            # name no longer needs to repeat that. A *single* (non-
+            # container) relation is unaffected -- still always marked,
+            # since it has no container wrapper of its own for the type
+            # alone to carry that signal. This function's own caller
+            # (`rewrite.mojo`'s `ENTITY_PARAM` handler) reaches this from
+            # three contexts -- a def parameter, a var-decl's own explicit
+            # type, or a hand-written plain struct's own field declaration
+            # -- so the message stays neutral on which one it was, rather
+            # than hardcoding "parameter" for a var-decl/field that hit it
+            # too.
+            raise self.err(
+                "InvalidSquirrelSyntax: '@@" + name + "' -- '@@'"
+                " marking on a name bound to a container is no longer"
+                " used or needed (the type itself, '"
+                + type_text + "', already says so); write it bare: '"
+                + name + ": " + type_text + "'"
             )
         return EntityParam(name=name, type_text=type_text)
 

@@ -14,11 +14,13 @@ from sqrrl__world import sqrrl___init, sqrrl___World
 # Two independent rules now, not one -- and both boil down to the same
 # underlying principle: `@@` marks a name only when its own value is
 # *directly* an entity, never when it's merely a container of one. That
-# principle applies uniformly to struct fields, local variables, and
-# for-loop variables alike (a local var-decl's own container constructor
-# stays bare exactly like a container field does, see `scores_dict`/
-# `ranks_dict`/`rosters_list` in `main()` below) -- only a def/method
-# *parameter*'s own marking is a separate, unaffected axis.
+# principle applies uniformly to struct fields, local variables, for-loop
+# variables, AND def/method parameters alike (a local var-decl's own
+# container constructor stays bare exactly like a container field does,
+# see `scores_dict`/`ranks_dict`/`rosters_list` in `main()` below; a
+# container parameter -- `extra: List[@@Employee]` in `greet_team` below
+# -- is bare the same way). A *single* (non-container) relation still
+# needs marking wherever it appears, parameter included (`@@e: @@Employee`).
 #
 # 1. A *field*'s own name needs `@@` only when its type is a *single*
 #    (non-container) relation (`@@lead: @@Employee`). A *container* of a
@@ -50,8 +52,9 @@ from sqrrl__world import sqrrl___init, sqrrl___World
 # directly, but a `for @@x in ...:` over it is rejected -- iterating it
 # never yields an entity, so the loop variable must be bare instead.
 #
-# A def/method *parameter*'s own marking (`@@e: @@Employee`) is a
-# separate, unaffected axis -- out of scope for both rules above.
+# A def/method *parameter*'s own marking follows rule 1 exactly, same as
+# a field: single relation marked (`@@e: @@Employee`), container of one
+# bare (`extra: List[@@Employee]`).
 
 
 @fieldwise_init
@@ -256,11 +259,11 @@ struct sqrrl__Department(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDele
                 return True
         return False
 
-    def greet_team(self, sqrrl__extra: List[sqrrl__Employee]) -> String:
+    def greet_team(self, extra: List[sqrrl__Employee]) -> String:
         var out = String("")
         for sqrrl__m in self._inner[]._sqrrl__team:
             out += sqrrl__m._inner[]._name + " "
-        for sqrrl__m in sqrrl__extra:
+        for sqrrl__m in extra:
             out += sqrrl__m._inner[]._name + " "
         return String(out.strip())
 

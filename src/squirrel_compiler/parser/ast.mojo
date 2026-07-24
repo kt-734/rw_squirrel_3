@@ -86,6 +86,7 @@ struct ParsedStruct(Copyable, Movable):
     var is_equatable: Bool
     var trait_list: List[String]
     var method_body: String
+    var method_body_start_offset: Int
     var type_params: List[TypeParam]
 
     def __init__(
@@ -96,6 +97,7 @@ struct ParsedStruct(Copyable, Movable):
         is_equatable: Bool = False,
         var trait_list: List[String] = List[String](),
         var method_body: String = String(),
+        method_body_start_offset: Int = 0,
         var type_params: List[TypeParam] = List[TypeParam](),
     ):
         self.name = name^
@@ -104,6 +106,7 @@ struct ParsedStruct(Copyable, Movable):
         self.is_equatable = is_equatable
         self.trait_list = trait_list^
         self.method_body = method_body^
+        self.method_body_start_offset = method_body_start_offset
         self.type_params = type_params^
 
 

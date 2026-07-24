@@ -1,6 +1,75 @@
 from squirrel_compiler.parser import Scanner, is_ident_char
+from squirrel_compiler.parser.text_utils import source_location
 from squirrel_compiler.codegen.rewrite_context import RewriteContext
 from squirrel_compiler.codegen.helpers import scan_bare_return_type_text
+
+
+@fieldwise_init
+struct _LineColMsg(Copyable, Movable):
+    """The pieces of a `Scanner.err()`-shaped message ("N:M: text"),
+    split back apart -- `ok=False` (with `rest` set to the original,
+    untouched `msg`) whenever the input doesn't actually look like that
+    shape, so a caller can always safely fall back to re-raising the
+    original error rather than risk misparsing something `Scanner.err()`
+    never produced in the first place."""
+
+    var line: Int
+    var col: Int
+    var rest: String
+    var ok: Bool
+
+
+def _parse_line_col_msg(msg: String) -> _LineColMsg:
+    var bytes = msg.as_bytes()
+    var n = len(bytes)
+    var i = 0
+    while i < n and bytes[i] != UInt8(ord(":")):
+        i += 1
+    if i == 0 or i >= n:
+        return _LineColMsg(line=0, col=0, rest=msg, ok=False)
+    var line_str = String(msg[byte = 0 : i])
+    var col_start = i + 1
+    var j = col_start
+    while j < n and bytes[j] != UInt8(ord(":")):
+        j += 1
+    if j >= n or j == col_start:
+        return _LineColMsg(line=0, col=0, rest=msg, ok=False)
+    var col_str = String(msg[byte = col_start : j])
+    # `rest` keeps its own leading ':' (sliced *from* the second colon,
+    # not past it) so reconstruction is just `new_location + rest`.
+    var rest = String(msg[byte = j : n])
+    try:
+        var line = Int(line_str)
+        var col = Int(col_str)
+        return _LineColMsg(line=line, col=col, rest=rest, ok=True)
+    except:
+        return _LineColMsg(line=0, col=0, rest=msg, ok=False)
+
+
+def _byte_offset_of_line_col(text: String, line: Int, col: Int) -> Int:
+    """Inverse of `source_location`'s own counting: the byte offset
+    within `text` for its own 1-indexed `line`/`col`."""
+    var bytes = text.as_bytes()
+    var n = len(bytes)
+    var cur_line = 1
+    var i = 0
+    while cur_line < line and i < n:
+        if bytes[i] == UInt8(ord("\n")):
+            cur_line += 1
+        i += 1
+    return i + (col - 1)
+
+
+def _map_output_pos_to_original(output_pos: Int, insertions: List[Int]) -> Int:
+    """Inverse of `_mark_self_field_access`'s own `insertions` -- each
+    recorded position had 2 bytes (`"@@"`) inserted there that don't
+    exist in the real, original text, so any later position needs 2
+    bytes subtracted per insertion that landed before it."""
+    var shift = 0
+    for ins in insertions:
+        if ins < output_pos:
+            shift += 2
+    return output_pos - shift
 
 
 def _leading_indent(text: String) -> String:
@@ -70,21 +139,46 @@ struct _MethodHeader(Copyable, Movable):
     var is_entity_marked: Bool
     var method_name: String
     var after_paren: String
+    var after_paren_offset: Int
     var body: String
+    var body_offset: Int
     var bare_return_type: Optional[String]
 
 
-def _parse_method_span(span: String, struct_name: String) raises -> _MethodHeader:
+def _parse_method_span(
+    span: String, struct_name: String, full_source: String, span_absolute_offset: Int
+) raises -> _MethodHeader:
     """Splits one method's own `span` (as sliced by `_split_method_spans`)
     into its signature pieces, without rewriting anything -- shared by
     `world_marked_method_names`/`bare_method_returns` (which only need the
     name/marking/return type) and `rewrite_method_body` (which needs the
     rest too).
 
+    `full_source`/`span_absolute_offset`: this function's own three
+    raises below used to have no location at all -- not even a filename,
+    for two of them (they're reached during project-wide discovery,
+    `world_marked_method_names`/`bare_method_returns`, a pass that never
+    wraps errors with a file path the way the main per-file transform
+    does) -- confirmed via a real compile: the old `'@@'`-marked-method-
+    name migration error surfaced as a bare message with nothing to
+    point at. All three are about the method's own *header line*, so
+    pointing at `span_absolute_offset` (the span's, and so the header
+    line's, own start) is exactly the right resolution -- no need for
+    per-raise precision the way `rewrite_method_body`'s own corrected
+    errors need.
+
     Mandatory marking for a method's own return shape is gone: a method's
     own name only ever signals whether it needs `sqrrl___world` (`@@@`) --
     plain `@@` on a method's own name is the old, now-invalid spelling,
-    rejected here with a migration error."""
+    rejected here with a migration error.
+
+    `after_paren_offset`/`body_offset` are `after_paren`/`body`'s own
+    byte offsets within `span` itself (both are always exact suffixes of
+    `span`, sliced off its front only, never copied/rebuilt) -- threaded
+    through so `rewrite_method_body` can translate an error's own
+    reported position, inside either piece, back to a real file offset
+    (`span`'s own absolute position in the real file, plus this, plus
+    however far into the rewritten text the error landed)."""
     var bytes = span.as_bytes()
     var n = len(bytes)
     var header_end = 0
@@ -95,7 +189,8 @@ def _parse_method_span(span: String, struct_name: String) raises -> _MethodHeade
     var body = String(span[byte = body_start : n])
 
     var indent = _leading_indent(header)
-    var rest = String(header[byte = indent.byte_length() : header.byte_length()])
+    var rest_offset = indent.byte_length()
+    var rest = String(header[byte = rest_offset : header.byte_length()])
 
     var keyword: String
     if rest.startswith("def "):
@@ -104,32 +199,39 @@ def _parse_method_span(span: String, struct_name: String) raises -> _MethodHeade
         keyword = "fn "
     else:
         raise Error(
+            source_location(full_source, span_absolute_offset) + ": "
             "InvalidSquirrelSyntax: expected a method definition ('def' or"
             " 'fn') in '@@struct @@" + struct_name + "'"
         )
+    rest_offset += keyword.byte_length()
     rest = String(rest[byte = keyword.byte_length() : rest.byte_length()])
 
     var is_world_marked = rest.startswith("@@@")
     var is_entity_marked = False
     if is_world_marked:
+        rest_offset += 3
         rest = String(rest[byte = 3 : rest.byte_length()])
     elif rest.startswith("@@"):
         is_entity_marked = True
+        rest_offset += 2
         rest = String(rest[byte = 2 : rest.byte_length()])
 
     var paren = rest.find("(")
     if paren < 0:
         raise Error(
+            source_location(full_source, span_absolute_offset) + ": "
             "InvalidSquirrelSyntax: expected '(' after method name in"
             " '@@struct @@" + struct_name + "'"
         )
     var method_name = String(rest[byte = 0 : paren])
     var after_paren = String(rest[byte = paren + 1 : rest.byte_length()])
+    var after_paren_offset = rest_offset + paren + 1
 
     var bare_return_type = scan_bare_return_type_text(after_paren)
 
     if is_entity_marked:
         raise Error(
+            source_location(full_source, span_absolute_offset) + ": "
             "InvalidSquirrelSyntax: method '@@"
             + method_name
             + "' on '@@struct @@"
@@ -147,12 +249,14 @@ def _parse_method_span(span: String, struct_name: String) raises -> _MethodHeade
         is_entity_marked=is_entity_marked,
         method_name=method_name,
         after_paren=after_paren,
+        after_paren_offset=after_paren_offset,
         body=body,
+        body_offset=body_start,
         bare_return_type=bare_return_type,
     )
 
 
-def _mark_self_field_access(body: String) raises -> String:
+def _mark_self_field_access(body: String, mut insertions: List[Int]) raises -> String:
     """Auto-`@@`-marks every bare `self` reference in a spliced method's
     own body, so the DSL surface can write ordinary-looking `self.field`/
     `self.@@dept.name`/`self.method()` (no marker on `self` itself) instead
@@ -168,7 +272,15 @@ def _mark_self_field_access(body: String) raises -> String:
     `skip_non_code` convention every other scan in this codebase uses) and
     identifiers that merely contain "self" (`myself`, `self2`) via
     word-boundary checks on both sides; an already-`@@`-marked `@@self` is
-    left untouched (idempotent)."""
+    left untouched (idempotent).
+
+    `insertions` (out-param, appended to, never cleared) records each
+    2-byte `"@@"` insertion's own position *within the returned text*
+    (not `body`) -- `rewrite_method_body` uses this to map an error's
+    reported position in the *rewritten* body back to the real, un-
+    inserted position in `body` (and from there, back to the real file),
+    since every insertion shifts everything emitted after it two bytes
+    to the right of where it sits in the original."""
     var sc = Scanner(body)
     var out = String()
     var pos = 0
@@ -182,7 +294,9 @@ def _mark_self_field_access(body: String) raises -> String:
             var preceded_by_marker = word_start >= 2 and String(body[byte = word_start - 2 : word_start]) == "@@"
             var preceded_by_ident = word_start > 0 and is_ident_char(sc.byte_at(word_start - 1))
             if not preceded_by_marker and not preceded_by_ident:
-                out += String(body[byte = pos : word_start]) + "@@self"
+                out += String(body[byte = pos : word_start])
+                insertions.append(out.byte_length())
+                out += "@@self"
                 sc.pos += 4
                 pos = sc.pos
                 continue
@@ -191,25 +305,37 @@ def _mark_self_field_access(body: String) raises -> String:
     return out^
 
 
-def world_marked_method_names(method_body: String, struct_name: String) raises -> List[String]:
+def world_marked_method_names(
+    method_body: String, struct_name: String, full_source: String, method_body_start_offset: Int
+) raises -> List[String]:
     """Names of every `@@@`-marked method declared in `method_body` --
     what `build_world_methods` (`driver/discovery.mojo`) scans project-wide,
     so the rewrite engine's instance-call dispatch
     (`rewrite_field_access.mojo`) can tell whether calling a spliced user
     method needs `sqrrl___world` threaded as its own first argument, without
     needing to see the declaring file itself (same cross-file reasoning as
-    M2's relation-schema resolution)."""
+    M2's relation-schema resolution).
+
+    `full_source`/`method_body_start_offset`: same error-location plumbing
+    `rewrite_method_body`/`_parse_method_span` use -- this runs during
+    project-wide *discovery*, before the main per-file transform even
+    starts, so without this a malformed method header here would raise
+    with no location at all, not even a filename."""
     var out = List[String]()
     if method_body.strip().byte_length() == 0:
         return out^
+    var span_offset = 0
     for span in _split_method_spans(method_body):
-        var header = _parse_method_span(span, struct_name)
+        var header = _parse_method_span(span, struct_name, full_source, method_body_start_offset + span_offset)
         if header.is_world_marked:
             out.append(header.method_name)
+        span_offset += span.byte_length()
     return out^
 
 
-def bare_method_returns(method_body: String, struct_name: String) raises -> Dict[String, String]:
+def bare_method_returns(
+    method_body: String, struct_name: String, full_source: String, method_body_start_offset: Int
+) raises -> Dict[String, String]:
     """Method name -> its raw, unstripped return-type text, for *every*
     method declared in `method_body`, world-marked (`@@@`) or bare alike
     -- the method analogue of `driver/misc_builders.mojo`'s `build_bare_
@@ -232,14 +358,22 @@ def bare_method_returns(method_body: String, struct_name: String) raises -> Dict
     var out = Dict[String, String]()
     if method_body.strip().byte_length() == 0:
         return out^
+    var span_offset = 0
     for span in _split_method_spans(method_body):
-        var header = _parse_method_span(span, struct_name)
+        var header = _parse_method_span(span, struct_name, full_source, method_body_start_offset + span_offset)
         if header.bare_return_type:
             out[header.method_name] = header.bare_return_type.value()
+        span_offset += span.byte_length()
     return out^
 
 
-def rewrite_method_body(method_body: String, struct_name: String, ctx: RewriteContext) raises -> String:
+def rewrite_method_body(
+    method_body: String,
+    struct_name: String,
+    ctx: RewriteContext,
+    full_source: String,
+    method_body_start_offset: Int,
+) raises -> String:
     """Splits `method_body` into per-method spans, rewrites each through
     the ordinary `rewrite_markers` machinery with its own fresh scope
     (`self` pre-seeded as a bound variable of type `struct_name`, so
@@ -251,20 +385,48 @@ def rewrite_method_body(method_body: String, struct_name: String, ctx: RewriteCo
     insertion). A method's own name is never `sqrrl__`-prefixed -- only the
     `@@@` marker itself is stripped -- since it has to match exactly for
     trait conformance (`HasId.entity_id` must generate literally
-    `entity_id`, not `sqrrl__entity_id`)."""
+    `entity_id`, not `sqrrl__entity_id`).
+
+    `full_source`/`method_body_start_offset`: `rewrite_markers` below
+    scans `params_tail`/a method's own body in complete isolation, each
+    through its own fresh `Scanner` that has no idea where in the real
+    file this text actually came from -- any error raised there reports
+    "line 1" of that isolated fragment instead of the real location
+    (confirmed via a real compile: a marking mismatch inside a method's
+    own body reported "1:32" no matter how far into the file the struct
+    was actually declared) -- far and away the most common error surface
+    in the whole compiler, unlike the rarer struct-field-list case
+    `field_parsing.mojo`'s own `_body_err` already fixes the same way.
+    Both `rewrite_markers` calls below are wrapped to translate a caught
+    error's own reported position back to a real file offset before
+    re-raising: `params_tail`'s own text is always an exact, byte-for-
+    byte suffix of the real header line (no insertions), so that
+    translation is exact outright; the method's own body first goes
+    through `_mark_self_field_access`, which *inserts* `"@@"` before
+    every bare `self` -- no longer a byte-for-byte substring of the real
+    file -- so `insertions` (that function's own out-param) is used to
+    map the rewritten text's own position back to the real, un-inserted
+    one first. Either way, if the caught error's own message doesn't
+    look like `Scanner.err()`'s fixed "N:M: text" shape at all (`_parse_
+    line_col_msg`'s own `ok=False`), it's re-raised completely unchanged
+    -- never worth failing the real, underlying error over a location-
+    correction step that didn't apply."""
     from squirrel_compiler.codegen.rewrite import rewrite_markers
 
     if method_body.strip().byte_length() == 0:
         return String()
 
     var out = String()
+    var span_offset = 0
     for span in _split_method_spans(method_body):
-        var header = _parse_method_span(span, struct_name)
+        var span_absolute_offset = method_body_start_offset + span_offset
+        var header = _parse_method_span(span, struct_name, full_source, span_absolute_offset)
 
         var method_ctx = ctx.fresh_function_scope()
 
         var new_header = header.indent + header.keyword + header.method_name + "("
         var params_tail: String
+        var params_tail_offset_in_after_paren = 0
         if header.is_world_marked:
             var ab = header.after_paren.as_bytes()
             var starts_with_self = header.after_paren.startswith("self") and (
@@ -272,6 +434,7 @@ def rewrite_method_body(method_body: String, struct_name: String, ctx: RewriteCo
             )
             if not starts_with_self:
                 raise Error(
+                    source_location(full_source, span_absolute_offset) + ": "
                     "InvalidSquirrelSyntax: '@@@"
                     + header.method_name
                     + "' on '@@struct @@"
@@ -291,8 +454,10 @@ def rewrite_method_body(method_body: String, struct_name: String, ctx: RewriteCo
                     k2 += 1
                 new_header += ", "
                 params_tail = String(after_self[byte = k2 : after_self.byte_length()])
+                params_tail_offset_in_after_paren = 4 + k2
             else:
                 params_tail = String(after_self[byte = k : after_self.byte_length()])
+                params_tail_offset_in_after_paren = 4 + k
         else:
             params_tail = header.after_paren
 
@@ -327,14 +492,42 @@ def rewrite_method_body(method_body: String, struct_name: String, ctx: RewriteCo
         # reset is harmless for `params_tail`'s own rewrite, and `self`/
         # `world_declared` are exactly as the body's own rewrite needs
         # them by the time it runs next.
+        var params_tail_absolute_offset = (
+            span_absolute_offset + header.after_paren_offset + params_tail_offset_in_after_paren
+        )
         var synthetic_prefix = "def _("
-        var rewritten_tail = rewrite_markers(synthetic_prefix + params_tail, method_ctx)
+        var rewritten_tail: String
+        try:
+            rewritten_tail = rewrite_markers(synthetic_prefix + params_tail, method_ctx)
+        except tail_err:
+            var parsed_err = _parse_line_col_msg(String(tail_err))
+            if not parsed_err.ok:
+                raise Error(String(tail_err))
+            var output_pos = _byte_offset_of_line_col(synthetic_prefix + params_tail, parsed_err.line, parsed_err.col)
+            var original_pos = output_pos - synthetic_prefix.byte_length()
+            if original_pos < 0:
+                raise Error(String(tail_err))
+            raise Error(source_location(full_source, params_tail_absolute_offset + original_pos) + parsed_err.rest)
         new_header += String(rewritten_tail[byte = synthetic_prefix.byte_length() : rewritten_tail.byte_length()])
 
         method_ctx.entity_to_type["self"] = struct_name
         method_ctx.world_declared = header.is_world_marked
 
-        var rewritten_body = rewrite_markers(_mark_self_field_access(header.body), method_ctx)
+        var body_absolute_offset = span_absolute_offset + header.body_offset
+        var insertions = List[Int]()
+        var marked_body = _mark_self_field_access(header.body, insertions)
+        var rewritten_body: String
+        try:
+            rewritten_body = rewrite_markers(marked_body, method_ctx)
+        except body_err:
+            var parsed_err = _parse_line_col_msg(String(body_err))
+            if not parsed_err.ok:
+                raise Error(String(body_err))
+            var output_pos = _byte_offset_of_line_col(marked_body, parsed_err.line, parsed_err.col)
+            var original_pos = _map_output_pos_to_original(output_pos, insertions)
+            if original_pos < 0:
+                raise Error(String(body_err))
+            raise Error(source_location(full_source, body_absolute_offset + original_pos) + parsed_err.rest)
 
         out += new_header
         if not out.endswith("\n"):
@@ -342,4 +535,5 @@ def rewrite_method_body(method_body: String, struct_name: String, ctx: RewriteCo
         out += rewritten_body
         if not out.endswith("\n"):
             out += "\n"
+        span_offset += span.byte_length()
     return out^

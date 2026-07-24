@@ -874,7 +874,18 @@ def test_transform_method_old_plain_marked_spelling_rejected() raises:
     plain `@@` (not `@@@`) on a method's own name is now itself the
     invalid spelling -- `@@` used to mean "returns an entity, doesn't
     need world," which is just bare now, mirroring `build_bare_function_
-    returns`'s own rejection for top-level functions."""
+    returns`'s own rejection for top-level functions.
+
+    Also covers `_parse_method_span`'s own location fix: this raise used
+    to have no location at all -- not even a filename -- since it's also
+    reached during project-wide discovery (`world_marked_method_names`/
+    `bare_method_returns`), a pass nothing wrapped with a file path or a
+    `Scanner.err()`-style position. Now reports line 4, the method's own
+    header line -- confirmed via a real compile, not just this unit
+    test, since discovery's own two callers (`build_world_methods`/
+    `build_bare_method_returns` in `driver/discovery.mojo`) needed their
+    own separate fix too, `transform_source` alone doesn't exercise
+    those."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Person"] = True
@@ -889,13 +900,17 @@ def test_transform_method_old_plain_marked_spelling_rejected() raises:
         + "        return self.name\n"
     )
     var raised = False
+    var message = String("")
     try:
         _ = transform_source(
             src, relation_schema, struct_names, unique_fields, indexed_fields
         )
-    except:
+    except err:
         raised = True
+        message = String(err)
     assert_true(raised)
+    assert_true("4:" in message)
+    assert_true("marking on a method's own name" in message)
 
 
 def test_transform_bare_method_call_binds_and_reads() raises:
@@ -2081,27 +2096,32 @@ def test_transform_plain_struct_container_relation_field_marking_symmetry() rais
     written_struct_fields`'s own (run at discovery time, not by
     `transform_source` directly), so it's tested directly here rather
     than through `transform_source`."""
+    var bare_body = String("    var members: Dict[String, @@Employee]\n")
     var bare_fields = List[Field]()
-    parse_hand_written_struct_fields("    var members: Dict[String, @@Employee]\n", bare_fields)
+    parse_hand_written_struct_fields(bare_body, bare_body, 0, bare_fields)
     assert_equal(len(bare_fields), 1)
     assert_equal(bare_fields[0].name, "members")
     assert_equal(bare_fields[0].type_str, "Dict[String, @@Employee]")
 
+    var marked_body = String("    var @@members: Dict[String, @@Employee]\n")
     var marked_fields = List[Field]()
     var raised = False
     try:
-        parse_hand_written_struct_fields("    var @@members: Dict[String, @@Employee]\n", marked_fields)
+        parse_hand_written_struct_fields(marked_body, marked_body, 0, marked_fields)
     except:
         raised = True
     assert_true(raised)
 
 
 def test_transform_entity_param_dict_key_position_registers_type() raises:
-    """A def parameter marked `@@` whose type is `Dict[@@Type, V]` --
-    relation in the *key* position, the one Dict iteration actually
-    yields -- is directly entity-iterable, so the marking is accepted and
-    the parameter's own type registers normally (same as a bare `@@Type`
-    or `List[@@Type]` parameter already did)."""
+    """A def parameter whose type is `Dict[@@Type, V]` -- relation in the
+    *key* position, the one Dict iteration actually yields -- is a
+    container of a relation, so (same relaxation as a container field,
+    Part 2 of the mandatory-marking-removal milestone) the parameter's
+    own name is bare, never marked, and still registers its type
+    normally purely from the type text (same as a bare `List[@@Type]`
+    parameter already did). The old marked spelling (`@@scores: Dict[
+    @@Employee, String]`) is now a migration error instead."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
@@ -2109,42 +2129,65 @@ def test_transform_entity_param_dict_key_position_registers_type() raises:
     var indexed_fields = Dict[String, List[String]]()
 
     var src = String(
-        "def foo(@@scores: Dict[@@Employee, String]) raises:\n"
-        + "    for @@e in @@scores:\n"
+        "def foo(scores: Dict[@@Employee, String]) raises:\n"
+        + "    for @@e in scores:\n"
         + "        print(@@e.name)\n"
     )
     var out = transform_source(
         src, relation_schema, struct_names, unique_fields, indexed_fields
     )
-    assert_true("def foo(sqrrl__scores: Dict[sqrrl__Employee, String]) raises:" in out)
+    assert_true("def foo(scores: Dict[sqrrl__Employee, String]) raises:" in out)
     assert_true("print(sqrrl__e._inner[]._name)" in out)
 
+    var marked_src = String(
+        "def foo(@@scores: Dict[@@Employee, String]) raises:\n"
+        + "    pass\n"
+    )
+    var raised = False
+    try:
+        _ = transform_source(
+            marked_src, relation_schema, struct_names, unique_fields, indexed_fields
+        )
+    except:
+        raised = True
+    assert_true(raised)
 
-def test_transform_entity_param_value_position_needs_marking() raises:
-    """The def-parameter/var-decl side of the same widened rule ("or
-    methods or functions"): `@@scores: Dict[String, @@Employee]` (marked
-    name, relation confined to the value position) is now accepted --
-    real Mojo indexing reaches it, even though iteration doesn't. Unlike
-    struct fields/function names, a *bare*, unmarked parameter is never
-    validated against its own type at all (`parse_entity_param`'s check
-    only ever runs reactively, when the scanner already sees `@@` on the
-    parameter's own name -- a fully bare name never triggers it, a real,
-    pre-existing asymmetry this widening doesn't change either way), so
-    there's no corresponding under-marked-rejection half to test here."""
+
+def test_transform_entity_param_value_position_registers_type() raises:
+    """Same relaxation, relation confined to the *value* (second)
+    position instead (`Dict[String, @@Type]`) -- still a container of a
+    relation, so still bare on the parameter's own name; real Mojo
+    indexing reaches it even though iteration doesn't (unaffected by
+    this change either way). The old marked spelling is rejected the
+    same as the key-position case above."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Employee"] = True
     var unique_fields = Dict[String, List[String]]()
     var indexed_fields = Dict[String, List[String]]()
 
+    var src = String(
+        "def foo(scores: Dict[String, @@Employee]) raises:\n"
+        + "    print(scores[\"k\"].name)\n"
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, unique_fields, indexed_fields
+    )
+    assert_true("def foo(scores: Dict[String, sqrrl__Employee]) raises:" in out)
+    assert_true("print(scores[\"k\"]._inner[]._name)" in out)
+
     var marked_src = String(
         "def foo(@@scores: Dict[String, @@Employee]) raises:\n"
         + "    pass\n"
     )
-    var out = transform_source(
-        marked_src, relation_schema, struct_names, unique_fields, indexed_fields
-    )
-    assert_true("def foo(sqrrl__scores: Dict[String, sqrrl__Employee]) raises:" in out)
+    var raised = False
+    try:
+        _ = transform_source(
+            marked_src, relation_schema, struct_names, unique_fields, indexed_fields
+        )
+    except:
+        raised = True
+    assert_true(raised)
 
 
 def test_transform_method_entity_param_beyond_self_registers_type() raises:
@@ -2177,6 +2220,127 @@ def test_transform_method_entity_param_beyond_self_registers_type() raises:
     )
     assert_true("def greet(self, sqrrl__e: sqrrl__Employee) -> String:" in out)
     assert_true("return sqrrl__e._inner[]._name" in out)
+
+
+def test_transform_bare_name_single_relation_type_needs_name_marking() raises:
+    """`<bare_name>: @@Type` -- a single (non-container) relation whose
+    *type* carries `@@` but whose own name doesn't. Previously fell
+    through `at_plain_var_decl` entirely (it declined to match at all,
+    since `scan_ident()` stops dead at the `@`), leaving the embedded
+    `@@Type` to be discovered several bytes later, on its own, as if it
+    were a freestanding, already-bound `@@`-name *reference* -- a
+    confusing 'was never constructed or bound' error instead of any hint
+    that the *name* needed marking. Now raises a clear, dedicated
+    mismatch error instead."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Employee"] = True
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+
+    var src = String(
+        "def show(e: @@Employee) raises:\n"
+        + "    print(e.name)\n"
+    )
+    var raised = False
+    var message = String("")
+    try:
+        _ = transform_source(
+            src, relation_schema, struct_names, unique_fields, indexed_fields
+        )
+    except err:
+        raised = True
+        message = String(err)
+    assert_true(raised)
+    assert_true("a single relation needs '@@' on the name too" in message)
+
+
+def test_transform_numeric_comparison_before_marked_line_not_misread_as_var_decl() raises:
+    """Regression for a false positive the fix above introduced: `at_
+    plain_var_decl`'s own "any bare name, anywhere" fallback has no
+    identifier-start check, so a bare numeric literal (`0`, from an
+    unrelated `> 0:` comparison) used to get misread as a candidate
+    declaration name, with `skip_trivia` then crossing the newline into
+    the *next*, completely unrelated statement -- confirmed via a real
+    compile of `examples/functions_methods_and_fields`: `if @@@Department.
+    count() > 0:` followed on the next line by `@@self.name = ...`
+    misread as the bogus declaration `0: @@self`. A leading-digit check
+    (`is_ident_start_char`) closes this at the root."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Employee"] = True
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+
+    var src = String(
+        "@@struct @@Employee:\n"
+        + "    unique name: String\n"
+        + "\n"
+        + "    def @@@maybe_rename(self, new_name: String) raises:\n"
+        + "        if @@@Employee.count() > 0:\n"
+        + "            self.name = new_name\n"
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, unique_fields, indexed_fields
+    )
+    assert_true("if sqrrl___world.Employee.count() > 0:" in out)
+    assert_true("self._inner[].set_name(new_name);" in out)
+
+
+def test_transform_method_body_error_reports_real_file_position() raises:
+    """`rewrite_method_body` (`codegen/methods.mojo`) re-scans a method's
+    own header-tail/body text in isolation, each through its own fresh
+    `Scanner` with no idea where in the real file that text came from --
+    any error raised there used to report "line 1" of the isolated
+    fragment (confirmed via a real compile: a marking mismatch on line
+    12 of a real file reported "1:32"), the single most common error
+    surface in the whole compiler (this is where every marking mismatch/
+    undefined-entity/bad-chain error inside a method actually lives).
+    Both the header's own parameter-list rewrite and the body's own
+    rewrite (the harder case: `_mark_self_field_access` inserts `"@@"`
+    before every bare `self`, so the text scanned is no longer a byte-
+    for-byte substring of the real file) now translate the caught
+    error's own position back to the real file's line *and* column
+    before re-raising."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    relation_schema["Department"] = Dict[String, String]()
+    relation_schema["Department"]["lead"] = "Employee"
+    var struct_names = Dict[String, Bool]()
+    struct_names["Employee"] = True
+    struct_names["Department"] = True
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+
+    var src = String(
+        "@@struct @@Employee:\n"
+        + "    unique name: String\n"
+        + "\n"
+        + "\n"
+        + "@@struct @@Department:\n"
+        + "    unique name: String\n"
+        + "    @@lead: @@Employee\n"
+        + "\n"
+        + "    def greet(self) -> String:\n"
+        + "        return self.@@lead.name\n"
+        + "\n"
+        + "    def broken(self) -> String:\n"
+        + "        return self.lead.name\n"
+    )
+    var raised = False
+    var message = String("")
+    try:
+        _ = transform_source(
+            src, relation_schema, struct_names, unique_fields, indexed_fields
+        )
+    except err:
+        raised = True
+        message = String(err)
+    assert_true(raised)
+    # Line 13 is `broken`'s own `return self.lead.name` -- not line 1
+    # (the file's own first line) and not line 10 (`greet`'s identical-
+    # looking access, marked correctly there).
+    assert_true("13:" in message)
+    assert_true("is a relation field" in message)
 
 
 def test_transform_struct_field_referencing_plain_struct_renders_bare_type() raises:

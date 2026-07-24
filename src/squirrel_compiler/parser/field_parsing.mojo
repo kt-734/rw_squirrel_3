@@ -1,11 +1,34 @@
 from squirrel_compiler.parser.ast import Field, FieldModifier
-from squirrel_compiler.parser.text_utils import is_ident_char
+from squirrel_compiler.parser.text_utils import is_ident_char, source_location
 from squirrel_compiler.parser.relation_type_text import is_directly_entity_reachable
 from squirrel_compiler.parser.scanner import Scanner
 from squirrel_compiler.parser.type_expr import parse_type_expr
 
 
-def parse_struct_body(body: String, mut fields: List[Field]) raises -> String:
+def _body_err(full_source: String, body_start: Int, local_pos: Int, msg: String) -> Error:
+    """`Scanner.err()`'s own `source_location(self.source, self.pos)`
+    computation, but for a `Scanner(body)` built from an already-
+    extracted substring (`parse_struct_body`/`parse_hand_written_struct_
+    fields`, both scanning a struct's own isolated body text, not the
+    real file) -- `bs.err(...)` there would report "line 1" of the
+    *substring* for every single field, no matter where the struct is
+    actually declared in the real file. Confirmed via a real compile: a
+    marking-mismatch error on a struct declared starting at line 40
+    reported "1:36" instead of the real location. `body_start` (the
+    substring's own absolute byte offset within `full_source`, captured
+    by the caller right after `scan_indented_block` returns) plus the
+    scanner's own substring-relative `pos` gives the real, file-relative
+    offset `source_location` needs."""
+    return Error(source_location(full_source, body_start + local_pos) + ": " + msg)
+
+
+def parse_struct_body(
+    body: String,
+    full_source: String,
+    body_start: Int,
+    mut fields: List[Field],
+    mut method_body_start_offset: Int,
+) raises -> String:
     """Splits an `@@struct` body into `name: Type` fields, up to whatever
     point a line looks like a method definition (`def name(...):`/`fn
     name(...):`, ordinary Mojo syntax) instead of a field -- captured and
@@ -15,7 +38,27 @@ def parse_struct_body(body: String, mut fields: List[Field]) raises -> String:
 
     Adapted from rw_squirrel_2: the modifier-keyword set is `unique`/
     `indexed`/`multi`/`ordered` (was `unique`/`forwardonly`/`multi`/
-    `ordered`) -- see `FieldModifier`'s own doc comment for why."""
+    `ordered`) -- see `FieldModifier`'s own doc comment for why.
+
+    `full_source`/`body_start` are for error-location reporting only
+    (`_body_err`, above) -- `bs` itself still scans the isolated `body`
+    substring, not `full_source`, deliberately: bounding a malformed
+    field's own scan (an unterminated `[`, say) to the struct's own body
+    means it still fails fast and locally, rather than scanning off into
+    unrelated, unbounded file content looking for a stray closing
+    bracket somewhere else entirely.
+
+    `method_body_start_offset` (out-param, only ever set when methods are
+    found below) is the real file's own absolute *byte offset* where the
+    returned method-body text starts -- `codegen/methods.mojo`'s own
+    `rewrite_method_body` re-scans that text through a *separate*,
+    freshly-constructed `Scanner`, on its own with no `full_source`/
+    `body_start` of its own to correct against, so any error raised
+    while rewriting a method's body (the single most common error
+    surface in the whole compiler -- marking mismatches, undefined
+    entities, bad chains) needs this to translate its own reported
+    line:col back to reality instead of reporting "line 1 of the method
+    text"."""
     var bs = Scanner(body)
     while True:
         bs.skip_trivia()
@@ -29,6 +72,7 @@ def parse_struct_body(body: String, mut fields: List[Field]) raises -> String:
             var body_bytes = body.as_bytes()
             while line_start > 0 and body_bytes[line_start - 1] != UInt8(ord("\n")):
                 line_start -= 1
+            method_body_start_offset = body_start + line_start
             return String(body[byte = line_start : body.byte_length()])
 
         var modifier = FieldModifier.NONE
@@ -57,7 +101,7 @@ def parse_struct_body(body: String, mut fields: List[Field]) raises -> String:
             else:
                 break
             if modifier != FieldModifier.NONE:
-                raise bs.err(
+                raise _body_err(full_source, body_start, bs.pos,
                     "InvalidSquirrelSyntax: a field can't be both '"
                     + modifier_keyword
                     + "' and '"
@@ -73,20 +117,20 @@ def parse_struct_body(body: String, mut fields: List[Field]) raises -> String:
         var name_is_marked = bs.try_consume("@@")
         var name = bs.scan_ident()
         if name.byte_length() == 0:
-            raise bs.err("InvalidSquirrelSyntax: expected field name")
+            raise _body_err(full_source, body_start, bs.pos,"InvalidSquirrelSyntax: expected field name")
 
         for existing in fields:
             if existing.name == name:
-                raise bs.err("DuplicateFieldName: " + name)
+                raise _body_err(full_source, body_start, bs.pos,"DuplicateFieldName: " + name)
 
         bs.skip_trivia()
         if not bs.try_consume(":"):
-            raise bs.err("InvalidSquirrelSyntax: expected ':' after field name")
+            raise _body_err(full_source, body_start, bs.pos,"InvalidSquirrelSyntax: expected ':' after field name")
         bs.skip_trivia()
 
         var type_str = bs.scan_type()
         if type_str.byte_length() == 0:
-            raise bs.err("InvalidSquirrelSyntax: empty field type")
+            raise _body_err(full_source, body_start, bs.pos,"InvalidSquirrelSyntax: empty field type")
 
         var type_is_relation = is_directly_entity_reachable(type_str)
         var type_is_container = parse_type_expr(type_str).is_parameterized()
@@ -99,7 +143,7 @@ def parse_struct_body(body: String, mut fields: List[Field]) raises -> String:
             # which has no container wrapper of its own for the type
             # alone to carry that signal.
             if name_is_marked:
-                raise bs.err(
+                raise _body_err(full_source, body_start, bs.pos,
                     "InvalidSquirrelSyntax: '@@" + name + "' -- '@@'"
                     " marking on a container field's own name is no"
                     " longer used or needed (the type itself, '"
@@ -107,7 +151,7 @@ def parse_struct_body(body: String, mut fields: List[Field]) raises -> String:
                     + name + ": " + type_str + "'"
                 )
         elif name_is_marked != type_is_relation:
-            raise bs.err(
+            raise _body_err(full_source, body_start, bs.pos,
                 "InvalidSquirrelSyntax: @@ marking must match between field"
                 " name and type"
             )
@@ -122,7 +166,9 @@ def parse_struct_body(body: String, mut fields: List[Field]) raises -> String:
         _ = bs.try_consume(",")
 
 
-def parse_hand_written_struct_fields(body: String, mut fields: List[Field]) raises -> String:
+def parse_hand_written_struct_fields(
+    body: String, full_source: String, body_start: Int, mut fields: List[Field]
+) raises -> String:
     """Extracts a hand-written (plain-structs milestone) struct's own `var
     name: Type`/`var @@name: @@Type` field declarations from `body`
     (already isolated via `Scanner.scan_indented_block`, same as `parse_
@@ -151,7 +197,11 @@ def parse_hand_written_struct_fields(body: String, mut fields: List[Field]) rais
     is unqualified back to bare `<Param>` here, once, since every
     downstream consumer of this field list (relation-schema, JSON's
     generated `from_json` companion) is a *free function*, where `Self`
-    doesn't exist at all."""
+    doesn't exist at all.
+
+    `full_source`/`body_start`: same as `parse_struct_body`'s own --
+    error-location reporting only (`_body_err`), scanning itself still
+    bounded to `body`."""
     var bs = Scanner(body)
     while True:
         bs.skip_trivia()
@@ -166,7 +216,7 @@ def parse_hand_written_struct_fields(body: String, mut fields: List[Field]) rais
                 line_start -= 1
             return String(body[byte = line_start : body.byte_length()])
         if not (bs.starts_with("var") and not is_ident_char(bs.peek_at(3))):
-            raise bs.err(
+            raise _body_err(full_source, body_start, bs.pos,
                 "InvalidSquirrelSyntax: expected a 'var name: Type' field"
                 " declaration in this hand-written struct"
             )
@@ -175,17 +225,17 @@ def parse_hand_written_struct_fields(body: String, mut fields: List[Field]) rais
         var name_is_marked = bs.try_consume("@@")
         var name = bs.scan_ident()
         if name.byte_length() == 0:
-            raise bs.err("InvalidSquirrelSyntax: expected field name")
+            raise _body_err(full_source, body_start, bs.pos,"InvalidSquirrelSyntax: expected field name")
         for existing in fields:
             if existing.name == name:
-                raise bs.err("DuplicateFieldName: " + name)
+                raise _body_err(full_source, body_start, bs.pos,"DuplicateFieldName: " + name)
         bs.skip_trivia()
         if not bs.try_consume(":"):
-            raise bs.err("InvalidSquirrelSyntax: expected ':' after field name")
+            raise _body_err(full_source, body_start, bs.pos,"InvalidSquirrelSyntax: expected ':' after field name")
         bs.skip_trivia()
         var type_str = bs.scan_type()
         if type_str.byte_length() == 0:
-            raise bs.err("InvalidSquirrelSyntax: empty field type")
+            raise _body_err(full_source, body_start, bs.pos,"InvalidSquirrelSyntax: empty field type")
         if type_str.startswith("Self."):
             type_str = String(type_str[byte=5 : type_str.byte_length()])
         var type_is_relation = is_directly_entity_reachable(type_str)
@@ -194,7 +244,7 @@ def parse_hand_written_struct_fields(body: String, mut fields: List[Field]) rais
             # Same relaxation as `parse_struct_body`'s own -- see its
             # comment for the full "why."
             if name_is_marked:
-                raise bs.err(
+                raise _body_err(full_source, body_start, bs.pos,
                     "InvalidSquirrelSyntax: '@@" + name + "' -- '@@'"
                     " marking on a container field's own name is no"
                     " longer used or needed (the type itself, '"
@@ -202,7 +252,7 @@ def parse_hand_written_struct_fields(body: String, mut fields: List[Field]) rais
                     + name + ": " + type_str + "'"
                 )
         elif name_is_marked != type_is_relation:
-            raise bs.err(
+            raise _body_err(full_source, body_start, bs.pos,
                 "InvalidSquirrelSyntax: @@ marking must match between field"
                 " name and type"
             )

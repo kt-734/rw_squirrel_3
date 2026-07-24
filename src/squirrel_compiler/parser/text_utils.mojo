@@ -70,6 +70,28 @@ def is_ident_char(b: UInt8) -> Bool:
     )
 
 
+def is_ident_start_char(b: UInt8) -> Bool:
+    """Like `is_ident_char`, but excludes digits -- a leading digit is
+    never a real identifier's own first character (it's a numeric
+    literal instead), unlike a *later* position in the same identifier
+    (`x1`, `team2`), where a digit is completely ordinary. `scan_ident()`
+    itself stays boundary-unaware on purpose (it's reused to scan a
+    continuation from a mid-identifier position too, e.g. resuming after
+    a partial match elsewhere) -- this is for a caller that specifically
+    needs to reject a bare numeric run (`0`, `42`) masquerading as a
+    name, confirmed as a real gap: `at_plain_var_decl`'s own "any bare
+    name, anywhere" fallback previously accepted `0` (from an unrelated
+    `if ... > 0:` comparison) as a var-decl/param name, harmless only by
+    coincidence (the type that happened to follow could never actually
+    resolve) until a later check made a stray `0: @@name` an accepted
+    shape instead of a silently-declined one."""
+    return (
+        (b >= UInt8(ord("a")) and b <= UInt8(ord("z")))
+        or (b >= UInt8(ord("A")) and b <= UInt8(ord("Z")))
+        or b == UInt8(ord("_"))
+    )
+
+
 def is_after_arrow(source: String, pos: Int) -> Bool:
     """True if, scanning backward from byte offset `pos` (skipping spaces
     and tabs), the two bytes immediately before are `-` then `>` -- i.e.

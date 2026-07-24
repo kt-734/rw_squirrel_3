@@ -372,6 +372,12 @@ own value is *directly* an entity, never when it's merely a container of
 one) — applied uniformly to local variables and loop variables too, not
 just fields.
 
+A **def/method parameter** follows the identical rule: a single relation
+still needs `@@` on the parameter's own name (`@@e: @@Employee`), but a
+container of one is always bare (`extra: List[@@Employee]`) — same as a
+field, enforced the same way (marking a container parameter's own name is
+a compile error).
+
 ## World scope and keepalive
 
 ```
