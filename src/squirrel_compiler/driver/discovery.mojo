@@ -8,7 +8,7 @@ from squirrel_compiler.parser import (
     is_directly_entity_reachable,
 )
 from squirrel_compiler.driver.file_paths import module_path_for
-from squirrel_compiler.codegen import sqrrl_prefixed
+from squirrel_compiler.codegen import sqrrl_prefixed, param_name
 from squirrel_compiler.codegen.methods import world_marked_method_names, bare_method_returns
 
 
@@ -84,6 +84,197 @@ def discover_structs(sqrrl_files: List[String], target_root: String) raises -> D
             raise Error(path + ": " + String(e))
 
     return DiscoveryResult(discovered^, module_of^)
+
+
+def _same_field_set(a: List[String], b: List[String]) -> Bool:
+    """Mirrors `scanner.mojo`'s own private `_same_field_set` exactly
+    (order-independent set equality for two `key(...)` groups) -- not
+    exported from the parser module, so duplicated here rather than
+    imported, same convention this codebase already follows for other
+    small private helpers shared across layers (e.g. `entity.mojo`/
+    `table.mojo`'s own duplicated `_field_by_name`)."""
+    if len(a) != len(b):
+        return False
+    for name in a:
+        if name not in b:
+            return False
+    return True
+
+
+def resolve_struct_inheritance(mut discovery: DiscoveryResult) raises:
+    """Struct inheritance (`@@struct @@Name < @@Other:`): for every struct
+    with `parsed.inherits_from != ""`, copies the target's own `fields`/
+    `key_groups`/`method_body` in, mutating `discovery.structs` in place.
+    Must run before *every* other discovery-level builder/check
+    (`check_no_relation_cycles`, `build_relation_schema`, `build_unique_
+    fields`, `build_key_group_lookup_names`, `check_key_groups_dont_
+    collide_with_fields`, etc.) -- all of them iterate `discovery.structs`
+    directly and read straight off `ds.parsed.fields`/`ds.parsed.key_
+    groups`, so once this mutation has happened, literally none of them
+    need to know inheritance exists at all; they see an inheriting
+    struct's already-merged content exactly as if it had been declared
+    directly.
+
+    Fields: target's own first, then this struct's own additional ones,
+    in that order -- `DuplicateFieldName` if this struct tries to
+    redeclare one of the target's own field names (inheritance only ever
+    adds, never overrides). Key groups: same order, simple concatenation
+    (each group is independent regardless of which struct declared it).
+    Method bodies: text concatenation (`target + "\\n" + own`, degrading
+    to just whichever side is non-empty when the other is blank, so a
+    struct that inherits fields but declares no methods of its own -- or
+    a target with no methods -- doesn't pick up a stray leading/trailing
+    blank line) -- this is what lets `build_world_methods`/`build_bare_
+    method_returns` (both scan `ds.parsed.method_body` as raw text for
+    method names, no position-awareness needed for that) see the *union*
+    of both structs' own methods for call-site dispatch elsewhere in a
+    script, same "no changes needed downstream" payoff as fields/key
+    groups. (Byte-accurate position tracking for a rewrite *error*
+    actually inside an inherited method body is a separate, later concern
+    -- see `codegen/rewrite.mojo`'s own `STRUCT` branch and its doc
+    comment on the accepted v1 imprecision there.)
+
+    No chaining: raises if the target itself has its own `inherits_from`
+    set. An unknown target name also raises here (rather than at parse
+    time) since resolving it needs every struct project-wide to have been
+    discovered first -- this is also where inheriting from a hand-written
+    plain struct is naturally rejected for free, since plain structs are
+    never part of `discovery.structs` at all (a separate discovery pass,
+    `discover_plain_structs`), so the name lookup simply never finds
+    them."""
+    var index_of = Dict[String, Int]()
+    for i in range(len(discovery.structs)):
+        index_of[discovery.structs[i].parsed.name] = i
+
+    for i in range(len(discovery.structs)):
+        var own_name = discovery.structs[i].parsed.name
+        var target_name = discovery.structs[i].parsed.inherits_from
+        if target_name == "":
+            continue
+        if target_name not in index_of:
+            raise Error(
+                "InvalidSquirrelSyntax: '@@" + own_name + " < @@" + target_name
+                + "' references unknown struct '" + target_name + "'"
+            )
+        var target_index = index_of[target_name]
+        if discovery.structs[target_index].parsed.inherits_from != "":
+            raise Error(
+                "InvalidSquirrelSyntax: '@@" + own_name + " < @@" + target_name
+                + "' -- '" + target_name + "' itself uses '<', and struct"
+                " inheritance chaining isn't supported"
+            )
+
+        var merged_fields = discovery.structs[target_index].parsed.fields.copy()
+        for f in discovery.structs[i].parsed.fields:
+            for existing in merged_fields:
+                if existing.name == f.name:
+                    raise Error(
+                        "DuplicateFieldName: '" + f.name + "' is already"
+                        " inherited from '" + target_name + "' -- '"
+                        + own_name + "' can't redeclare it"
+                    )
+            merged_fields.append(f.copy())
+
+        var merged_key_groups = discovery.structs[target_index].parsed.key_groups.copy()
+        for group in discovery.structs[i].parsed.key_groups:
+            merged_key_groups.append(group.copy())
+
+        var target_method_body = discovery.structs[target_index].parsed.method_body
+        var own_method_body = discovery.structs[i].parsed.method_body
+        var merged_method_body: String
+        if target_method_body == "":
+            merged_method_body = own_method_body
+        elif own_method_body == "":
+            merged_method_body = target_method_body
+        else:
+            merged_method_body = target_method_body + "\n" + own_method_body
+
+        discovery.structs[i].parsed.fields = merged_fields^
+        discovery.structs[i].parsed.key_groups = merged_key_groups^
+        discovery.structs[i].parsed.method_body = merged_method_body^
+
+
+def check_key_groups_after_inheritance(discovery: DiscoveryResult) raises:
+    """`Scanner.parse_struct` defers its own `key(...)` field-name/
+    duplicate validation for an inheriting struct (its own `key(...)`
+    lines may legitimately reference fields that only become visible
+    after `resolve_struct_inheritance` copies the target's fields in) --
+    this re-runs that exact same validation (undeclared field name /
+    duplicate field within one group / two groups with an identical field
+    set), but only for structs with `inherits_from != ""` (an ordinary
+    struct already got this at parse time, doesn't need it twice), against
+    the now-fully-merged `ds.parsed.fields`/`ds.parsed.key_groups`. Must
+    run after `resolve_struct_inheritance`. Same coarser "struct name, no
+    line:col" error-reporting convention this file's other post-discovery
+    checks already accept (`check_no_relation_cycles`/`check_key_groups_
+    dont_collide_with_fields`)."""
+    for ds in discovery.structs:
+        if ds.parsed.inherits_from == "":
+            continue
+        for group in ds.parsed.key_groups:
+            for field_name in group:
+                var found = False
+                for f in ds.parsed.fields:
+                    if f.name == field_name:
+                        found = True
+                        break
+                if not found:
+                    raise Error(
+                        "InvalidSquirrelSyntax: 'key(...)' on '" + ds.parsed.name
+                        + "' references undeclared field '" + field_name + "'"
+                    )
+            for i in range(len(group)):
+                for j in range(i + 1, len(group)):
+                    if group[i] == group[j]:
+                        raise Error(
+                            "InvalidSquirrelSyntax: 'key(...)' on '" + ds.parsed.name
+                            + "' lists field '" + group[i] + "' more than once"
+                        )
+        for i in range(len(ds.parsed.key_groups)):
+            for j in range(i + 1, len(ds.parsed.key_groups)):
+                if _same_field_set(ds.parsed.key_groups[i], ds.parsed.key_groups[j]):
+                    raise Error(
+                        "InvalidSquirrelSyntax: two 'key(...)' groups on '"
+                        + ds.parsed.name + "' declare the exact same field set"
+                    )
+
+
+def build_struct_fields(discovery: DiscoveryResult) -> Dict[String, List[Field]]:
+    """Struct name -> its own (post-inheritance-merge) field list --
+    threaded into `RewriteContext` so `codegen/rewrite.mojo`'s own,
+    independent re-parse of each struct (which never consults
+    `DiscoveryResult` and so never sees an inheriting struct's copied-in
+    fields) can be overridden with the authoritative, already-merged
+    version. A no-op override for a non-inheriting struct -- its own
+    fresh re-parse and this discovery-computed version are always
+    identical."""
+    var out = Dict[String, List[Field]]()
+    for ds in discovery.structs:
+        out[ds.parsed.name] = ds.parsed.fields.copy()
+    return out^
+
+
+def build_struct_key_groups(discovery: DiscoveryResult) -> Dict[String, List[List[String]]]:
+    """`build_struct_fields`'s exact parallel for `key_groups`."""
+    var out = Dict[String, List[List[String]]]()
+    for ds in discovery.structs:
+        out[ds.parsed.name] = ds.parsed.key_groups.copy()
+    return out^
+
+
+def build_struct_method_bodies(discovery: DiscoveryResult) -> Dict[String, String]:
+    """`build_struct_fields`'s exact parallel for `method_body` -- lets
+    `codegen/rewrite.mojo`'s `STRUCT` branch splice an inherited method in
+    as this struct's own, using the same `rewrite_method_body(parsed.
+    method_body, parsed.name, ctx, source, parsed.method_body_start_
+    offset)` call it already makes; only `.method_body` itself needs
+    overriding from here, not the offset/source (see that function's own
+    doc comment for the accepted v1 imprecision this implies for an error
+    specifically inside an *inherited* method body)."""
+    var out = Dict[String, String]()
+    for ds in discovery.structs:
+        out[ds.parsed.name] = ds.parsed.method_body
+    return out^
 
 
 def build_struct_names(discovery: DiscoveryResult) -> Dict[String, Bool]:
@@ -323,6 +514,101 @@ def build_multi_fields(discovery: DiscoveryResult) -> Dict[String, List[String]]
                 names.append(field.name)
         multi_fields[ds.parsed.name] = names^
     return multi_fields^
+
+
+def _join_key_group_field_names(group: List[String], fields: List[Field]) raises -> String:
+    """The single joined lookup-method suffix for one `key(...)` group,
+    e.g. `key(name, start_year)` -> `"name_start_year"` -- shared by
+    `build_key_group_lookup_names` and `check_key_groups_dont_collide_
+    with_fields`. Each field's own piece of the join uses `param_name`
+    (`sqrrl__` prefix iff that field is a relation), exactly matching
+    `codegen/table.mojo`'s own generated `for_<...>` method name. Raises
+    only if the parser's own validation (every name in every group
+    matches a real field, `scanner.mojo`'s `parse_struct`) were somehow
+    violated, which should be unreachable in practice."""
+    var joined = String()
+    for i in range(len(group)):
+        if i > 0:
+            joined += "_"
+        var found = False
+        for f in fields:
+            if f.name == group[i]:
+                joined += param_name(f)
+                found = True
+                break
+        if not found:
+            raise Error(
+                "InternalError: key(...) referenced unknown field '"
+                + group[i] + "' -- parser should have already rejected this"
+            )
+    return joined^
+
+
+def build_key_group_lookup_names(discovery: DiscoveryResult) raises -> Dict[String, List[String]]:
+    """Struct name -> one joined lookup-method suffix per `key(...)` line
+    it declares, in declaration order -- e.g. `key(name, start_year)`
+    contributes `"name_start_year"`. Lets the rewrite engine's table-level
+    -call dispatch (`rewrite_field_access.mojo`) recognize `@@@Type.
+    for_name_start_year(...)` as valid *without* trying to split the
+    joined text back apart at call-site parse time (impossible in
+    general -- a field name can itself contain an underscore, so
+    `"name_start_year"` is ambiguous as a *split target*, only
+    unambiguous as a *whole-string comparison* against every group's own
+    precomputed joined name, which is what this builds)."""
+    var out = Dict[String, List[String]]()
+    for ds in discovery.structs:
+        var joined_names = List[String]()
+        for group in ds.parsed.key_groups:
+            joined_names.append(_join_key_group_field_names(group, ds.parsed.fields))
+        out[ds.parsed.name] = joined_names^
+    return out^
+
+
+def check_key_groups_dont_collide_with_fields(discovery: DiscoveryResult) raises:
+    """A `key(...)` group's own joined lookup-method name (`for_room_date`
+    for `key(room, date)`) can coincide with a genuinely different field's
+    own derived `for_<field>` name -- confirmed via a real repro: a
+    struct with `key(room, date)` *and* a separate `indexed room_date:
+    String` field generates two `def for_room_date` overloads on the same
+    table (harmless to real Mojo -- it resolves them by arity), but the
+    rewrite engine's own call-site dispatch (`rewrite_field_access.mojo`)
+    matches purely on the method-name *text*, before any argument count is
+    known, so a script calling the single-field lookup would get silently
+    mis-registered as the composite one (wrong return shape -- a bare
+    entity instead of a `Set`). Rejected here, at the source, rather than
+    trying to disambiguate by arity downstream: raises a clear
+    `InvalidSquirrelSyntax`-style error naming both the struct and the
+    colliding method name.
+
+    Checks every reserved `for_<field>`-family name a field with any
+    modifier but `NONE` earns -- the plain `for_<field>` itself, plus
+    (for an `ordered` field) its five range-query siblings
+    (`_greater_than`/`_less_than`/`_at_least`/`_at_most`/`_between`) --
+    since any of those could just as easily collide with a `key(...)`
+    group's own joined name."""
+    for ds in discovery.structs:
+        if len(ds.parsed.key_groups) == 0:
+            continue
+        var reserved = Dict[String, Bool]()
+        for f in ds.parsed.fields:
+            if f.modifier == FieldModifier.NONE:
+                continue
+            var base = param_name(f)
+            reserved[base] = True
+            if f.modifier == FieldModifier.ORDERED:
+                for comparator in ["greater_than", "less_than", "at_least", "at_most", "between"]:
+                    reserved[base + "_" + comparator] = True
+        for group in ds.parsed.key_groups:
+            var joined = _join_key_group_field_names(group, ds.parsed.fields)
+            if joined in reserved:
+                raise Error(
+                    "InvalidSquirrelSyntax: 'key(...)' on '" + ds.parsed.name
+                    + "' generates a lookup method named 'for_" + joined
+                    + "', which collides with a field on the same struct that"
+                    " already earns that exact method name -- rename one of"
+                    " them, or restructure the key(...) group, to avoid the"
+                    " ambiguity"
+                )
 
 
 def build_entity_symbols(discovery: DiscoveryResult) -> Dict[String, String]:

@@ -5,7 +5,7 @@ from squirrel_compiler.codegen.helpers import (
     container_element_of,
     rewritten_field_type,
 )
-from squirrel_compiler.codegen.entity import emit_entity_inner, emit_entity
+from squirrel_compiler.codegen.entity import emit_entity_inner, emit_entity, emit_entity_value_key, emit_entity_key_groups
 from squirrel_compiler.codegen.table import emit_indexes, emit_table
 from squirrel_compiler.codegen.aggregates import emit_aggregate_methods
 from squirrel_compiler.codegen.methods import rewrite_method_body
@@ -81,6 +81,25 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
 
         if kind == MarkerKind.STRUCT:
             var parsed = sc.parse_struct()
+            # Struct inheritance (`@@struct @@Name < @@Other:`): this fresh
+            # re-parse only ever sees *this* struct's own locally-declared
+            # body -- it never consults `DiscoveryResult`, so an inheriting
+            # struct's copied-in fields/key groups/methods aren't here yet.
+            # Override with the discovery-computed, already-merged versions
+            # (`RewriteContext.struct_fields`/`struct_key_groups`/`struct_
+            # method_body`, built once project-wide by `driver/convert_
+            # directory.mojo`) whenever ctx actually knows this struct --
+            # a no-op for a non-inheriting one, since its own fresh parse
+            # and the discovery-computed version are always identical.
+            # Guarded (not unconditional) so a test calling `transform_
+            # source` directly, without populating these maps at all,
+            # keeps today's behavior unchanged.
+            if parsed.name in ctx.struct_fields:
+                parsed.fields = ctx.struct_fields[parsed.name].copy()
+            if parsed.name in ctx.struct_key_groups:
+                parsed.key_groups = ctx.struct_key_groups[parsed.name].copy()
+            if parsed.name in ctx.struct_method_body:
+                parsed.method_body = ctx.struct_method_body[parsed.name]
             out += emit_entity_inner(parsed, ctx.plain_struct_names)
             out += "\n\n"
             out += emit_entity(
@@ -91,6 +110,19 @@ def rewrite_markers(source: String, mut ctx: RewriteContext) raises -> String:
                 ctx.json_used,
             )
             out += "\n\n"
+            if parsed.is_value_type:
+                # Part B: the whole-entity value key that backs `create()`'s
+                # get-or-create semantics (`table.mojo`) -- only generated
+                # for a `value`-flagged struct, since an ordinary struct's
+                # own table never needs write-time whole-entity uniqueness
+                # at all.
+                out += emit_entity_value_key(parsed, ctx.plain_struct_names)
+                out += "\n\n"
+            if len(parsed.key_groups) > 0:
+                # One independent key struct per `key(...)` line -- see
+                # `emit_entity_key_groups`'s own doc comment.
+                out += emit_entity_key_groups(parsed, ctx.plain_struct_names)
+                out += "\n\n"
             out += emit_indexes(parsed, ctx.plain_struct_names)
             out += "\n\n"
             out += emit_table(parsed, ctx.plain_struct_names)

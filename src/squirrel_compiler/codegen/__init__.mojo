@@ -1,5 +1,6 @@
 from squirrel_compiler.codegen.helpers import (
     sqrrl_prefixed,
+    param_name,
     is_relation_field,
     storage_field_name,
     storage_field_name_for_hop,

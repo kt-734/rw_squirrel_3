@@ -43,13 +43,22 @@ an explicit import for another struct's type — see
 `Department` also demonstrates every relation-field shape side by side:
 
 ```
-@@struct equatable @@Department:
+@@struct value @@Department:
     name: String
     tags: List[String]              # plain container field, no backward index
     multi @@projects: @@Project      # one-at-a-time membership
     vendors: Set[@@Vendor]           # ordinary Set-wrapped relation, bare name
     multi skills: String             # multi on a *plain* field, Set[String]-backed
 ```
+
+`value` makes `Department`'s own `==`/`Set`/`Dict` membership
+value-based rather than id-based (see
+[syntax-reference.md](syntax-reference.md#struct-level-flags)) — and, as a
+consequence, field-immutable: no `set_<field>`/`add_to_<field>` at all, for
+any of these fields. Every value above (including `projects`/`vendors`/
+`skills`) is supplied once, up front, in `logic/factories.mojo.sqrrl`'s own
+`make_department` — there's no setter call anywhere later in
+`main.mojo.sqrrl` to build them up incrementally.
 
 ## Factories (`logic/factories.mojo.sqrrl`)
 

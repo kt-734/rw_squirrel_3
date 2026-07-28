@@ -1289,10 +1289,25 @@ def _handle_table_level_call(
         pass  # bare Int -- nothing to track
     elif field.startswith("for_"):
         var target_field = String(field[byte=4 : field.byte_length()])
+        # A composite `key(...)` lookup -- `target_field` here is the
+        # *whole* joined suffix (`"name_start_year"`), compared as one
+        # string against every group's own precomputed name
+        # (`discovery.mojo`'s `build_key_group_lookup_names`) rather than
+        # split apart, since a field name can itself contain an
+        # underscore, making the split ambiguous in general. Checked
+        # before the single-field branches below so a composite lookup
+        # never has to satisfy any single field's own marking rules.
+        var is_key_group_match = (
+            fa.entity in ctx.key_group_lookup_names
+            and _contains(ctx.key_group_lookup_names[fa.entity], target_field)
+        )
         var range_match = _match_ordered_range_call(
             target_field, ctx.ordered_fields[fa.entity].copy() if fa.entity in ctx.ordered_fields else List[String]()
         )
-        if range_match:
+        if is_key_group_match:
+            method_name = "for_" + target_field
+            is_entity_returning = True
+        elif range_match:
             var range_field = range_match.value().field_name
             var is_range_relation = fa.entity in ctx.relation_schema and range_field in ctx.relation_schema[fa.entity]
             if is_range_relation != field_marked:
@@ -1358,9 +1373,9 @@ def _handle_table_level_call(
         if m.is_relation_or_multi:
             is_list_returning = True
             registered_type = encode_container_type("Dict", m.relation_target)
-    elif field.startswith("count_"):
-        var target_field = String(field[byte=6 : field.byte_length()])
-        var m = _match_groupable_field(sc, fa, ctx, "count_", target_field)
+    elif field.startswith("count_for_"):
+        var target_field = String(field[byte=10 : field.byte_length()])
+        var m = _match_groupable_field(sc, fa, ctx, "count_for_", target_field)
         method_name = m.method_name
     elif field.startswith("group_by_"):
         var target_field = String(field[byte=9 : field.byte_length()])
@@ -1403,12 +1418,12 @@ def _handle_table_level_call(
             + "."
             + field
             + "(...)' isn't supported yet -- only create/all/count/"
-            "for_<field>/count_<field>/group_by_<field>/count_by_<field>/"
+            "for_<field>/count_for_<field>/group_by_<field>/count_by_<field>/"
             "distinct_<field> are, so far"
         )
     var call_text = "sqrrl___world." + fa.entity + "." + method_name
     if not (is_entity_returning or is_list_returning):
-        # A bare-`Int`-returning call (`count()`/`count_<field>(...)`) --
+        # A bare-`Int`-returning call (`count()`/`count_for_<field>(...)`) --
         # nothing to chain off, so this stays exactly as before: emit up
         # through the method name only (not even the call's own `(`),
         # letting the outer rewrite loop continue copying the argument
@@ -1736,10 +1751,10 @@ def _resolve_groupable_target(
     """Validates `target_field` is a real indexed-family field on
     `fa.entity` (any modifier but NONE) and that the table-level call's own
     single step's `marked` flag matches whether it's actually a
-    relation/multi field -- shared by `count_<field>`/`group_by_<field>`/
-    `count_by_<field>`/`distinct_<field>` (via `_match_groupable_field`)
-    and the `_by_<x>`/`_for_<x>` grouping side of `sum_`/`avg_`/`min_`/
-    `max_`/`median_` (via `_match_aggregate_call`) -- both M4."""
+    relation/multi field -- shared by `count_for_<field>`/`group_by_
+    <field>`/`count_by_<field>`/`distinct_<field>` (via `_match_groupable_
+    field`) and the `_by_<x>`/`_for_<x>` grouping side of `sum_`/`avg_`/
+    `min_`/`max_`/`median_` (via `_match_aggregate_call`) -- both M4."""
     var is_unique = fa.entity in ctx.unique_fields and _contains(ctx.unique_fields[fa.entity], target_field)
     var is_indexed = fa.entity in ctx.indexed_fields and _contains(ctx.indexed_fields[fa.entity], target_field)
     var is_multi = fa.entity in ctx.multi_fields and _contains(ctx.multi_fields[fa.entity], target_field)
@@ -1798,7 +1813,7 @@ def _resolve_groupable_target(
 def _match_groupable_field(
     mut sc: Scanner, fa: FieldAccess, ctx: RewriteContext, prefix: String, target_field: String
 ) raises -> _GroupableFieldMatch:
-    """Shared validation for `count_<field>`/`group_by_<field>`/
+    """Shared validation for `count_for_<field>`/`group_by_<field>`/
     `count_by_<field>`/`distinct_<field>` (M4) -- unlike `for_<field>`'s own
     range-query family, these have fixed prefixes with no suffix ambiguity
     to resolve, so this is a straight lookup against the entity's own

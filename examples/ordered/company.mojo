@@ -22,6 +22,7 @@ struct sqrrl__DepartmentInner(Movable, ImplicitlyDeletable):
         self._table[].indexes.name.check_unique(v, self._id)
         self._table[].indexes.name.remove(self._id, self._name)
         self._name = v
+        self._table[].indexes.name.add(self._id, self._name)
 
     @always_inline
     def get_name(self) -> ref [self._name] String:
@@ -89,7 +90,7 @@ struct sqrrl__DepartmentTable(Movable):
         var id = self.storage[].indexes.name.get_bwd(value)
         return sqrrl__Department(self.storage[].handle_for(id))
 
-    def count_name(self, value: String) -> Int:
+    def count_for_name(self, value: String) -> Int:
         return 1 if self.storage[].indexes.name.contains(value) else 0
 
     def group_by_name(self) -> Dict[String, sqrrl__Department]:
@@ -126,6 +127,7 @@ struct sqrrl__EmployeeInner(Movable, ImplicitlyDeletable):
         self._table[].indexes.name.check_unique(v, self._id)
         self._table[].indexes.name.remove(self._id, self._name)
         self._name = v
+        self._table[].indexes.name.add(self._id, self._name)
 
     def set_years_employed(mut self, v: UInt32):
         self._table[].indexes.years_employed.remove(self._id, self._years_employed)
@@ -266,7 +268,7 @@ struct sqrrl__EmployeeTable(Movable):
             out.add(sqrrl__Employee(self.storage[].handle_for(id)))
         return out^
 
-    def count_name(self, value: String) -> Int:
+    def count_for_name(self, value: String) -> Int:
         return 1 if self.storage[].indexes.name.contains(value) else 0
 
     def group_by_name(self) -> Dict[String, sqrrl__Employee]:
@@ -283,7 +285,7 @@ struct sqrrl__EmployeeTable(Movable):
             out.add(key.copy())
         return out^
 
-    def count_years_employed(self, value: UInt32) -> Int:
+    def count_for_years_employed(self, value: UInt32) -> Int:
         return len(self.storage[].indexes.years_employed.get_bwd(value))
 
     def group_by_years_employed(self) -> Dict[UInt32, Set[sqrrl__Employee]]:
@@ -310,7 +312,7 @@ struct sqrrl__EmployeeTable(Movable):
             out.append(key.copy())
         return out^
 
-    def count_sqrrl__dept(self, value: sqrrl__Department) -> Int:
+    def count_for_sqrrl__dept(self, value: sqrrl__Department) -> Int:
         return len(self.storage[].indexes.dept.get_bwd(value))
 
     def group_by_sqrrl__dept(self) -> Dict[sqrrl__Department, Set[sqrrl__Employee]]:
@@ -892,7 +894,7 @@ def main() raises:
         print("departments with salary totals:", len(sqrrl__salary_by_dept))
 
         print("distinct years employed:", len(sqrrl___world.Employee.distinct_years_employed()))
-        print("count with 5 years:", sqrrl___world.Employee.count_years_employed(5))
+        print("count with 5 years:", sqrrl___world.Employee.count_for_years_employed(5))
 
         var sqrrl__by_dept = sqrrl___world.Employee.group_by_sqrrl__dept()
         print("departments with employees:", len(sqrrl__by_dept))

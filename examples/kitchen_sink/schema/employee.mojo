@@ -31,6 +31,7 @@ struct sqrrl__EmployeeInner(Movable, ImplicitlyDeletable):
         self._table[].indexes.email.check_unique(v, self._id)
         self._table[].indexes.email.remove(self._id, self._email)
         self._email = v
+        self._table[].indexes.email.add(self._id, self._email)
 
     def set_title(mut self, v: String):
         self._title = v
@@ -187,7 +188,7 @@ struct sqrrl__EmployeeTable(Movable):
             out.add(sqrrl__Employee(self.storage[].handle_for(id)))
         return out^
 
-    def count_email(self, value: String) -> Int:
+    def count_for_email(self, value: String) -> Int:
         return 1 if self.storage[].indexes.email.contains(value) else 0
 
     def group_by_email(self) -> Dict[String, sqrrl__Employee]:
@@ -204,7 +205,7 @@ struct sqrrl__EmployeeTable(Movable):
             out.add(key.copy())
         return out^
 
-    def count_years_employed(self, value: UInt32) -> Int:
+    def count_for_years_employed(self, value: UInt32) -> Int:
         return len(self.storage[].indexes.years_employed.get_bwd(value))
 
     def group_by_years_employed(self) -> Dict[UInt32, Set[sqrrl__Employee]]:
@@ -231,7 +232,7 @@ struct sqrrl__EmployeeTable(Movable):
             out.append(key.copy())
         return out^
 
-    def count_sqrrl__dept(self, value: sqrrl__Department) -> Int:
+    def count_for_sqrrl__dept(self, value: sqrrl__Department) -> Int:
         return len(self.storage[].indexes.dept.get_bwd(value))
 
     def group_by_sqrrl__dept(self) -> Dict[sqrrl__Department, Set[sqrrl__Employee]]:

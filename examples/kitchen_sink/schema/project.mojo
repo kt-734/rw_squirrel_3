@@ -147,7 +147,7 @@ struct sqrrl__ProjectTable(Movable):
             out.append(sqrrl__Project(self.storage[].handle_for(id)))
         return out^
 
-    def count_priority(self, value: UInt32) -> Int:
+    def count_for_priority(self, value: UInt32) -> Int:
         return len(self.storage[].indexes.priority.get_bwd(value))
 
     def group_by_priority(self) -> Dict[UInt32, Set[sqrrl__Project]]:

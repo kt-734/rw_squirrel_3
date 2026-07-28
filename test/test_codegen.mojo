@@ -1367,12 +1367,12 @@ def test_transform_non_keepalive_struct_has_no_keepalive_machinery() raises:
     assert_true("return sqrrl__Project(inner^)" in out)
 
 
-def test_transform_equatable_struct() raises:
-    """`value_eq` is an *instance* method on the wrapper (M4 correction: it
-    never needed `sqrrl___world`, it just reads two entities' own fields
-    directly), field-by-field via the already-generated `get_<field>`
-    accessor on `Inner`, short-circuiting on the first mismatch. Deliberately
-    distinct from `__eq__` (id-based, "same row")."""
+def test_transform_value_struct() raises:
+    """A struct flagged `value` (`@@struct value @@Name:`) gets
+    `__eq__`/`__ne__`/`__hash__` themselves generated field-by-field, via
+    the already-generated `get_<field>` accessor on `Inner`. `__eq__`
+    short-circuits on the first field mismatch; `__hash__` folds every
+    field into the hasher in turn."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Person"] = True
@@ -1380,20 +1380,146 @@ def test_transform_equatable_struct() raises:
     var indexed_fields = Dict[String, List[String]]()
 
     var src = String(
-        "@@struct equatable @@Person:\n"
+        "@@struct value @@Person:\n"
         + "    name: String\n"
         + "    age: UInt32\n"
     )
     var out = transform_source(
         src, relation_schema, struct_names, unique_fields, indexed_fields
     )
-    assert_true("def value_eq(self, other: Self) -> Bool:" in out)
+    assert_false("value_eq" in out)
+    assert_true("def __eq__(self, other: Self) -> Bool:" in out)
     assert_true("if self._inner[].get_name() != other._inner[].get_name():" in out)
     assert_true("if self._inner[].get_age() != other._inner[].get_age():" in out)
     assert_true("        return True\n" in out)
+    assert_true("def __ne__(self, other: Self) -> Bool:" in out)
+    assert_true("return not (self == other)" in out)
+    assert_true("def __hash__[H: Hasher](self, mut hasher: H):" in out)
+    assert_true("hasher.update(self._inner[].get_name())" in out)
+    assert_true("hasher.update(self._inner[].get_age())" in out)
+    # The base trait list already includes `Equatable` unconditionally --
+    # `value` doesn't append anything to the trait list at all, so it must
+    # not appear twice.
+    assert_false("Equatable, ImplicitlyCopyable, ImplicitlyDeletable, Equatable" in out)
 
 
-def test_transform_non_equatable_struct_has_no_value_eq() raises:
+def test_transform_value_struct_generates_no_setters() raises:
+    """A `value` struct is field-immutable -- no `set_<field>` for any
+    field regardless of modifier, and (for a `multi` field) no
+    `add_to_<field>`/`remove_from_<field>` either. Confirmed via a real
+    end-to-end repro (see the plan) that mutating any field on a
+    value-hashed entity after it's been used as a key elsewhere (another
+    struct's own `unique`/`indexed`/`ordered` backward index) corrupts
+    that index -- removing every setter closes this at the root, since a
+    value that can never change after `create()` is always safe to use as
+    a key anywhere. `get_<field>` stays generated for every field --
+    read access is unaffected."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Department"] = True
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+
+    var src = String(
+        "@@struct value @@Department:\n"
+        + "    name: String\n"
+        + "    multi skills: String\n"
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, unique_fields, indexed_fields
+    )
+    assert_false("def set_name(" in out)
+    assert_false("def set_skills(" in out)
+    assert_false("def add_to_skills(" in out)
+    assert_false("def remove_from_skills(" in out)
+    assert_true("def get_name(" in out)
+    assert_true("def get_skills(" in out)
+
+
+def test_transform_value_struct_create_gets_get_or_create_semantics() raises:
+    """Part B: `create()` on a `value` struct checks a whole-entity
+    `ValueKey` *before* allocating a new id, and returns the existing
+    handle instead of raising when a value-duplicate is already live --
+    unlike an ordinary `unique`-tagged field's own `UniqueConstraintViolation`.
+    Also confirms the independent `sqrrl__<Name>ValueKey` struct itself
+    (own field-by-field `__eq__`/`__hash__`, no back-reference to
+    `Wrapper`/`Inner`/`Indexes`), its `UniqueIndex` slot on `Indexes`, and
+    that `Inner.__del__` evicts it too (otherwise a destructed row's id
+    would linger in the index forever, blocking a later, genuinely-new
+    `create()` for the same field values). `tags: List[String]` (a
+    container, needs a `.copy()` to build the `ValueKey` without
+    disturbing the `var` parameter/field still needed for the ordinary
+    construction path) alongside `name: String` (an `ImplicitlyCopyable`
+    leaf, no `.copy()` needed) exercises both branches of that split at
+    once."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Department"] = True
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+
+    var src = String(
+        "@@struct value @@Department:\n"
+        + "    name: String\n"
+        + "    tags: List[String]\n"
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, unique_fields, indexed_fields
+    )
+
+    # The independent ValueKey struct.
+    assert_true("struct sqrrl__DepartmentValueKey(Copyable, Movable, Hashable, Equatable):" in out)
+    assert_true("if self.name != other.name:" in out)
+    assert_true("if self.tags != other.tags:" in out)
+    assert_true("hasher.update(self.name)" in out)
+    assert_true("hasher.update(self.tags)" in out)
+
+    # Indexes gets a UniqueIndex[ValueKey] slot.
+    assert_true("var _sqrrl__value_key: UniqueIndex[sqrrl__DepartmentValueKey]" in out)
+    assert_true("self._sqrrl__value_key = UniqueIndex[sqrrl__DepartmentValueKey]()" in out)
+
+    # create() checks for a value-duplicate first, returns the existing
+    # handle rather than raising, and records the new key otherwise.
+    assert_true("var sqrrl___value_key = sqrrl__DepartmentValueKey(name=name, tags=tags.copy())" in out)
+    assert_true("var sqrrl___existing_id = self.storage[].indexes._sqrrl__value_key.get_bwd_or_none(sqrrl___value_key)" in out)
+    assert_true("if sqrrl___existing_id:" in out)
+    assert_true("return sqrrl__Department(self.storage[].handle_for(sqrrl___existing_id.value()))" in out)
+    assert_true("self.storage[].indexes._sqrrl__value_key.add(id, sqrrl___value_key)" in out)
+
+    # __del__ evicts the value-key entry too.
+    assert_true(
+        "self._table[].indexes._sqrrl__value_key.remove(self._id, sqrrl__DepartmentValueKey(name=self._name, tags=self._tags.copy()))"
+        in out
+    )
+
+
+def test_transform_non_value_struct_has_no_value_key_machinery() raises:
+    """An ordinary (non-`value`) struct's own table never needs write-time
+    whole-entity uniqueness at all -- no `ValueKey` struct, no
+    `UniqueIndex[ValueKey]` slot on `Indexes`, no get-or-create branch in
+    `create()`, no eviction call in `__del__`."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Department"] = True
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+
+    var src = String(
+        "@@struct @@Department:\n"
+        + "    name: String\n"
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, unique_fields, indexed_fields
+    )
+    assert_false("ValueKey" in out)
+    assert_false("value_key" in out)
+
+
+def test_transform_non_value_struct_stays_id_based() raises:
+    """A struct that isn't flagged `value` keeps id-based `__eq__`/
+    `__hash__` exactly as before -- unaffected by this feature, and (since
+    `value_eq` is gone for everyone now, not just non-`value` structs)
+    there's nothing named `value_eq` either way."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Person"] = True
@@ -1408,19 +1534,333 @@ def test_transform_non_equatable_struct_has_no_value_eq() raises:
         src, relation_schema, struct_names, unique_fields, indexed_fields
     )
     assert_false("value_eq" in out)
+    assert_true("return self.id() == other.id()" in out)
+    assert_true("return self.id() != other.id()" in out)
+    assert_true("hasher.update(self.id())" in out)
 
 
-def test_transform_value_eq_and_dont_keepalive_called_as_instance_methods() raises:
-    """`@@alice.value_eq(@@bob)`/`@@handle.dont_keepalive()` -- ordinary
-    instance calls, no `@@@` marking and no `sqrrl___world` threaded (M4
-    correction: neither ever needed it). Falls through the same M3
-    spliced-method-call dispatch with zero new code -- `value_eq`/
-    `dont_keepalive` just aren't in `ctx.world_methods`, same as any other
-    non-`@@@`-marked instance method."""
+def test_transform_unique_field_setter_re_adds_new_value_to_its_index() raises:
+    """Regression test for a real, independently-reproducible bug found
+    while researching `key(...)`: a `unique` field's own `set_<field>`
+    used to `check_unique`/`remove` the old value and assign the new one,
+    but never `.add(...)` the new value back into its own `UniqueIndex`
+    -- so `for_<field>`/`contains` could never find the row via its new
+    value again, and a genuinely different row could later `create()`
+    with that same value without ever tripping `UniqueConstraintViolation`.
+    See `examples/basics/greeter.mojo.sqrrl` for the same fix demonstrated
+    through a real, running end-to-end example."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Department"] = True
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+
+    var src = String(
+        "@@struct @@Department:\n"
+        + "    unique name: String\n"
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, unique_fields, indexed_fields
+    )
+    assert_true("def set_name(mut self, v: String) raises:" in out)
+    assert_true("self._table[].indexes.name.check_unique(v, self._id)" in out)
+    assert_true("self._table[].indexes.name.remove(self._id, self._name)" in out)
+    assert_true("self._name = v" in out)
+    assert_true("self._table[].indexes.name.add(self._id, self._name)" in out)
+
+
+def test_transform_key_group_generates_independent_key_struct() raises:
+    """A single `key(name, start_year)` line generates an independent
+    `sqrrl__SeriesKey0` struct, a `UniqueIndex[Key0]` slot on `Indexes`,
+    a `create()`-time check-then-raise (not get-or-create -- a composite
+    key match doesn't make the rest of the row's data safely discardable
+    the way a whole-entity `value` match does) followed by an `.add(...)`,
+    a `__del__` eviction, and a `for_name_start_year(...)` lookup mirroring
+    a plain `unique` field's own `for_<field>`."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Series"] = True
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+
+    var src = String(
+        "@@struct @@Series:\n"
+        + "    key(name, start_year)\n"
+        + "    name: String\n"
+        + "    start_year: UInt32\n"
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, unique_fields, indexed_fields
+    )
+
+    assert_true("struct sqrrl__SeriesKey0(Copyable, Movable, Hashable, Equatable):" in out)
+    assert_true("if self.name != other.name:" in out)
+    assert_true("if self.start_year != other.start_year:" in out)
+    assert_true("hasher.update(self.name)" in out)
+    assert_true("hasher.update(self.start_year)" in out)
+
+    assert_true("var _sqrrl__key0: UniqueIndex[sqrrl__SeriesKey0]" in out)
+    assert_true("self._sqrrl__key0 = UniqueIndex[sqrrl__SeriesKey0]()" in out)
+
+    assert_true("var sqrrl___key0 = sqrrl__SeriesKey0(name=name, start_year=start_year)" in out)
+    assert_true("if self.storage[].indexes._sqrrl__key0.contains(sqrrl___key0):" in out)
+    assert_true(
+        'raise Error("UniqueConstraintViolation: key(name, start_year) already in use by another entity")'
+        in out
+    )
+    assert_true("self.storage[].indexes._sqrrl__key0.add(id, sqrrl___key0)" in out)
+
+    assert_true(
+        "self._table[].indexes._sqrrl__key0.remove(self._id, sqrrl__SeriesKey0(name=self._name, start_year=self._start_year))"
+        in out
+    )
+
+    assert_true("def for_name_start_year(self, name: String, start_year: UInt32) raises -> sqrrl__Series:" in out)
+    assert_true(
+        "var id = self.storage[].indexes._sqrrl__key0.get_bwd(sqrrl__SeriesKey0(name=name, start_year=start_year))"
+        in out
+    )
+
+
+def test_transform_two_key_groups_are_independent() raises:
+    """Two `key(...)` lines on one struct -- confirmed here to generate
+    two fully independent `Key0`/`Key1` structs, two `Indexes` fields, two
+    `create()`-time checks, two `__del__` evictions, and two lookup
+    methods, not one shared mechanism. `date` participates in both
+    groups, which is allowed and doesn't merge them."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Booking"] = True
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+
+    var src = String(
+        "@@struct @@Booking:\n"
+        + "    key(room, date)\n"
+        + "    key(guest, date)\n"
+        + "    room: String\n"
+        + "    date: String\n"
+        + "    guest: String\n"
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, unique_fields, indexed_fields
+    )
+
+    assert_true("struct sqrrl__BookingKey0(Copyable, Movable, Hashable, Equatable):" in out)
+    assert_true("struct sqrrl__BookingKey1(Copyable, Movable, Hashable, Equatable):" in out)
+
+    assert_true("var _sqrrl__key0: UniqueIndex[sqrrl__BookingKey0]" in out)
+    assert_true("var _sqrrl__key1: UniqueIndex[sqrrl__BookingKey1]" in out)
+
+    assert_true("var sqrrl___key0 = sqrrl__BookingKey0(room=room, date=date)" in out)
+    assert_true("var sqrrl___key1 = sqrrl__BookingKey1(guest=guest, date=date)" in out)
+    assert_true("if self.storage[].indexes._sqrrl__key0.contains(sqrrl___key0):" in out)
+    assert_true("if self.storage[].indexes._sqrrl__key1.contains(sqrrl___key1):" in out)
+    assert_true("self.storage[].indexes._sqrrl__key0.add(id, sqrrl___key0)" in out)
+    assert_true("self.storage[].indexes._sqrrl__key1.add(id, sqrrl___key1)" in out)
+
+    assert_true("self._table[].indexes._sqrrl__key0.remove(self._id, sqrrl__BookingKey0(room=self._room, date=self._date))" in out)
+    assert_true("self._table[].indexes._sqrrl__key1.remove(self._id, sqrrl__BookingKey1(guest=self._guest, date=self._date))" in out)
+
+    assert_true("def for_room_date(self, room: String, date: String) raises -> sqrrl__Booking:" in out)
+    assert_true("def for_guest_date(self, guest: String, date: String) raises -> sqrrl__Booking:" in out)
+
+
+def test_transform_key_group_suppresses_setters_only_for_keyed_fields() raises:
+    """Only the fields actually named in a `key(...)` group lose their
+    setter -- an unrelated field on the same struct keeps its ordinary
+    `set_<field>`. `get_<field>` stays generated for every field either
+    way (read access is never affected)."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Series"] = True
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+
+    var src = String(
+        "@@struct @@Series:\n"
+        + "    key(name, start_year)\n"
+        + "    name: String\n"
+        + "    start_year: UInt32\n"
+        + "    note: String\n"
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, unique_fields, indexed_fields
+    )
+    assert_false("def set_name(" in out)
+    assert_false("def set_start_year(" in out)
+    assert_true("def set_note(" in out)
+    assert_true("def get_name(" in out)
+    assert_true("def get_start_year(" in out)
+    assert_true("def get_note(" in out)
+
+
+def test_transform_no_key_groups_has_no_key_machinery() raises:
+    """A struct with no `key(...)` lines has none of this machinery at
+    all -- no `Key0` struct, no `_sqrrl__key0` index, no per-group
+    `create()`/`__del__`/lookup code."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Series"] = True
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+
+    var src = String(
+        "@@struct @@Series:\n"
+        + "    name: String\n"
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, unique_fields, indexed_fields
+    )
+    assert_false("Key0" in out)
+    assert_false("_sqrrl__key" in out)
+
+
+def test_transform_value_struct_with_key_group_composes() raises:
+    """A `value`-flagged struct that *also* declares a `key(...)` group
+    gets both mechanisms at once, without conflict -- the whole-entity
+    `value` get-or-create check and the composite `key(...)` raise-on-
+    conflict check are independent and both present. (No setter-
+    suppression interaction to worry about: `value` already suppresses
+    every setter on its own, so the `key(...)` field-immutability rule
+    adds nothing new to check here.)"""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Series"] = True
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+
+    var src = String(
+        "@@struct value @@Series:\n"
+        + "    key(name, start_year)\n"
+        + "    name: String\n"
+        + "    start_year: UInt32\n"
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, unique_fields, indexed_fields
+    )
+    assert_true("struct sqrrl__SeriesValueKey(Copyable, Movable, Hashable, Equatable):" in out)
+    assert_true("struct sqrrl__SeriesKey0(Copyable, Movable, Hashable, Equatable):" in out)
+    assert_true("var _sqrrl__value_key: UniqueIndex[sqrrl__SeriesValueKey]" in out)
+    assert_true("var _sqrrl__key0: UniqueIndex[sqrrl__SeriesKey0]" in out)
+    assert_true("var sqrrl___existing_id = self.storage[].indexes._sqrrl__value_key.get_bwd_or_none(sqrrl___value_key)" in out)
+    assert_true("if self.storage[].indexes._sqrrl__key0.contains(sqrrl___key0):" in out)
+    assert_false("def set_name(" in out)
+    assert_false("def set_start_year(" in out)
+
+
+def test_transform_key_group_table_level_lookup_call_site() raises:
+    """`codegen/table.mojo` generating `for_<f1>_<f2>(...)` isn't enough
+    on its own -- the rewrite engine's own table-level-call validation
+    (`rewrite_field_access.mojo`) has to separately recognize
+    `@@@Type.for_<f1>_<f2>(...)` as a valid call, or the call site itself
+    fails to parse before ever reaching the generated method (confirmed
+    the hard way: this exact gap made `examples/composite_keys/` fail to
+    convert at all, with a "has no backward index" error, even though
+    every codegen-shape test above already passed). `driver/discovery.
+    mojo`'s `build_key_group_lookup_names` (threaded through
+    `RewriteContext.key_group_lookup_names`) is what makes this
+    recognition possible without splitting the joined name back apart
+    (ambiguous in general -- a field name can itself contain an
+    underscore)."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["Series"] = True
+    var unique_fields = Dict[String, List[String]]()
+    var indexed_fields = Dict[String, List[String]]()
+    var key_group_lookup_names = Dict[String, List[String]]()
+    var names = List[String]()
+    names.append("name_start_year")
+    key_group_lookup_names["Series"] = names^
+
+    var src = String(
+        "@@struct @@Series:\n"
+        + "    key(name, start_year)\n"
+        + "    name: String\n"
+        + "    start_year: UInt32\n"
+        + "\n"
+        + 'def main() raises:\n'
+        + "    @@@:\n"
+        + '        var @@s = @@@Series.for_name_start_year("Foundation", 1951)\n'
+        + "        print(@@s.name)\n"
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, unique_fields, indexed_fields,
+        key_group_lookup_names=key_group_lookup_names,
+    )
+    assert_true('sqrrl___world.Series.for_name_start_year("Foundation", 1951)' in out)
+
+
+def test_transform_struct_inheritance_merges_fields_key_groups_and_methods_via_context() raises:
+    """Struct inheritance's actual merge happens at the discovery level
+    (`driver/discovery.mojo`'s `resolve_struct_inheritance`), not inside
+    `transform_source` itself -- this test simulates what that merge
+    would already have produced by hand-populating `RewriteContext`'s own
+    `struct_fields`/`struct_key_groups`/`struct_method_body` (mirroring
+    how the composite-key test above hand-populates `key_group_lookup_
+    names`), then confirms `codegen/rewrite.mojo`'s `STRUCT`-branch
+    override actually uses them: a `VolumeSeries` struct declaring only
+    `volume_number: Int` of its own ends up with `title`/`start_year`/
+    `volume_number` all present, the right `create()` signature, the
+    inherited composite key's own machinery, and a spliced method
+    inherited from `Series` and genuinely callable (world-marked, not
+    just copied text)."""
+    var relation_schema = Dict[String, Dict[String, String]]()
+    var struct_names = Dict[String, Bool]()
+    struct_names["VolumeSeries"] = True
+
+    var merged_fields = List[Field]()
+    merged_fields.append(Field(name="title", type_str="String", modifier=FieldModifier.NONE, is_stats=False))
+    merged_fields.append(Field(name="start_year", type_str="Int", modifier=FieldModifier.NONE, is_stats=False))
+    merged_fields.append(Field(name="volume_number", type_str="Int", modifier=FieldModifier.NONE, is_stats=False))
+    var struct_fields = Dict[String, List[Field]]()
+    struct_fields["VolumeSeries"] = merged_fields^
+
+    var key_group = List[String]()
+    key_group.append("title")
+    key_group.append("start_year")
+    var merged_key_groups = List[List[String]]()
+    merged_key_groups.append(key_group^)
+    var struct_key_groups = Dict[String, List[List[String]]]()
+    struct_key_groups["VolumeSeries"] = merged_key_groups^
+
+    var struct_method_body = Dict[String, String]()
+    struct_method_body["VolumeSeries"] = String(
+        "    def @@@headcount(self) -> Int:\n"
+        + "        return @@@VolumeSeries.count()\n"
+    )
+
+    var src = String(
+        "@@struct @@VolumeSeries < @@Series:\n"
+        + "    volume_number: Int\n"
+    )
+    var out = transform_source(
+        src, relation_schema, struct_names, Dict[String, List[String]](), Dict[String, List[String]](),
+        struct_fields=struct_fields, struct_key_groups=struct_key_groups,
+        struct_method_body=struct_method_body,
+    )
+    assert_true("var _title: String" in out)
+    assert_true("var _start_year: Int" in out)
+    assert_true("var _volume_number: Int" in out)
+    assert_true(
+        "def create(mut self, *, title: String, start_year: Int, volume_number: Int) raises -> sqrrl__VolumeSeries:"
+        in out
+    )
+    assert_true("struct sqrrl__VolumeSeriesKey0" in out)
+    assert_true("def headcount(self, mut sqrrl___world: sqrrl___World) -> Int:" in out)
+    assert_true("return sqrrl___world.VolumeSeries.count()" in out)
+
+
+def test_transform_dont_keepalive_called_as_instance_method() raises:
+    """`@@handle.dont_keepalive()` -- an ordinary instance call, no `@@@`
+    marking and no `sqrrl___world` threaded (M4 correction: it never
+    needed it). Falls through the same M3 spliced-method-call dispatch
+    with zero new code -- `dont_keepalive` just isn't in
+    `ctx.world_methods`, same as any other non-`@@@`-marked instance
+    method."""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
     struct_names["Project"] = True
-    struct_names["Person"] = True
     var unique_fields = Dict[String, List[String]]()
     unique_fields["Project"] = List[String]()
     unique_fields["Project"].append("name")
@@ -1430,44 +1870,41 @@ def test_transform_value_eq_and_dont_keepalive_called_as_instance_methods() rais
         "@@struct keepalive @@Project:\n"
         + "    unique name: String\n"
         + "\n"
-        + "@@struct equatable @@Person:\n"
-        + "    name: String\n"
-        + "\n"
         + "def main() raises:\n"
         + "    @@@:\n"
         + "        var @@handle = @@@Project { .name = \"Website\" }\n"
         + "        var released = @@handle.dont_keepalive()\n"
-        + "        var @@alice = @@@Person { .name = \"alice\" }\n"
-        + "        var @@bob = @@@Person { .name = \"bob\" }\n"
-        + "        print(released, @@alice.value_eq(@@bob))\n"
+        + "        print(released)\n"
     )
     var out = transform_source(
         src, relation_schema, struct_names, unique_fields, indexed_fields
     )
     assert_true("sqrrl__handle.dont_keepalive()" in out)
-    assert_true("sqrrl__alice.value_eq(sqrrl__bob)" in out)
     assert_false("sqrrl___world.dont_keepalive" in out)
-    assert_false("sqrrl___world.value_eq" in out)
 
 
-def test_transform_value_eq_as_table_level_call_rejected() raises:
-    """The old table-level shape (`@@@Person.value_eq(@@a, @@b)`) is no
-    longer supported -- it's an instance method now."""
+def test_transform_dont_keepalive_as_table_level_call_rejected() raises:
+    """The table-level shape (`@@@Project.dont_keepalive(@@a)`) is not
+    supported -- it's an instance method only. (Was previously pinned via
+    `value_eq`, now removed entirely -- `dont_keepalive` is the one
+    surviving non-world instance method to exercise this same rejection
+    rule against.)"""
     var relation_schema = Dict[String, Dict[String, String]]()
     var struct_names = Dict[String, Bool]()
-    struct_names["Person"] = True
+    struct_names["Project"] = True
     var unique_fields = Dict[String, List[String]]()
+    unique_fields["Project"] = List[String]()
+    unique_fields["Project"].append("name")
     var indexed_fields = Dict[String, List[String]]()
 
     var src = String(
-        "@@struct equatable @@Person:\n"
-        + "    name: String\n"
+        "@@struct keepalive @@Project:\n"
+        + "    unique name: String\n"
         + "\n"
         + "def main() raises:\n"
         + "    @@@:\n"
-        + "        var @@alice = @@@Person { .name = \"alice\" }\n"
-        + "        var @@bob = @@@Person { .name = \"bob\" }\n"
-        + "        print(@@@Person.value_eq(@@alice, @@bob))\n"
+        + "        var @@handle = @@@Project { .name = \"Website\" }\n"
+        + "        print(@@@Project.dont_keepalive(@@handle))\n"
     )
     var raised = False
     try:
@@ -1512,19 +1949,19 @@ def test_transform_grouping_query_definitions() raises:
         src, relation_schema, struct_names, unique_fields, indexed_fields
     )
     # Plain indexed field.
-    assert_true("def count_name(self, value: String) -> Int:" in out)
+    assert_true("def count_for_name(self, value: String) -> Int:" in out)
     assert_true("def group_by_name(self) -> Dict[String, Set[sqrrl__Employee]]:" in out)
     assert_true("def count_by_name(self) -> Dict[String, Int]:" in out)
     assert_true("def distinct_name(self) -> Set[String]:" in out)
     # Unique field -- no Set wrapping, no count_by_ at all.
-    assert_true("def count_ssn(self, value: String) -> Int:" in out)
+    assert_true("def count_for_ssn(self, value: String) -> Int:" in out)
     assert_true("return 1 if self.storage[].indexes.ssn.contains(value) else 0" in out)
     assert_true("def group_by_ssn(self) -> Dict[String, sqrrl__Employee]:" in out)
     assert_true("def distinct_ssn(self) -> Set[String]:" in out)
     assert_false("count_by_ssn" in out)
     # Relation field -- sqrrl__-prefixed method names, Dict keyed by the
     # target entity type.
-    assert_true("def count_sqrrl__dept(self, value: sqrrl__Department) -> Int:" in out)
+    assert_true("def count_for_sqrrl__dept(self, value: sqrrl__Department) -> Int:" in out)
     assert_true("def group_by_sqrrl__dept(self) -> Dict[sqrrl__Department, Set[sqrrl__Employee]]:" in out)
     assert_true("def count_by_sqrrl__dept(self) -> Dict[sqrrl__Department, Int]:" in out)
     assert_true("def distinct_sqrrl__dept(self) -> Set[sqrrl__Department]:" in out)
@@ -1555,7 +1992,7 @@ def test_transform_grouping_query_call_sites() raises:
         + "    @@@:\n"
         + "        var @@eng = @@@Department { .name = \"Engineering\" }\n"
         + "        var @@alice = @@@Employee { .name = \"alice\", .@@dept = @@eng }\n"
-        + "        print(@@@Employee.count_name(\"alice\"))\n"
+        + "        print(@@@Employee.count_for_name(\"alice\"))\n"
         + "        var by_name = @@@Employee.group_by_name()\n"
         + "        print(len(by_name))\n"
         + "        var counts = @@@Employee.count_by_name()\n"
@@ -1569,7 +2006,7 @@ def test_transform_grouping_query_call_sites() raises:
     var out = transform_source(
         src, relation_schema, struct_names, unique_fields, indexed_fields
     )
-    assert_true('sqrrl___world.Employee.count_name("alice")' in out)
+    assert_true('sqrrl___world.Employee.count_for_name("alice")' in out)
     assert_true("sqrrl___world.Employee.group_by_name()" in out)
     assert_true("sqrrl___world.Employee.count_by_name()" in out)
     assert_true("sqrrl___world.Employee.distinct_name()" in out)
@@ -1804,7 +2241,7 @@ def test_transform_multi_field_excluded_from_aggregation_but_still_groupable() r
     assert_false("sum_sqrrl__projects" in out)
     assert_false("median_sqrrl__projects" in out)
     # Still groupable (Step 4) -- unaffected by aggregation eligibility.
-    assert_true("def count_sqrrl__projects(self, value: sqrrl__Project) -> Int:" in out)
+    assert_true("def count_for_sqrrl__projects(self, value: sqrrl__Project) -> Int:" in out)
 
 
 def test_transform_entity_gets_json_serializable_conformance() raises:
@@ -2098,16 +2535,18 @@ def test_transform_plain_struct_container_relation_field_marking_symmetry() rais
     than through `transform_source`."""
     var bare_body = String("    var members: Dict[String, @@Employee]\n")
     var bare_fields = List[Field]()
-    parse_hand_written_struct_fields(bare_body, bare_body, 0, bare_fields)
+    var bare_offset = 0
+    parse_hand_written_struct_fields(bare_body, bare_body, 0, bare_fields, bare_offset)
     assert_equal(len(bare_fields), 1)
     assert_equal(bare_fields[0].name, "members")
     assert_equal(bare_fields[0].type_str, "Dict[String, @@Employee]")
 
     var marked_body = String("    var @@members: Dict[String, @@Employee]\n")
     var marked_fields = List[Field]()
+    var marked_offset = 0
     var raised = False
     try:
-        parse_hand_written_struct_fields(marked_body, marked_body, 0, marked_fields)
+        parse_hand_written_struct_fields(marked_body, marked_body, 0, marked_fields, marked_offset)
     except:
         raised = True
     assert_true(raised)
@@ -2926,7 +3365,7 @@ def test_emit_json_module_wrapped_relation_list_round_trips() raises:
     # container in this field's own parse, so it's always "1".
     assert_true("var nc1 = List[sqrrl__Employee]()" in out)
     assert_true(
-        "nc1.append(sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sc.parse_json_int()))))"
+        "nc1.append(sqrrl__Employee(world.Employee.storage[].handle_for(UInt32(sc.parse_json_int()))))"
         in out
     )
     assert_true("parsed_members = nc1^" in out)
@@ -2942,7 +3381,7 @@ def test_emit_json_module_wrapped_relation_set_round_trips() raises:
     var out = emit_json_module(structs, structs)
     assert_true("var nc1 = Set[sqrrl__Employee]()" in out)
     assert_true(
-        "nc1.add(sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sc.parse_json_int()))))"
+        "nc1.add(sqrrl__Employee(world.Employee.storage[].handle_for(UInt32(sc.parse_json_int()))))"
         in out
     )
     assert_true("parsed_members = nc1^" in out)
@@ -2964,7 +3403,7 @@ def test_emit_json_module_wrapped_relation_optional_round_trips() raises:
     assert_true('if sc.try_consume_literal("null"):' in out)
     assert_true("nc1 = Optional[sqrrl__Employee]()" in out)
     assert_true(
-        "nc1 = Optional[sqrrl__Employee](sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sc.parse_json_int()))))"
+        "nc1 = Optional[sqrrl__Employee](sqrrl__Employee(world.Employee.storage[].handle_for(UInt32(sc.parse_json_int()))))"
         in out
     )
     assert_true("parsed_members = nc1^" in out)
@@ -2975,10 +3414,11 @@ def test_emit_json_module_plain_leaf_container_round_trips() raises:
     `@@` anywhere -- routes through the shared, generic `sqrrl__to_json`/
     `sqrrl__from_json[T]` dispatcher rather than per-field inline codegen
     (the JSON-container-dispatch rearchitecture): the field itself is just
-    a uniform dispatcher call, and the dispatch table gets its own `List[
-    String]` branch built from the built-in `sqrrl__List_json_to_list`/
-    `_from_list` adapters plus the shared `list_to_json`/`list_from_json`
-    helpers -- no per-project hand-rolled parse loop any more."""
+    a uniform dispatcher call, `world` threaded through, and the dispatch
+    table gets its own `List[String]` branch delegating to `sqrrl__List_
+    to_json`/`_from_json` -- no per-project hand-rolled parse loop any
+    more, and no intermediate `list_to_json`/`list_from_json` layer
+    underneath either."""
     var employee_fields = List[Field]()
     employee_fields.append(Field(name="name", type_str="String", modifier=FieldModifier.UNIQUE, is_stats=False))
     employee_fields.append(Field(name="tags", type_str="List[String]", modifier=FieldModifier.NONE, is_stats=False))
@@ -2986,17 +3426,16 @@ def test_emit_json_module_plain_leaf_container_round_trips() raises:
     structs.append(DiscoveredStruct(module_path="main", parsed=ParsedStruct(name="Employee", fields=employee_fields^)))
     var out = emit_json_module(structs, structs)
     # Field-level: both directions are a single uniform dispatcher call.
-    assert_true("out += sqrrl__to_json(e._inner[].get_tags())" in out)
-    assert_true("parsed_tags = sqrrl__from_json[List[String]](sc)" in out)
-    # The dispatch table itself has a branch built from the built-in List
-    # adapters and the shared list_to_json/list_from_json helpers.
+    assert_true("out += sqrrl__to_json(e._inner[].get_tags(), world)" in out)
+    assert_true("parsed_tags = sqrrl__from_json[List[String]](sc, world)" in out)
+    # The dispatch table itself has a branch delegating to sqrrl__List_to_json/_from_json.
     assert_true(
-        "elif T == List[String]:\n        return list_to_json(sqrrl__List_json_to_list(rebind[List[String]](value)))"
+        "elif T == List[String]:\n        return sqrrl__List_to_json(rebind[List[String]](value), world)"
         in out
     )
     assert_true(
-        "elif T == List[String]:\n        return sqrrl__movable_rebind[List[String], T](sqrrl__List_json_from_list"
-        "(list_from_json[String](sc)))"
+        "elif T == List[String]:\n        return sqrrl__movable_rebind[List[String], T](sqrrl__List_from_json[String]"
+        "(sc, world))"
         in out
     )
 
@@ -3021,14 +3460,14 @@ def test_emit_json_module_dict_field_round_trips() raises:
     assert_true("ref fv_scores = e._inner[].get_sqrrl__scores()" in out)
     assert_true("for de1 in fv_scores.items():" in out)
     assert_true(
-        'ds1 += "[" + String(de1.key.id()) + "," + sqrrl__to_json(de1.value) + "]"'
+        'ds1 += "[" + String(de1.key.id()) + "," + sqrrl__to_json(de1.value, world) + "]"'
         in out
     )
     # Reload: builds a real Dict, parsing the relation key and leaf value
     # each through the same recursive dispatch.
     assert_true("var nc1 = Dict[sqrrl__Employee, String]()" in out)
     assert_true(
-        "var nck1 = sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sc.parse_json_int())))"
+        "var nck1 = sqrrl__Employee(world.Employee.storage[].handle_for(UInt32(sc.parse_json_int())))"
         in out
     )
     assert_true("nc1[nck1] = sc.parse_json_string()" in out)
@@ -3060,12 +3499,12 @@ def test_emit_json_module_dict_field_relation_in_value_position_round_trips() ra
     # Employee's sibling table, even though the relation sits in the
     # Dict's value position, not its key.
     assert_true(
-        "def sqrrl__Department_from_json_with_id(table: sqrrl__DepartmentTable, sqrrl__tbl_Employee:"
-        " sqrrl__EmployeeTable, id: UInt32, mut sc: sqrrl___JsonScanner)"
+        "def sqrrl__Department_from_json_with_id(table: sqrrl__DepartmentTable, world: sqrrl___World, id: UInt32,"
+        " mut sc: sqrrl___JsonScanner)"
         in out
     )
     assert_true("var nc1 = Dict[String, sqrrl__Employee]()" in out)
-    assert_true("nc1[nck1] = sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sc.parse_json_int())))" in out)
+    assert_true("nc1[nck1] = sqrrl__Employee(world.Employee.storage[].handle_for(UInt32(sc.parse_json_int())))" in out)
     assert_true("parsed_leads = nc1^" in out)
 
 
@@ -3090,13 +3529,13 @@ def test_emit_json_module_dict_field_relation_in_both_positions_round_trips() ra
     structs.append(DiscoveredStruct(module_path="main", parsed=ParsedStruct(name="Company", fields=company_fields^)))
     var out = emit_json_module(structs, structs)
     assert_true(
-        "def sqrrl__Company_from_json_with_id(table: sqrrl__CompanyTable, sqrrl__tbl_Employee: sqrrl__EmployeeTable,"
-        " sqrrl__tbl_Department: sqrrl__DepartmentTable, id: UInt32, mut sc: sqrrl___JsonScanner)"
+        "def sqrrl__Company_from_json_with_id(table: sqrrl__CompanyTable, world: sqrrl___World, id: UInt32,"
+        " mut sc: sqrrl___JsonScanner)"
         in out
     )
-    assert_true("var nck1 = sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sc.parse_json_int())))" in out)
+    assert_true("var nck1 = sqrrl__Employee(world.Employee.storage[].handle_for(UInt32(sc.parse_json_int())))" in out)
     assert_true(
-        "nc1[nck1] = sqrrl__Department(sqrrl__tbl_Department.storage[].handle_for(UInt32(sc.parse_json_int())))" in out
+        "nc1[nck1] = sqrrl__Department(world.Department.storage[].handle_for(UInt32(sc.parse_json_int())))" in out
     )
 
 
@@ -3105,13 +3544,12 @@ def test_emit_json_module_nested_container_round_trips() raises:
     fully supported at arbitrary depth via the shared dispatcher (the
     JSON-container-dispatch rearchitecture): the field itself is a single
     uniform dispatcher call for the *outer* `List[List[String]]`, whose
-    own dispatch-table branch converts to/from a generic `List[List[
-    String]]` via `list_to_json`/`list_from_json` -- the *inner* `List[
-    String]` element then recurses back into `sqrrl__to_json`/`sqrrl__
-    from_json[T]` uniformly too, needing its own separate dispatch-table
-    branch (registered independently by the same collection walk that
-    found the outer one, since `_collect_dispatch_types` recurses into a
-    container's own element types)."""
+    own dispatch-table branch delegates to `sqrrl__List_to_json`/`_from_
+    json` -- the *inner* `List[String]` element then recurses back into
+    `sqrrl__to_json`/`sqrrl__from_json[T]` uniformly too, needing its own
+    separate dispatch-table branch (registered independently by the same
+    collection walk that found the outer one, since `_collect_dispatch_
+    types` recurses into a container's own element types)."""
     var employee_fields = List[Field]()
     employee_fields.append(Field(name="name", type_str="String", modifier=FieldModifier.UNIQUE, is_stats=False))
     employee_fields.append(
@@ -3120,70 +3558,63 @@ def test_emit_json_module_nested_container_round_trips() raises:
     var structs = List[DiscoveredStruct]()
     structs.append(DiscoveredStruct(module_path="main", parsed=ParsedStruct(name="Employee", fields=employee_fields^)))
     var out = emit_json_module(structs, structs)
-    assert_true("out += sqrrl__to_json(e._inner[].get_groups())" in out)
-    assert_true("parsed_groups = sqrrl__from_json[List[List[String]]](sc)" in out)
+    assert_true("out += sqrrl__to_json(e._inner[].get_groups(), world)" in out)
+    assert_true("parsed_groups = sqrrl__from_json[List[List[String]]](sc, world)" in out)
     # Both the outer and the inner List each get their own dispatch-table
     # branch -- confirms the collection walk recurses into elements.
     assert_true(
-        "elif T == List[List[String]]:\n        return list_to_json(sqrrl__List_json_to_list(rebind[List[List[String]]]"
-        "(value)))"
+        "elif T == List[List[String]]:\n        return sqrrl__List_to_json(rebind[List[List[String]]](value), world)"
         in out
     )
     assert_true(
-        "elif T == List[String]:\n        return list_to_json(sqrrl__List_json_to_list(rebind[List[String]](value)))"
+        "elif T == List[String]:\n        return sqrrl__List_to_json(rebind[List[String]](value), world)"
         in out
     )
 
 
-def test_emit_json_module_custom_container_wrapper_uses_escape_hatch() raises:
+def test_emit_json_module_custom_container_wrapper_uses_to_json_from_json_contract() raises:
     """A custom, single-type-argument wrapper (anything other than
     `List`/`Set`/`Optional`/`Dict`) has neither a guaranteed no-arg
     constructor (a `@fieldwise_init` struct's own synthesized `__init__`
     takes every field, confirmed via a real compile) nor a known build-up
     method or `__iter__` -- the field itself is a single uniform
     dispatcher call, same as any other container; the dispatch table's
-    own branch for it converts to/from a generic `List` via the exact
-    same hand-written `sqrrl__<Wrapper>_json_to_list`/`_json_from_list`
-    escape-hatch companions this project has always required (unchanged
-    contract, just called from a dispatch-table branch now instead of
-    inline per-field code), feeding into the shared `list_to_json`/`list_
-    from_json` helpers. Also confirms the corresponding import line for
-    both companions (plus the wrapper type itself) is still emitted,
-    sourced from whichever struct's own module first referenced the
-    wrapper -- the one piece of this escape hatch with no other way to be
-    discovered."""
+    own branch for it delegates directly to the hand-written `sqrrl__
+    <Wrapper>_to_json`/`_from_json` companions this project requires (the
+    same contract every wrapper -- built-in or custom -- implements now,
+    world threaded through, no intermediate `List`/pairs layer). Also
+    confirms the corresponding import line for both companions (plus the
+    wrapper type itself) is still emitted, sourced from whichever struct's
+    own module first referenced the wrapper -- the one piece of this
+    contract with no other way to be discovered."""
     var employee_fields = List[Field]()
     employee_fields.append(Field(name="name", type_str="String", modifier=FieldModifier.UNIQUE, is_stats=False))
     employee_fields.append(Field(name="tags", type_str="Ring[String]", modifier=FieldModifier.NONE, is_stats=False))
     var structs = List[DiscoveredStruct]()
     structs.append(DiscoveredStruct(module_path="main", parsed=ParsedStruct(name="Employee", fields=employee_fields^)))
     var out = emit_json_module(structs, structs)
-    assert_true("from main import Ring, sqrrl__Ring_json_to_list, sqrrl__Ring_json_from_list" in out)
-    assert_true("out += sqrrl__to_json(e._inner[].get_tags())" in out)
-    assert_true("parsed_tags = sqrrl__from_json[Ring[String]](sc)" in out)
+    assert_true("from main import Ring, sqrrl__Ring_to_json, sqrrl__Ring_from_json" in out)
+    assert_true("out += sqrrl__to_json(e._inner[].get_tags(), world)" in out)
+    assert_true("parsed_tags = sqrrl__from_json[Ring[String]](sc, world)" in out)
     assert_true(
-        "elif T == Ring[String]:\n        return list_to_json(sqrrl__Ring_json_to_list(rebind[Ring[String]](value)))"
+        "elif T == Ring[String]:\n        return sqrrl__Ring_to_json(rebind[Ring[String]](value), world)"
         in out
     )
     assert_true(
-        "elif T == Ring[String]:\n        return sqrrl__movable_rebind[Ring[String], T](sqrrl__Ring_json_from_list"
-        "(list_from_json[String](sc)))"
+        "elif T == Ring[String]:\n        return sqrrl__movable_rebind[Ring[String], T](sqrrl__Ring_from_json[String]"
+        "(sc, world))"
         in out
     )
 
 
-def test_emit_json_module_custom_two_argument_wrapper_uses_pairs_escape_hatch() raises:
+def test_emit_json_module_custom_two_argument_wrapper_uses_to_json_from_json_contract() raises:
     """A custom, two-type-argument wrapper (anything other than `Dict`)
-    now shares the exact same escape hatch `Dict` itself uses -- an array
-    of `[key,value]` pairs -- via hand-written `sqrrl__<Wrapper>_json_to_
-    pairs`/`_json_from_pairs` companions instead of `Dict`'s own native
-    `[]=`/`.items()`. The field itself is a single uniform dispatcher
-    call, same as any other container; the dispatch table's own branch
-    converts to/from an ordinary `List[Tuple[K, V]]` via `pairs_to_json`/
-    `pairs_from_json`, mirroring the one-argument custom-wrapper case
-    exactly. Also confirms the import line picks the `_to_pairs`/`_from_
-    pairs` suffix (not `_to_list`/`_from_list`) based on the wrapper's
-    own two-argument arity."""
+    implements the exact same `_to_json`/`_from_json` contract every
+    wrapper does -- the field itself is a single uniform dispatcher call,
+    same as any other container; the dispatch table's own branch
+    delegates directly to `sqrrl__<Wrapper>_to_json`/`_from_json[K, V]`,
+    mirroring the one-argument custom-wrapper case exactly, just with two
+    explicit type arguments on the reload call."""
     var employee_fields = List[Field]()
     employee_fields.append(Field(name="name", type_str="String", modifier=FieldModifier.UNIQUE, is_stats=False))
     employee_fields.append(
@@ -3192,25 +3623,25 @@ def test_emit_json_module_custom_two_argument_wrapper_uses_pairs_escape_hatch() 
     var structs = List[DiscoveredStruct]()
     structs.append(DiscoveredStruct(module_path="main", parsed=ParsedStruct(name="Employee", fields=employee_fields^)))
     var out = emit_json_module(structs, structs)
-    assert_true("from main import Grid, sqrrl__Grid_json_to_pairs, sqrrl__Grid_json_from_pairs" in out)
-    assert_true("out += sqrrl__to_json(e._inner[].get_grid())" in out)
-    assert_true("parsed_grid = sqrrl__from_json[Grid[String, Int]](sc)" in out)
+    assert_true("from main import Grid, sqrrl__Grid_to_json, sqrrl__Grid_from_json" in out)
+    assert_true("out += sqrrl__to_json(e._inner[].get_grid(), world)" in out)
+    assert_true("parsed_grid = sqrrl__from_json[Grid[String, Int]](sc, world)" in out)
     assert_true(
-        "elif T == Grid[String, Int]:\n        return pairs_to_json(sqrrl__Grid_json_to_pairs(rebind[Grid[String, Int]](value)))"
+        "elif T == Grid[String, Int]:\n        return sqrrl__Grid_to_json(rebind[Grid[String, Int]](value), world)"
         in out
     )
     assert_true(
-        "elif T == Grid[String, Int]:\n        return sqrrl__movable_rebind[Grid[String, Int], T](sqrrl__Grid_json_from_pairs"
-        "(pairs_from_json[String, Int](sc)))"
+        "elif T == Grid[String, Int]:\n        return sqrrl__movable_rebind[Grid[String, Int], T](sqrrl__Grid_from_json"
+        "[String, Int](sc, world))"
         in out
     )
 
 
-def test_emit_json_module_three_argument_wrapper_rejected() raises:
-    """The one remaining genuinely-unsupported shape: a 3+-argument
-    wrapper has no defined JSON shape at all (unlike a 2-argument one's
-    well-defined key/value pairing) -- stays a clear codegen-time error,
-    not silently mishandled."""
+def test_emit_json_module_three_argument_wrapper_uses_to_json_from_json_contract() raises:
+    """No arity is genuinely unsupported any more -- a 3-argument custom
+    wrapper gets the exact same uniform treatment as a 1- or 2-argument
+    one, since `_to_json`/`_from_json`'s own contract never assumed a
+    specific arity in the first place."""
     var employee_fields = List[Field]()
     employee_fields.append(Field(name="name", type_str="String", modifier=FieldModifier.UNIQUE, is_stats=False))
     employee_fields.append(
@@ -3218,12 +3649,20 @@ def test_emit_json_module_three_argument_wrapper_rejected() raises:
     )
     var structs = List[DiscoveredStruct]()
     structs.append(DiscoveredStruct(module_path="main", parsed=ParsedStruct(name="Employee", fields=employee_fields^)))
-    var raised = False
-    try:
-        _ = emit_json_module(structs, structs)
-    except:
-        raised = True
-    assert_true(raised)
+    var out = emit_json_module(structs, structs)
+    assert_true("from main import Triple, sqrrl__Triple_to_json, sqrrl__Triple_from_json" in out)
+    assert_true("out += sqrrl__to_json(e._inner[].get_triple(), world)" in out)
+    assert_true("parsed_triple = sqrrl__from_json[Triple[String, Int, Bool]](sc, world)" in out)
+    assert_true(
+        "elif T == Triple[String, Int, Bool]:\n        return sqrrl__Triple_to_json(rebind[Triple[String, Int, Bool]]"
+        "(value), world)"
+        in out
+    )
+    assert_true(
+        "elif T == Triple[String, Int, Bool]:\n        return sqrrl__movable_rebind[Triple[String, Int, Bool], T]"
+        "(sqrrl__Triple_from_json[String, Int, Bool](sc, world))"
+        in out
+    )
 
 
 def test_emit_json_module_generic_plain_struct_relation_field_gets_monomorphized_companion() raises:
@@ -3275,25 +3714,26 @@ def test_emit_json_module_generic_plain_struct_relation_field_gets_monomorphized
     # The ordinary generic companion is still emitted, untouched -- it's
     # what any relation-free `Box[...]` instantiation still uses.
     assert_true(
-        "def sqrrl__Box_from_json[T: Copyable & ImplicitlyDeletable](mut sc: sqrrl___JsonScanner) raises -> Box[T]:"
+        "def sqrrl__Box_from_json[T: Copyable & ImplicitlyDeletable](mut sc: sqrrl___JsonScanner, world:"
+        " sqrrl___World) raises -> Box[T]:"
         in out
     )
-    assert_true("parsed_value = sqrrl__from_json[T](sc)" in out)
-    # The new monomorphized companion -- fully concrete, `Employee`'s own
-    # sibling table threaded through its signature, `value` dispatched as
-    # an ordinary relation field (no dispatch-table call at all).
+    assert_true("parsed_value = sqrrl__from_json[T](sc, world)" in out)
+    # The new monomorphized companion -- fully concrete, `world` threaded
+    # through its signature, `value` dispatched as an ordinary relation
+    # field (no dispatch-table call at all).
     assert_true(
-        "def sqrrl__Box_Employee_from_json(sqrrl__tbl_Employee: sqrrl__EmployeeTable, mut sc: sqrrl___JsonScanner)"
+        "def sqrrl__Box_Employee_from_json(mut sc: sqrrl___JsonScanner, world: sqrrl___World)"
         " raises -> Box[sqrrl__Employee]:"
         in out
     )
     assert_true(
-        "parsed_value = sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(rid_value))" in out
+        "parsed_value = sqrrl__Employee(world.Employee.storage[].handle_for(rid_value))" in out
     )
     # The call site, inside Department's own `from_json_with_id`, routes
     # to the monomorphized companion -- not the generic one -- passing
-    # `Employee`'s own sibling table it already has in scope.
-    assert_true("parsed_box = sqrrl__Box_Employee_from_json(sqrrl__tbl_Employee, sc)" in out)
+    # `world` it already has in scope.
+    assert_true("parsed_box = sqrrl__Box_Employee_from_json(sc, world)" in out)
 
 
 def main() raises:

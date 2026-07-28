@@ -3,6 +3,81 @@ from squirrel_compiler.codegen import scan_bare_return_type_text
 from squirrel_compiler.driver.file_paths import module_path_for
 
 
+@fieldwise_init
+struct _TopLevelDefMatch(Copyable, Movable):
+    """One top-level `def @@@name(...)`/`def @@name(...)`/`def name(...)`
+    line found by `_scan_top_level_defs` -- `rest_of_line` is everything
+    after the (already-stripped) name, through the line's own end
+    (`(...) -> ReturnType:`), for a caller that needs to scan further
+    into the signature itself."""
+
+    var func_name: String
+    var is_world_marked: Bool
+    var is_entity_marked: Bool
+    var rest_of_line: String
+
+
+def _scan_top_level_defs(source: String) -> List[_TopLevelDefMatch]:
+    """Shared by `build_bare_function_returns`/`build_function_symbols`:
+    finds every *top-level* `def @@@name`/`def @@name`/`def name` line in
+    `source` -- an indented `def` is a method inside some struct's own
+    body (`@@struct`, or a hand-written plain struct), never a genuinely
+    bare top-level function; registering one in either of this pair's
+    own flat, receiver-unaware maps is a real collision risk once two
+    different structs happen to declare a same-named method (confirmed
+    via a real compile: `Widget.clone()` and `Address.clone()` collided
+    in `build_bare_function_returns`, last-scanned-wins, and a completely
+    unrelated call silently used the wrong one's return type) -- a
+    method's own name/return type belongs in `bare_method_returns`/
+    `build_plain_struct_bare_method_returns` instead, scoped per struct
+    name. (This top-level check used to be missing entirely from `build_
+    function_symbols`'s own copy of this scan, a real inconsistency this
+    extraction closes -- harmless in practice today, since a method's
+    own name is never `sqrrl__`-prefixed when called, so the bogus entry
+    it could register was always dead, unused data, but incorrect on its
+    own terms regardless.)"""
+    var out = List[_TopLevelDefMatch]()
+    var bytes = source.as_bytes()
+    var sc = Scanner(source)
+    while True:
+        sc.skip_trivia()
+        if sc.at_end():
+            break
+        var is_world_marked = sc.starts_with("def @@@")
+        var is_entity_marked = sc.starts_with("def @@") and not is_world_marked
+        var is_bare = sc.starts_with("def ") and not sc.starts_with("def @@")
+        if is_world_marked or is_entity_marked or is_bare:
+            var line_start = sc.pos
+            var line_end = line_start
+            while line_end < len(bytes) and bytes[line_end] != UInt8(ord("\n")):
+                line_end += 1
+            var back = line_start
+            while back > 0 and bytes[back - 1] != UInt8(ord("\n")):
+                back -= 1
+            var is_top_level = back == line_start
+            if is_top_level:
+                var line_sc = Scanner(String(source[byte = line_start : line_end]))
+                _ = line_sc.try_consume("def ")
+                if is_world_marked:
+                    _ = line_sc.try_consume("@@@")
+                elif is_entity_marked:
+                    _ = line_sc.try_consume("@@")
+                var func_name = line_sc.scan_ident()
+                if func_name.byte_length() > 0:
+                    out.append(
+                        _TopLevelDefMatch(
+                            func_name=func_name,
+                            is_world_marked=is_world_marked,
+                            is_entity_marked=is_entity_marked,
+                            rest_of_line=String(line_sc.source[byte = line_sc.pos : line_sc.source.byte_length()]),
+                        )
+                    )
+            sc.pos = line_end
+            continue
+        sc.pos += 1
+    return out^
+
+
 def build_bare_function_returns(sqrrl_files: List[String]) raises -> Dict[String, String]:
     """Top-level function name -> its return-type text (relation-stripped
     -- see `scan_bare_return_type_text`'s own doc comment), for *every*
@@ -31,66 +106,23 @@ def build_bare_function_returns(sqrrl_files: List[String]) raises -> Dict[String
         var f = open(path, "r")
         var source = f.read()
         f.close()
-        var bytes = source.as_bytes()
-        var sc = Scanner(source)
-        while True:
-            sc.skip_trivia()
-            if sc.at_end():
-                break
-            var is_world_marked = sc.starts_with("def @@@")
-            var is_entity_marked = sc.starts_with("def @@") and not is_world_marked
-            var is_bare = sc.starts_with("def ") and not sc.starts_with("def @@")
-            if is_world_marked or is_entity_marked or is_bare:
-                var line_start = sc.pos
-                var line_end = line_start
-                while line_end < len(bytes) and bytes[line_end] != UInt8(ord("\n")):
-                    line_end += 1
-                # Top-level only -- an indented `def` is a method inside
-                # some struct's own body (`@@struct`, or a hand-written
-                # plain struct), never a genuinely bare top-level
-                # function; registering it *here* too, in this flat,
-                # receiver-unaware map, is a real collision risk once two
-                # different structs happen to declare a same-named method
-                # (confirmed via a real compile: `Widget.clone()` and
-                # `Address.clone()` collided, last-scanned-wins, and a
-                # completely unrelated call silently used the wrong
-                # one's return type) -- a method's own return type
-                # belongs in `bare_method_returns`/`build_plain_struct_
-                # bare_method_returns` instead, correctly scoped per
-                # struct name, never here.
-                var back = line_start
-                while back > 0 and bytes[back - 1] != UInt8(ord("\n")):
-                    back -= 1
-                var is_top_level = back == line_start
-                if is_top_level:
-                    var line_sc = Scanner(String(source[byte = line_start : line_end]))
-                    _ = line_sc.try_consume("def ")
-                    if is_world_marked:
-                        _ = line_sc.try_consume("@@@")
-                    elif is_entity_marked:
-                        _ = line_sc.try_consume("@@")
-                    var func_name = line_sc.scan_ident()
-                    if is_entity_marked:
-                        raise Error(
-                            "InvalidSquirrelSyntax: "
-                            + path
-                            + ": '@@"
-                            + func_name
-                            + "' -- '@@' marking on a function's own name is"
-                            " no longer used or needed; write it bare ('"
-                            + func_name
-                            + "(...)'), or '@@@"
-                            + func_name
-                            + "(...)' if it also needs 'sqrrl___world'"
-                        )
-                    var raw_type = scan_bare_return_type_text(
-                        String(line_sc.source[byte = line_sc.pos : line_sc.source.byte_length()])
-                    )
-                    if func_name.byte_length() > 0 and raw_type:
-                        out[func_name] = raw_type.value()
-                sc.pos = line_end
-                continue
-            sc.pos += 1
+        for m in _scan_top_level_defs(source):
+            if m.is_entity_marked:
+                raise Error(
+                    "InvalidSquirrelSyntax: "
+                    + path
+                    + ": '@@"
+                    + m.func_name
+                    + "' -- '@@' marking on a function's own name is"
+                    " no longer used or needed; write it bare ('"
+                    + m.func_name
+                    + "(...)'), or '@@@"
+                    + m.func_name
+                    + "(...)' if it also needs 'sqrrl___world'"
+                )
+            var raw_type = scan_bare_return_type_text(m.rest_of_line)
+            if raw_type:
+                out[m.func_name] = raw_type.value()
     return out^
 
 
@@ -122,31 +154,9 @@ def build_function_symbols(sqrrl_files: List[String], target_root: String) raise
         var f = open(path, "r")
         var source = f.read()
         f.close()
-        var bytes = source.as_bytes()
-        var sc = Scanner(source)
-        while True:
-            sc.skip_trivia()
-            if sc.at_end():
-                break
-            var is_world_marked = sc.starts_with("def @@@")
-            var is_entity_marked = sc.starts_with("def @@") and not is_world_marked
-            if is_world_marked or is_entity_marked:
-                var line_start = sc.pos
-                var line_end = line_start
-                while line_end < len(bytes) and bytes[line_end] != UInt8(ord("\n")):
-                    line_end += 1
-                var line_sc = Scanner(String(source[byte = line_start : line_end]))
-                _ = line_sc.try_consume("def ")
-                if is_world_marked:
-                    _ = line_sc.try_consume("@@@")
-                else:
-                    _ = line_sc.try_consume("@@")
-                var func_name = line_sc.scan_ident()
-                if func_name.byte_length() > 0:
-                    symbol_of["sqrrl__" + func_name] = module_path
-                sc.pos = line_end
-                continue
-            sc.pos += 1
+        for m in _scan_top_level_defs(source):
+            if m.is_world_marked or m.is_entity_marked:
+                symbol_of["sqrrl__" + m.func_name] = module_path
     return symbol_of^
 
 
@@ -160,20 +170,21 @@ def discover_raw_imports(sqrrl_files: List[String]) raises -> Dict[String, Strin
     project-wide (not expected in practice).
 
     The one consumer this exists for: a *custom container wrapper*'s own
-    JSON escape-hatch companions (`sqrrl__<Wrapper>_json_to_pairs`/`_from_
-    pairs`/etc., `driver/json_module.mojo`) are hand-written raw Mojo the
-    compiler never parses a declaration for at all -- unlike a real
-    `@@struct`/plain struct's own `module_of` map, there's no way to know
-    a custom wrapper's *true* defining module just from discovery. Before
-    this existed, `json_module.mojo` fell back to "whichever struct's own
-    field first referenced the wrapper," assuming *that* file happened to
-    also import the escape-hatch functions itself (fragile: a schema file
-    declaring `@@field: Grid[K, @@V]` had to import `sqrrl__Grid_json_to_
-    pairs`/`_from_pairs` too, even though it never calls either). Scanning
-    for whichever file already imports the escape-hatch functions
-    *directly* (typically wherever the wrapper's actually constructed,
-    which already needs that import regardless) finds the true module
-    without ever reading the hand-written `.mojo` file itself."""
+    `sqrrl__<Wrapper>_to_json`/`_from_json` companions (the same `_to_json`/
+    `_from_json` contract every wrapper implements, `driver/json_module.
+    mojo`) are hand-written raw Mojo the compiler never parses a
+    declaration for at all -- unlike a real `@@struct`/plain struct's own
+    `module_of` map, there's no way to know a custom wrapper's *true*
+    defining module just from discovery. Before this existed, `json_module.
+    mojo` fell back to "whichever struct's own field first referenced the
+    wrapper," assuming *that* file happened to also import the companion
+    functions itself (fragile: a schema file declaring `@@field: Grid[K,
+    @@V]` had to import `sqrrl__Grid_to_json`/`_from_json` too, even though
+    it never calls either). Scanning for whichever file already imports the
+    companion functions *directly* (typically wherever the wrapper's
+    actually constructed, which already needs that import regardless)
+    finds the true module without ever reading the hand-written `.mojo`
+    file itself."""
     var out = Dict[String, String]()
     for path in sqrrl_files:
         var f = open(path, "r")

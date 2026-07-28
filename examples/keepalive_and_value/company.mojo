@@ -22,6 +22,7 @@ struct sqrrl__ProjectInner(Movable, ImplicitlyDeletable):
         self._table[].indexes.name.check_unique(v, self._id)
         self._table[].indexes.name.remove(self._id, self._name)
         self._name = v
+        self._table[].indexes.name.add(self._id, self._name)
 
     @always_inline
     def get_name(self) -> ref [self._name] String:
@@ -93,7 +94,7 @@ struct sqrrl__ProjectTable(Movable):
         var id = self.storage[].indexes.name.get_bwd(value)
         return sqrrl__Project(self.storage[].handle_for(id))
 
-    def count_name(self, value: String) -> Int:
+    def count_for_name(self, value: String) -> Int:
         return 1 if self.storage[].indexes.name.contains(value) else 0
 
     def group_by_name(self) -> Dict[String, sqrrl__Project]:
@@ -118,14 +119,9 @@ struct sqrrl__PersonInner(Movable, ImplicitlyDeletable):
     var _age: UInt32
 
     def __del__(deinit self):
+        self._table[].indexes._sqrrl__value_key.remove(self._id, sqrrl__PersonValueKey(name=self._name, age=self._age))
         self._table[].free_id(self._id)
         self._table[].clear_weak_ref(self._id)
-
-    def set_name(mut self, v: String):
-        self._name = v
-
-    def set_age(mut self, v: UInt32):
-        self._age = v
 
     @always_inline
     def get_name(self) -> ref [self._name] String:
@@ -152,26 +148,46 @@ struct sqrrl__Person(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletabl
         return Int(self._inner.count())
 
     def __hash__[H: Hasher](self, mut hasher: H):
-        hasher.update(self.id())
+        hasher.update(self._inner[].get_name())
+        hasher.update(self._inner[].get_age())
 
     def __eq__(self, other: Self) -> Bool:
-        return self.id() == other.id()
-
-    def __ne__(self, other: Self) -> Bool:
-        return self.id() != other.id()
-
-
-    def value_eq(self, other: Self) -> Bool:
         if self._inner[].get_name() != other._inner[].get_name():
             return False
         if self._inner[].get_age() != other._inner[].get_age():
             return False
         return True
 
+    def __ne__(self, other: Self) -> Bool:
+        return not (self == other)
+
+
+
+@fieldwise_init
+struct sqrrl__PersonValueKey(Copyable, Movable, Hashable, Equatable):
+    var name: String
+    var age: UInt32
+
+    def __eq__(self, other: Self) -> Bool:
+        if self.name != other.name:
+            return False
+        if self.age != other.age:
+            return False
+        return True
+
+    def __ne__(self, other: Self) -> Bool:
+        return not (self == other)
+
+    def __hash__[H: Hasher](self, mut hasher: H):
+        hasher.update(self.name)
+        hasher.update(self.age)
+
 
 struct sqrrl__PersonIndexes(Movable, ImplicitlyDeletable):
+    var _sqrrl__value_key: UniqueIndex[sqrrl__PersonValueKey]
+
     def __init__(out self):
-        pass
+        self._sqrrl__value_key = UniqueIndex[sqrrl__PersonValueKey]()
 
 
 struct sqrrl__PersonTable(Movable):
@@ -181,9 +197,14 @@ struct sqrrl__PersonTable(Movable):
         self.storage = ArcPointer(EntityStorage[sqrrl__PersonIndexes, sqrrl__PersonInner](sqrrl__PersonIndexes()))
 
     def create(mut self, *, name: String, age: UInt32) -> sqrrl__Person:
+        var sqrrl___value_key = sqrrl__PersonValueKey(name=name, age=age)
+        var sqrrl___existing_id = self.storage[].indexes._sqrrl__value_key.get_bwd_or_none(sqrrl___value_key)
+        if sqrrl___existing_id:
+            return sqrrl__Person(self.storage[].handle_for(sqrrl___existing_id.value()))
         var id = self.storage[].alloc_id()
         var inner = ArcPointer(sqrrl__PersonInner(_id=id, _table=self.storage, _name=name, _age=age))
         self.storage[].register_weak(id, inner)
+        self.storage[].indexes._sqrrl__value_key.add(id, sqrrl___value_key)
         return sqrrl__Person(inner^)
 
     def all(self) -> Set[sqrrl__Person]:
@@ -210,8 +231,26 @@ def main() raises:
         var sqrrl__alice_twin = sqrrl___world.Person.create(name = "alice", age = 30)
         var sqrrl__bob = sqrrl___world.Person.create(name = "bob", age = 25)
 
-        print("alice equals alice_twin (value):", sqrrl__alice.value_eq(sqrrl__alice_twin))
-        print("alice equals bob (value):", sqrrl__alice.value_eq(sqrrl__bob))
-        print("alice equals alice_twin (identity):", sqrrl__alice == sqrrl__alice_twin)
+        print("alice equals alice_twin:", sqrrl__alice == sqrrl__alice_twin)
+        print("alice equals bob:", sqrrl__alice == sqrrl__bob)
+
+        # `@@Person` is flagged `value`, so `create()` (what `@@@Person {
+        # ... }` compiles down to) gets get-or-create semantics: a value-duplicate
+        # doesn't insert a second, separate row -- it hands back the
+        # *existing* one. `@@alice_twin` isn't a distinct entity at all;
+        # it's the very same row `@@alice` already is, confirmed here by
+        # comparing `id()` directly (not just `==`, which field-by-field
+        # equality would already guarantee even for two genuinely distinct
+        # rows) and by the whole table's own count staying at 2 (alice,
+        # bob), not 3.
+        print("alice id equals alice_twin id:", sqrrl__alice.id() == sqrrl__alice_twin.id())
+        print("person count (alice_twin was not a new row):", sqrrl___world.Person.count())
+
+        # Mojo's own ASAP destruction drops a local right after its last
+        # textual use -- `@@bob`'s was the `==` comparison above, so
+        # without this line it (and, once `Person.count()` above no
+        # longer needs them either, `@@alice`/`@@alice_twin` too) could
+        # already be gone by the time `count()` ran, undercounting.
+        print("keep alive:", sqrrl__alice._inner[]._name, sqrrl__alice_twin._inner[]._name, sqrrl__bob._inner[]._name)
     finally:
         sqrrl___world.sqrrl__check_no_leaks()

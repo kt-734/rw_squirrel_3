@@ -16,6 +16,7 @@ from schema.pair import Pair
 from schema.profile import Profile
 from schema.employee import sqrrl__Employee
 from schema.person import sqrrl__Person
+from schema.project import sqrrl__Project
 from schema.vendor import sqrrl__Vendor
 from logic.factories import sqrrl__hire
 from logic.factories import sqrrl__hire_team
@@ -60,12 +61,38 @@ def main() raises:
         var sqrrl__website = sqrrl__make_project(sqrrl___world, "Website Revamp", 3, sqrrl__acme, 500000)
         var sqrrl__onboarding = sqrrl__make_project(sqrrl___world, "Onboarding Redesign", 1, sqrrl__globex, 250000)
 
-        var sqrrl__eng = sqrrl__make_department(sqrrl___world, "Engineering")
-        var sqrrl__sales = sqrrl__make_department(sqrrl___world, "Sales")
+        # `@@Department` is flagged `value` (see the `==` demonstration
+        # further down), which makes it field-immutable: no
+        # `set_<field>`/`add_to_<field>`/
+        # `remove_from_<field>` is generated for it at all, since mutating
+        # any field after this entity has been stored as a key elsewhere
+        # (e.g. Employee's own `indexed @@dept` backward index) would
+        # silently corrupt that index by changing the value-based hash out
+        # from under it. Every field -- including its `multi` ones -- is
+        # supplied once, up front, via `create()`/the `@@@Type { ... }`
+        # literal instead of built up afterward with setters.
+        var eng_tags = List[String]()
+        eng_tags.append("fast-paced")
+        eng_tags.append("hybrid")
 
-        _ = sqrrl__eng._inner[].add_to_sqrrl__projects(sqrrl__website)
-        _ = sqrrl__eng._inner[].add_to_sqrrl__projects(sqrrl__onboarding)
-        _ = sqrrl__sales._inner[].add_to_sqrrl__projects(sqrrl__onboarding)
+        var eng_projects = Set[sqrrl__Project]()
+        eng_projects.add(sqrrl__website)
+        eng_projects.add(sqrrl__onboarding)
+
+        var eng_vendors = Set[sqrrl__Vendor]()
+        eng_vendors.add(sqrrl__acme)
+        eng_vendors.add(sqrrl__globex)
+
+        var eng_skills = Set[String]()
+        eng_skills.add("mojo")
+        eng_skills.add("distributed-systems")
+
+        var sales_projects = Set[sqrrl__Project]()
+        sales_projects.add(sqrrl__onboarding)
+
+        var sqrrl__eng = sqrrl__make_department(sqrrl___world, "Engineering", eng_tags^, eng_projects^, eng_vendors^, eng_skills^)
+        var sqrrl__sales = sqrrl__make_department(sqrrl___world, "Sales", List[String](), sales_projects^, Set[sqrrl__Vendor](), Set[String]())
+
         print("eng project count:", len(sqrrl__eng._inner[]._sqrrl__projects))
         print("departments running onboarding:", len(sqrrl___world.Department.for_sqrrl__projects(sqrrl__onboarding)))
 
@@ -78,17 +105,11 @@ def main() raises:
         for sqrrl__proj in sqrrl__eng._inner[]._sqrrl__projects:
             print("eng project (direct multi-field iteration):", sqrrl__proj._inner[]._name)
 
-        # Set-wrapped *ordinary* relation field (not `multi`) -- a whole Set
-        # assigned/read at once, unlike `multi`'s one-member-at-a-time API.
-        var eng_vendors = Set[sqrrl__Vendor]()
-        eng_vendors.add(sqrrl__acme)
-        eng_vendors.add(sqrrl__globex)
-        sqrrl__eng._inner[].set_sqrrl__vendors(eng_vendors^);
+        # Set-wrapped *ordinary* relation field (not `multi`) -- read as a
+        # whole Set here, supplied whole at construction above.
         print("eng vendor count (Set-wrapped ordinary field):", len(sqrrl__eng._inner[]._sqrrl__vendors))
 
         # `multi` on a *plain* (non-relation) field -- Set[String]-backed.
-        _ = sqrrl__eng._inner[].add_to_skills("mojo")
-        _ = sqrrl__eng._inner[].add_to_skills("distributed-systems")
         print("eng skills:", len(sqrrl__eng._inner[]._skills))
         print("departments with mojo skill:", len(sqrrl___world.Department.for_skills("mojo")))
 
@@ -125,7 +146,7 @@ def main() raises:
 
         # `count_<field>` -- cheaper than len(for_dept(...)), and the one
         # non-raising way to ask a `unique` field "is this value taken".
-        print("employees in sales (via count_dept):", sqrrl___world.Employee.count_sqrrl__dept(sqrrl__sales))
+        print("employees in sales (via count_for_dept):", sqrrl___world.Employee.count_for_sqrrl__dept(sqrrl__sales))
 
         # `group_by_<field>`/`count_by_<field>`/`distinct_<field>` -- every
         # value at once, keyed by the relation field's own target type
@@ -137,25 +158,24 @@ def main() raises:
         for sqrrl__d in sqrrl___world.Employee.distinct_sqrrl__dept():
             print("department in use:", sqrrl__d._inner[]._name)
 
-        # `value_eq` -- field-by-field, deliberately different from `==`
-        # (id-based): the same handle is `value_eq` with itself, but never
-        # with a genuinely different row, however similar its fields are.
-        # Opt-in via `equatable` on the struct declaration (`@@struct
-        # equatable @@Department:`) -- every field's own type needs to
-        # support `!=` to compile, never checked ahead of time (Mojo's own
+        # `==` -- field-by-field, not identity, for a struct flagged
+        # `value` (`@@struct value @@Department:`): `Set`/`Dict`/
+        # `multi`-relation membership involving `@@Department` becomes
+        # value-based too, and (see `docs/syntax-reference.md`) `create()`
+        # enforces that no two live rows ever hold equal fields (no setter
+        # exists to violate it after the fact -- `value` also makes the
+        # struct field-immutable), so `==` can safely mean "same data"
+        # without `all()`/`group_by`/etc. ever silently losing a row.
+        # Every field's own type needs to support `!=`/`Hashable`/
+        # `Copyable` to compile, never checked ahead of time (Mojo's own
         # compiler is the one that catches it, same trust-the-compiler
         # reasoning as `unique`/`ordered`/`stats`), so this is confined to
-        # structs that actually ask for it. `Employee` doesn't (its
-        # `profile: Profile` field isn't `Equatable`, so tagging it
-        # `equatable` would never compile) -- `Department` does, since none
+        # structs that actually ask for it. `Employee` isn't flagged
+        # `value` (its `profile: Profile` field isn't `Equatable`, so
+        # flagging it would never compile) -- `Department` is, since none
         # of its own fields have that problem.
-        print("value_eq(eng, eng):", sqrrl__eng.value_eq(sqrrl__eng))
-        print("value_eq(eng, sales):", sqrrl__eng.value_eq(sqrrl__sales))
-
-        # `==` -- identity, not field-by-field: a handle equals itself,
-        # never a different row, regardless of `equatable`/`value_eq`.
-        print("eng == eng (identity):", sqrrl__eng == sqrrl__eng)
-        print("eng == sales (identity):", sqrrl__eng == sqrrl__sales)
+        print("eng == eng:", sqrrl__eng == sqrrl__eng)
+        print("eng == sales:", sqrrl__eng == sqrrl__sales)
 
         # `stats salary` -- whole-table, `_by_<field>`, and `_for_<field>`
         # aggregate siblings, all three shapes.
@@ -188,10 +208,9 @@ def main() raises:
         var sqrrl__promoted_bob = promote(sqrrl__bob_emp, "Senior Sales Rep")
         print("bob's new title:", sqrrl__promoted_bob._inner[]._title)
 
-        var tags = List[String]()
-        tags.append("fast-paced")
-        tags.append("hybrid")
-        sqrrl__eng._inner[].set_tags(tags^);
+        # (plain field, no backward index) -- supplied whole at construction
+        # above, since `@@Department` is flagged `value` and therefore
+        # field-immutable; no `set_tags` exists to call here anymore.
         print("eng tags count (plain field, no backward index):", len(sqrrl__eng._inner[]._tags))
 
         sqrrl__alice._inner[]._sqrrl__job._inner[].set_title("Junior Engineer");

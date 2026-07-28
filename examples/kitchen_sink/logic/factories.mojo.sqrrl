@@ -16,13 +16,16 @@ def @@@make_project(name: String, priority: UInt32, @@vendor: @@Vendor, budget_c
     var @@p = @@@Project { .name = name, .priority = priority, .@@vendor = @@vendor, .budget = Money(budget_cents) }
     return @@p
 
-def @@@make_department(name: String) -> @@Department:
+def @@@make_department(name: String, var tags: List[String], var projects: Set[@@Project], var vendors: Set[@@Vendor], var skills: Set[String]) -> @@Department:
+    # `@@Department` is flagged `value` (field-immutable) -- every field,
+    # including its `multi` ones, has to be supplied here, up front; there
+    # is no `set_<field>`/`add_to_<field>` to call afterward.
     var @@d = @@@Department {
         .name = name,
-        .tags = List[String](),
-        .@@projects = Set[@@Project](),
-        .vendors = Set[@@Vendor](),
-        .skills = Set[String](),
+        .tags = tags,
+        .@@projects = projects,
+        .vendors = vendors,
+        .skills = skills,
     }
     return @@d
 

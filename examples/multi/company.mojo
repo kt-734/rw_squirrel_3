@@ -22,6 +22,7 @@ struct sqrrl__ProjectInner(Movable, ImplicitlyDeletable):
         self._table[].indexes.name.check_unique(v, self._id)
         self._table[].indexes.name.remove(self._id, self._name)
         self._name = v
+        self._table[].indexes.name.add(self._id, self._name)
 
     @always_inline
     def get_name(self) -> ref [self._name] String:
@@ -89,7 +90,7 @@ struct sqrrl__ProjectTable(Movable):
         var id = self.storage[].indexes.name.get_bwd(value)
         return sqrrl__Project(self.storage[].handle_for(id))
 
-    def count_name(self, value: String) -> Int:
+    def count_for_name(self, value: String) -> Int:
         return 1 if self.storage[].indexes.name.contains(value) else 0
 
     def group_by_name(self) -> Dict[String, sqrrl__Project]:
@@ -123,6 +124,7 @@ struct sqrrl__DepartmentInner(Movable, ImplicitlyDeletable):
         self._table[].indexes.name.check_unique(v, self._id)
         self._table[].indexes.name.remove(self._id, self._name)
         self._name = v
+        self._table[].indexes.name.add(self._id, self._name)
 
     def set_sqrrl__projects(mut self, var v: Set[sqrrl__Project]):
         self._table[].indexes.projects.remove_many(self._id, self._sqrrl__projects)
@@ -223,7 +225,7 @@ struct sqrrl__DepartmentTable(Movable):
             out.add(sqrrl__Department(self.storage[].handle_for(id)))
         return out^
 
-    def count_name(self, value: String) -> Int:
+    def count_for_name(self, value: String) -> Int:
         return 1 if self.storage[].indexes.name.contains(value) else 0
 
     def group_by_name(self) -> Dict[String, sqrrl__Department]:
@@ -240,7 +242,7 @@ struct sqrrl__DepartmentTable(Movable):
             out.add(key.copy())
         return out^
 
-    def count_sqrrl__projects(self, value: sqrrl__Project) -> Int:
+    def count_for_sqrrl__projects(self, value: sqrrl__Project) -> Int:
         return len(self.storage[].indexes.projects.get_bwd(value))
 
     def group_by_sqrrl__projects(self) -> Dict[sqrrl__Project, Set[sqrrl__Department]]:

@@ -56,6 +56,24 @@ struct UniqueIndex[T: KeyElement & ImplicitlyDeletable & Copyable](Movable, Impl
     def contains(self, value: Self.T) -> Bool:
         return value in self._bwd
 
+    def get_bwd_or_none(self, value: Self.T) -> Optional[UInt32]:
+        """Non-raising sibling of `get_bwd` -- `None` rather than a raise
+        when nothing currently holds `value`. Used by an `Equatable`
+        struct's own `create()` get-or-create path, where "no existing
+        value-duplicate" is an expected, common outcome, not a constraint
+        violation worth `raises`-propagating the way `get_bwd`'s own
+        callers' absence always is. `Dict.__getitem__` itself still
+        raises regardless of the `in` check just above (Mojo can't tell
+        statically that the lookup will succeed) -- caught here rather
+        than passed through, same as `remove`'s own `try`/`except` just
+        above."""
+        if value in self._bwd:
+            try:
+                return self._bwd[value]
+            except:
+                pass
+        return None
+
     def all_bwd(self) -> ref [self._bwd] Dict[Self.T, UInt32]:
         """Every value currently in use, each mapped to the single id
         holding it -- a borrowed reference straight into `_bwd`, one id per

@@ -3,12 +3,19 @@ from std.os.path import join
 from squirrel_compiler.driver.file_paths import find_sqrrl_files, mojo_output_path, module_path_for
 from squirrel_compiler.driver.discovery import (
     discover_structs,
+    resolve_struct_inheritance,
+    check_key_groups_after_inheritance,
+    build_struct_fields,
+    build_struct_key_groups,
+    build_struct_method_bodies,
     build_struct_names,
     build_relation_schema,
     build_unique_fields,
     build_indexed_fields,
     build_multi_fields,
     build_ordered_fields,
+    build_key_group_lookup_names,
+    check_key_groups_dont_collide_with_fields,
     build_world_methods,
     build_bare_method_returns,
     build_plain_struct_bare_method_returns,
@@ -55,6 +62,13 @@ def convert_directory(target_root: String) raises:
     output actually references."""
     var sqrrl_files = find_sqrrl_files(target_root)
     var discovery = discover_structs(sqrrl_files, target_root)
+    # Struct inheritance (`@@struct @@Name < @@Other:`) resolves first,
+    # before anything else touches `discovery` -- every downstream
+    # builder/check below reads `ds.parsed.fields`/`ds.parsed.key_groups`
+    # directly, so once this mutates an inheriting struct's copy of those
+    # in place, none of them need their own inheritance-awareness at all.
+    resolve_struct_inheritance(discovery)
+    check_key_groups_after_inheritance(discovery)
     var plain_struct_discovery = discover_plain_structs(sqrrl_files, target_root)
     var plain_struct_fields = plain_struct_discovery.fields.copy()
     var struct_names = build_struct_names(discovery)
@@ -62,6 +76,7 @@ def convert_directory(target_root: String) raises:
     check_plain_struct_names_disjoint(struct_names, plain_struct_names)
     check_no_relation_cycles(discovery, plain_struct_fields)
     check_single_world_scope_call(sqrrl_files)
+    check_key_groups_dont_collide_with_fields(discovery)
     ensure_init_files(sqrrl_files, target_root)
 
     var relation_schema = build_relation_schema(discovery, plain_struct_fields)
@@ -70,6 +85,10 @@ def convert_directory(target_root: String) raises:
     var indexed_fields = build_indexed_fields(discovery)
     var multi_fields = build_multi_fields(discovery)
     var ordered_fields = build_ordered_fields(discovery)
+    var key_group_lookup_names = build_key_group_lookup_names(discovery)
+    var struct_fields = build_struct_fields(discovery)
+    var struct_key_groups = build_struct_key_groups(discovery)
+    var struct_method_body = build_struct_method_bodies(discovery)
     var world_methods = build_world_methods(discovery)
     var bare_method_returns = build_bare_method_returns(discovery)
     # A plain struct's own bare methods are discovered separately (`plain_
@@ -136,7 +155,10 @@ def convert_directory(target_root: String) raises:
         var generated = emit_file(
             path, own_module_path, relation_schema, struct_names, unique_fields,
             indexed_fields, multi_fields, ordered_fields, world_methods, stats_fields, entity_symbols,
-            plain_struct_names, plain_value_fields, json_used,
+            key_group_lookup_names=key_group_lookup_names,
+            struct_fields=struct_fields, struct_key_groups=struct_key_groups,
+            struct_method_body=struct_method_body,
+            plain_struct_names=plain_struct_names, plain_value_fields=plain_value_fields, json_used=json_used,
             bare_function_returns=bare_function_returns, bare_method_returns=bare_method_returns,
         )
         out_paths.append(out_path)

@@ -178,7 +178,7 @@ struct sqrrl__GroupTable(Movable):
             out.add(sqrrl__Group(self.storage[].handle_for(id)))
         return out^
 
-    def count_sqrrl__members(self, value: sqrrl__Person) -> Int:
+    def count_for_sqrrl__members(self, value: sqrrl__Person) -> Int:
         return len(self.storage[].indexes.members.get_bwd(value))
 
     def group_by_sqrrl__members(self) -> Dict[sqrrl__Person, Set[sqrrl__Group]]:

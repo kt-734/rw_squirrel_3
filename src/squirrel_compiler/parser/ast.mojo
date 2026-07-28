@@ -63,27 +63,51 @@ struct TypeParam(Copyable, Movable):
 
 
 struct ParsedStruct(Copyable, Movable):
-    """One `@@struct [keepalive] [equatable] @@Name[(Trait1, Trait2, ...)]:
-    <indented fields, then optional methods>` declaration -- or, reused for
-    the plain-structs milestone, a hand-written `struct Name[T: Bound](...):
-    <var-declared fields>` a real struct in its own right, discovered
-    structurally by `Scanner.parse_hand_written_plain_struct` rather than
-    parsed as a `@@`-marked declaration.
+    """One `@@struct [keepalive] [value] @@Name[(Trait1, Trait2, ...)]:
+    <indented fields/key(...) groups, then optional methods>` declaration --
+    or, reused for the plain-structs milestone, a hand-written `struct
+    Name[T: Bound](...): <var-declared fields>` a real struct in its own
+    right, discovered structurally by `Scanner.parse_hand_written_plain_struct`
+    rather than parsed as a `@@`-marked declaration.
 
     `trait_list`/`method_body` are captured by the parser regardless of
     milestone (the grammar is stable), even though codegen doesn't splice
     them into the generated entity wrapper until M3 -- see the plan's
     Milestones section.
 
+    `key_groups` -- one inner `List[String]` (field names, declaration
+    order) per `key(...)` line in the struct body, in the order those lines
+    appeared. A struct with no `key(...)` lines has an empty outer list;
+    a struct with several has one independent entry per line -- there's no
+    cap, and the entries don't interact with each other at all (see
+    `codegen/table.mojo`'s per-group `create()` checks, each against its own
+    `UniqueIndex`). Only ever populated for an `@@struct`, never for a
+    hand-written plain struct (which has no field-modifier/marker grammar
+    at all).
+
     `type_params` (only ever non-empty for a hand-written plain struct --
     an `@@struct` is never generic) is its own `[T: Bound, ...]` list, if
     any -- see `TypeParam`'s own doc comment. Mirrors rw_squirrel_2's own
-    `ParsedStruct.type_params`, confirmed by reading it."""
+    `ParsedStruct.type_params`, confirmed by reading it.
+
+    `inherits_from` (struct inheritance) -- the target struct's own bare
+    name from an optional `@@struct @@Name < @@Other:` clause, empty
+    string if this struct doesn't use `<` at all. At parse time this
+    struct's own `fields`/`key_groups`/`method_body` are still only its
+    *own* locally-declared content -- the actual copy-in of the target's
+    fields/key_groups/methods happens later, in a dedicated discovery-
+    level pass (`driver/discovery.mojo`'s `resolve_struct_inheritance`),
+    once every struct project-wide has been independently parsed and the
+    target's own full content is available to copy. `Scanner.parse_struct`
+    only records *which* struct to inherit from here -- it never resolves
+    it itself."""
 
     var name: String
     var fields: List[Field]
     var is_keepalive: Bool
-    var is_equatable: Bool
+    var is_value_type: Bool
+    var key_groups: List[List[String]]
+    var inherits_from: String
     var trait_list: List[String]
     var method_body: String
     var method_body_start_offset: Int
@@ -94,7 +118,9 @@ struct ParsedStruct(Copyable, Movable):
         var name: String,
         var fields: List[Field],
         is_keepalive: Bool = False,
-        is_equatable: Bool = False,
+        is_value_type: Bool = False,
+        var key_groups: List[List[String]] = List[List[String]](),
+        var inherits_from: String = String(),
         var trait_list: List[String] = List[String](),
         var method_body: String = String(),
         method_body_start_offset: Int = 0,
@@ -103,7 +129,9 @@ struct ParsedStruct(Copyable, Movable):
         self.name = name^
         self.fields = fields^
         self.is_keepalive = is_keepalive
-        self.is_equatable = is_equatable
+        self.is_value_type = is_value_type
+        self.key_groups = key_groups^
+        self.inherits_from = inherits_from^
         self.trait_list = trait_list^
         self.method_body = method_body^
         self.method_body_start_offset = method_body_start_offset

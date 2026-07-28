@@ -22,6 +22,7 @@ struct sqrrl__DepartmentInner(Movable, ImplicitlyDeletable):
         self._table[].indexes.name.check_unique(v, self._id)
         self._table[].indexes.name.remove(self._id, self._name)
         self._name = v
+        self._table[].indexes.name.add(self._id, self._name)
 
     @always_inline
     def get_name(self) -> ref [self._name] String:
@@ -89,7 +90,7 @@ struct sqrrl__DepartmentTable(Movable):
         var id = self.storage[].indexes.name.get_bwd(value)
         return sqrrl__Department(self.storage[].handle_for(id))
 
-    def count_name(self, value: String) -> Int:
+    def count_for_name(self, value: String) -> Int:
         return 1 if self.storage[].indexes.name.contains(value) else 0
 
     def group_by_name(self) -> Dict[String, sqrrl__Department]:
@@ -204,7 +205,7 @@ struct sqrrl__PersonTable(Movable):
             out.add(sqrrl__Person(self.storage[].handle_for(id)))
         return out^
 
-    def count_name(self, value: String) -> Int:
+    def count_for_name(self, value: String) -> Int:
         return len(self.storage[].indexes.name.get_bwd(value))
 
     def group_by_name(self) -> Dict[String, Set[sqrrl__Person]]:
@@ -243,6 +244,17 @@ def main() raises:
         var sqrrl__team = sqrrl___world.Person.for_name("alice")
         print("found by index:", len(sqrrl__team))
 
-        print("count:", sqrrl___world.Person.count(), sqrrl__alice._inner[]._name, sqrrl__bob._inner[]._name)
+        # Regression coverage for a real, once-present bug: a `unique`
+        # field's own `set_<field>` used to check_unique/remove/assign
+        # but never re-add the new value to its own backward index --
+        # `for_<field>` on the *new* value would then wrongly raise
+        # "no entity currently holds this value" even though the field
+        # itself already held it.
+        var sqrrl__ops = sqrrl___world.Department.create(name = "Operations")
+        sqrrl__ops._inner[].set_name("Ops Renamed");
+        var sqrrl__found_ops = sqrrl___world.Department.for_name("Ops Renamed")
+        print("found renamed department by its new name:", sqrrl__found_ops._inner[]._name)
+
+        print("count:", sqrrl___world.Person.count(), sqrrl__alice._inner[]._name, sqrrl__bob._inner[]._name, sqrrl__ops._inner[]._name)
     finally:
         sqrrl___world.sqrrl__check_no_leaks()

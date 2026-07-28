@@ -98,7 +98,7 @@ struct sqrrl__EmployeeTable(Movable):
             out.add(sqrrl__Employee(self.storage[].handle_for(id)))
         return out^
 
-    def count_name(self, value: String) -> Int:
+    def count_for_name(self, value: String) -> Int:
         return len(self.storage[].indexes.name.get_bwd(value))
 
     def group_by_name(self) -> Dict[String, Set[sqrrl__Employee]]:

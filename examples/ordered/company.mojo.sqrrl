@@ -48,7 +48,7 @@ def main() raises:
         print("departments with salary totals:", len(@@salary_by_dept))
 
         print("distinct years employed:", len(@@@Employee.distinct_years_employed()))
-        print("count with 5 years:", @@@Employee.count_years_employed(5))
+        print("count with 5 years:", @@@Employee.count_for_years_employed(5))
 
         var @@by_dept = @@@Employee.group_by_@@dept()
         print("departments with employees:", len(@@by_dept))

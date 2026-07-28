@@ -72,6 +72,7 @@ struct sqrrl__EmployeeInner(Movable, ImplicitlyDeletable):
         self._table[].indexes.name.check_unique(v, self._id)
         self._table[].indexes.name.remove(self._id, self._name)
         self._name = v
+        self._table[].indexes.name.add(self._id, self._name)
 
     @always_inline
     def get_name(self) -> ref [self._name] String:
@@ -139,7 +140,7 @@ struct sqrrl__EmployeeTable(Movable):
         var id = self.storage[].indexes.name.get_bwd(value)
         return sqrrl__Employee(self.storage[].handle_for(id))
 
-    def count_name(self, value: String) -> Int:
+    def count_for_name(self, value: String) -> Int:
         return 1 if self.storage[].indexes.name.contains(value) else 0
 
     def group_by_name(self) -> Dict[String, sqrrl__Employee]:
@@ -177,6 +178,7 @@ struct sqrrl__DepartmentInner(Movable, ImplicitlyDeletable):
         self._table[].indexes.name.check_unique(v, self._id)
         self._table[].indexes.name.remove(self._id, self._name)
         self._name = v
+        self._table[].indexes.name.add(self._id, self._name)
 
     def set_sqrrl__lead(mut self, v: sqrrl__Employee):
         self._sqrrl__lead = v
@@ -339,7 +341,7 @@ struct sqrrl__DepartmentTable(Movable):
         var id = self.storage[].indexes.name.get_bwd(value)
         return sqrrl__Department(self.storage[].handle_for(id))
 
-    def count_name(self, value: String) -> Int:
+    def count_for_name(self, value: String) -> Int:
         return 1 if self.storage[].indexes.name.contains(value) else 0
 
     def group_by_name(self) -> Dict[String, sqrrl__Department]:

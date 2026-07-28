@@ -1,5 +1,6 @@
 from squirrel_compiler.codegen import transform_source
 from squirrel_compiler.driver.misc_builders import uses_json_entry_point
+from squirrel_compiler.parser import Field
 
 
 def _contains_word(haystack: String, needle: String) -> Bool:
@@ -50,6 +51,10 @@ def emit_file(
     world_methods: Dict[String, List[String]],
     stats_fields: Dict[String, List[String]],
     cross_file_symbols: Dict[String, String],
+    key_group_lookup_names: Dict[String, List[String]] = Dict[String, List[String]](),
+    struct_fields: Dict[String, List[Field]] = Dict[String, List[Field]](),
+    struct_key_groups: Dict[String, List[List[String]]] = Dict[String, List[List[String]]](),
+    struct_method_body: Dict[String, String] = Dict[String, String](),
     plain_struct_names: Dict[String, Bool] = Dict[String, Bool](),
     plain_value_fields: Dict[String, Dict[String, String]] = Dict[String, Dict[String, String]](),
     json_used: Bool = False,
@@ -82,7 +87,11 @@ def emit_file(
     try:
         transformed = transform_source(
             source, relation_schema, struct_names, unique_fields, indexed_fields, multi_fields,
-            ordered_fields, world_methods, stats_fields, plain_struct_names, plain_value_fields, json_used,
+            ordered_fields, world_methods, stats_fields,
+            key_group_lookup_names=key_group_lookup_names,
+            struct_fields=struct_fields, struct_key_groups=struct_key_groups,
+            struct_method_body=struct_method_body,
+            plain_struct_names=plain_struct_names, plain_value_fields=plain_value_fields, json_used=json_used,
             bare_function_returns=bare_function_returns,
             bare_method_returns=bare_method_returns,
         )
@@ -106,6 +115,14 @@ def emit_file(
     out += "from std.hashlib import Hasher\n"
     out += "from std.collections import Set\n"
     out += "from std.os import abort\n"
+    # Mojo's own `Variant` is never one of `cross_file_symbols`'s entries
+    # (those only cover project-defined types) -- a field typed `Variant[
+    # ...]` needs this stdlib import explicitly, or `use of unknown
+    # declaration 'Variant'` follows (confirmed via a real compile), the
+    # same class of gap `sqrrl___world`'s own conditional import below
+    # already closes for a different well-known generated symbol.
+    if _contains_word(transformed, "Variant"):
+        out += "from std.utils import Variant\n"
     if "sqrrl___world" in transformed:
         out += "from sqrrl__world import sqrrl___init, sqrrl___World\n"
     # Only a file that actually calls a whole-world JSON entry point needs

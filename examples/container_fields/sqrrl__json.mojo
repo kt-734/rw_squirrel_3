@@ -1,101 +1,164 @@
 from std.memory import ArcPointer
 from std.collections import Set
-from squirrel_runtime.json import sqrrl___JsonScanner, sqrrl__json_string_literal, sqrrl__json_bool_literal, sqrrl__to_json_default, sqrrl__from_json_default, sqrrl__List_json_to_list, sqrrl__List_json_from_list, sqrrl__Set_json_to_list, sqrrl__Set_json_from_list, sqrrl__Optional_json_to_list, sqrrl__Optional_json_from_list, sqrrl__Dict_json_to_pairs, sqrrl__Dict_json_from_pairs, sqrrl__movable_rebind
+from squirrel_runtime.json import sqrrl___JsonScanner, sqrrl__json_string_literal, sqrrl__json_bool_literal, sqrrl__to_json_default, sqrrl__from_json_default, sqrrl__movable_rebind
 from sqrrl__world import sqrrl___World, sqrrl___init
 from company import sqrrl__Employee, sqrrl__EmployeeInner, sqrrl__EmployeeTable
 from company import sqrrl__Department, sqrrl__DepartmentInner, sqrrl__DepartmentTable
-from ring_module import Ring, sqrrl__Ring_json_to_list, sqrrl__Ring_json_from_list
-from grid_module import Grid, sqrrl__Grid_json_to_pairs, sqrrl__Grid_json_from_pairs
+from ring_module import Ring, sqrrl__Ring_to_json, sqrrl__Ring_from_json
+from grid_module import Grid, sqrrl__Grid_to_json, sqrrl__Grid_from_json
 
 
-def list_to_json[T: Movable](lst: List[T]) -> String:
+def sqrrl__List_to_json[T: Movable](value: List[T], world: sqrrl___World) -> String:
     var out = String("[")
-    for i in range(len(lst)):
+    for i in range(len(value)):
         if i > 0:
             out += ","
-        out += sqrrl__to_json(lst[i])
+        out += sqrrl__to_json(value[i], world)
     out += "]"
     return out^
 
 
-def list_from_json[T: Movable & ImplicitlyDeletable](mut sc: sqrrl___JsonScanner) raises -> List[T]:
-    var lst = List[T]()
+def sqrrl__List_from_json[T: Movable & ImplicitlyDeletable](mut sc: sqrrl___JsonScanner, world: sqrrl___World) raises -> List[T]:
+    var out = List[T]()
     sc.expect_byte(UInt8(ord("[")))
     if not sc.try_consume_byte(UInt8(ord("]"))):
         while True:
-            lst.append(sqrrl__from_json[T](sc))
+            out.append(sqrrl__from_json[T](sc, world))
             if sc.try_consume_byte(UInt8(ord(","))):
                 continue
             sc.expect_byte(UInt8(ord("]")))
             break
-    return lst^
+    return out^
 
 
-def pairs_to_json[K: Movable, V: Movable](pairs: List[Tuple[K, V]]) -> String:
+def sqrrl__Set_to_json[T: Movable & ImplicitlyDeletable & Hashable & Equatable](value: Set[T], world: sqrrl___World) -> String:
     var out = String("[")
-    for i in range(len(pairs)):
-        if i > 0:
+    var first = True
+    for elem in value:
+        if not first:
             out += ","
-        out += "[" + sqrrl__to_json(pairs[i][0]) + "," + sqrrl__to_json(pairs[i][1]) + "]"
+        first = False
+        out += sqrrl__to_json(elem, world)
     out += "]"
     return out^
 
 
-def pairs_from_json[K: Copyable & ImplicitlyDeletable, V: Copyable & ImplicitlyDeletable](mut sc: sqrrl___JsonScanner) raises -> List[Tuple[K, V]]:
-    var pairs = List[Tuple[K, V]]()
+def sqrrl__Set_from_json[T: Copyable & ImplicitlyDeletable & Hashable & Equatable](mut sc: sqrrl___JsonScanner, world: sqrrl___World) raises -> Set[T]:
+    var out = Set[T]()
+    sc.expect_byte(UInt8(ord("[")))
+    if not sc.try_consume_byte(UInt8(ord("]"))):
+        while True:
+            out.add(sqrrl__from_json[T](sc, world))
+            if sc.try_consume_byte(UInt8(ord(","))):
+                continue
+            sc.expect_byte(UInt8(ord("]")))
+            break
+    return out^
+
+
+def sqrrl__Optional_to_json[T: Movable](value: Optional[T], world: sqrrl___World) -> String:
+    if value:
+        return sqrrl__to_json(value.value(), world)
+    return "null"
+
+
+def sqrrl__Optional_from_json[T: Movable & ImplicitlyDeletable](mut sc: sqrrl___JsonScanner, world: sqrrl___World) raises -> Optional[T]:
+    if sc.try_consume_literal("null"):
+        return None
+    return sqrrl__from_json[T](sc, world)
+
+
+def sqrrl__Dict_to_json[K: Movable & Hashable & Equatable, V: Movable](value: Dict[K, V], world: sqrrl___World) -> String:
+    var out = String("[")
+    var first = True
+    for entry in value.items():
+        if not first:
+            out += ","
+        first = False
+        out += "[" + sqrrl__to_json(entry.key, world) + "," + sqrrl__to_json(entry.value, world) + "]"
+    out += "]"
+    return out^
+
+
+def sqrrl__Dict_from_json[K: Copyable & ImplicitlyDeletable & Hashable & Equatable, V: Copyable & ImplicitlyDeletable](mut sc: sqrrl___JsonScanner, world: sqrrl___World) raises -> Dict[K, V]:
+    var out = Dict[K, V]()
     sc.expect_byte(UInt8(ord("[")))
     if not sc.try_consume_byte(UInt8(ord("]"))):
         while True:
             sc.expect_byte(UInt8(ord("[")))
-            var k = sqrrl__from_json[K](sc)
+            var k = sqrrl__from_json[K](sc, world)
             sc.expect_byte(UInt8(ord(",")))
-            var v = sqrrl__from_json[V](sc)
+            var v = sqrrl__from_json[V](sc, world)
             sc.expect_byte(UInt8(ord("]")))
-            pairs.append((k.copy(), v.copy()))
+            out[k.copy()] = v.copy()
             if sc.try_consume_byte(UInt8(ord(","))):
                 continue
             sc.expect_byte(UInt8(ord("]")))
             break
-    return pairs^
+    return out^
 
 
-def sqrrl__to_json[T: AnyType](value: T) -> String:
+def sqrrl__to_json[T: AnyType](value: T, world: sqrrl___World) -> String:
     comptime if False:
         pass
+    elif T == List[sqrrl__Employee]:
+        return sqrrl__List_to_json(rebind[List[sqrrl__Employee]](value), world)
+    elif T == sqrrl__Employee:
+        return String(rebind[sqrrl__Employee](value).id())
+    elif T == Set[sqrrl__Employee]:
+        return sqrrl__Set_to_json(rebind[Set[sqrrl__Employee]](value), world)
+    elif T == Optional[sqrrl__Employee]:
+        return sqrrl__Optional_to_json(rebind[Optional[sqrrl__Employee]](value), world)
     elif T == List[String]:
-        return list_to_json(sqrrl__List_json_to_list(rebind[List[String]](value)))
+        return sqrrl__List_to_json(rebind[List[String]](value), world)
+    elif T == Dict[sqrrl__Employee, String]:
+        return sqrrl__Dict_to_json(rebind[Dict[sqrrl__Employee, String]](value), world)
+    elif T == Dict[String, sqrrl__Employee]:
+        return sqrrl__Dict_to_json(rebind[Dict[String, sqrrl__Employee]](value), world)
     elif T == List[List[String]]:
-        return list_to_json(sqrrl__List_json_to_list(rebind[List[List[String]]](value)))
+        return sqrrl__List_to_json(rebind[List[List[String]]](value), world)
     elif T == Ring[String]:
-        return list_to_json(sqrrl__Ring_json_to_list(rebind[Ring[String]](value)))
+        return sqrrl__Ring_to_json(rebind[Ring[String]](value), world)
     elif T == Grid[String, Int]:
-        return pairs_to_json(sqrrl__Grid_json_to_pairs(rebind[Grid[String, Int]](value)))
+        return sqrrl__Grid_to_json(rebind[Grid[String, Int]](value), world)
     else:
         return sqrrl__to_json_default(value)
 
 
-def sqrrl__from_json[T: Movable & ImplicitlyDeletable](mut sc: sqrrl___JsonScanner) raises -> T:
+def sqrrl__from_json[T: Movable & ImplicitlyDeletable](mut sc: sqrrl___JsonScanner, world: sqrrl___World) raises -> T:
     comptime if False:
         pass
+    elif T == List[sqrrl__Employee]:
+        return sqrrl__movable_rebind[List[sqrrl__Employee], T](sqrrl__List_from_json[sqrrl__Employee](sc, world))
+    elif T == sqrrl__Employee:
+        return sqrrl__movable_rebind[sqrrl__Employee, T](sqrrl__Employee(world.Employee.storage[].handle_for(UInt32(sc.parse_json_int()))))
+    elif T == Set[sqrrl__Employee]:
+        return sqrrl__movable_rebind[Set[sqrrl__Employee], T](sqrrl__Set_from_json[sqrrl__Employee](sc, world))
+    elif T == Optional[sqrrl__Employee]:
+        return sqrrl__movable_rebind[Optional[sqrrl__Employee], T](sqrrl__Optional_from_json[sqrrl__Employee](sc, world))
     elif T == List[String]:
-        return sqrrl__movable_rebind[List[String], T](sqrrl__List_json_from_list(list_from_json[String](sc)))
+        return sqrrl__movable_rebind[List[String], T](sqrrl__List_from_json[String](sc, world))
+    elif T == Dict[sqrrl__Employee, String]:
+        return sqrrl__movable_rebind[Dict[sqrrl__Employee, String], T](sqrrl__Dict_from_json[sqrrl__Employee, String](sc, world))
+    elif T == Dict[String, sqrrl__Employee]:
+        return sqrrl__movable_rebind[Dict[String, sqrrl__Employee], T](sqrrl__Dict_from_json[String, sqrrl__Employee](sc, world))
     elif T == List[List[String]]:
-        return sqrrl__movable_rebind[List[List[String]], T](sqrrl__List_json_from_list(list_from_json[List[String]](sc)))
+        return sqrrl__movable_rebind[List[List[String]], T](sqrrl__List_from_json[List[String]](sc, world))
     elif T == Ring[String]:
-        return sqrrl__movable_rebind[Ring[String], T](sqrrl__Ring_json_from_list(list_from_json[String](sc)))
+        return sqrrl__movable_rebind[Ring[String], T](sqrrl__Ring_from_json[String](sc, world))
     elif T == Grid[String, Int]:
-        return sqrrl__movable_rebind[Grid[String, Int], T](sqrrl__Grid_json_from_pairs(pairs_from_json[String, Int](sc)))
+        return sqrrl__movable_rebind[Grid[String, Int], T](sqrrl__Grid_from_json[String, Int](sc, world))
     else:
         return sqrrl__from_json_default[T](sc)
 
-def sqrrl__Employee_to_json(e: sqrrl__Employee) -> String:
+def sqrrl__Employee_to_json(e: sqrrl__Employee, world: sqrrl___World) -> String:
     var out = String("{")
     out += '"name":'
-    out += sqrrl__to_json(e._inner[].get_name())
+    out += sqrrl__to_json(e._inner[].get_name(), world)
     out += "}"
     return out^
 
-def sqrrl__Employee_from_json_with_id(table: sqrrl__EmployeeTable, id: UInt32, mut sc: sqrrl___JsonScanner) raises -> sqrrl__Employee:
+def sqrrl__Employee_from_json_with_id(table: sqrrl__EmployeeTable, world: sqrrl___World, id: UInt32, mut sc: sqrrl___JsonScanner) raises -> sqrrl__Employee:
     var parsed_name: Optional[String] = None
     sc.expect_byte(UInt8(ord("{")))
     if not sc.try_consume_byte(UInt8(ord("}"))):
@@ -118,36 +181,36 @@ def sqrrl__Employee_from_json_with_id(table: sqrrl__EmployeeTable, id: UInt32, m
     table.storage[].indexes.name.add(id, inner[]._name)
     return sqrrl__Employee(inner^)
 
-def sqrrl__Employee_all_to_json(table: sqrrl__EmployeeTable) -> String:
+def sqrrl__Employee_all_to_json(table: sqrrl__EmployeeTable, world: sqrrl___World) -> String:
     var out = String("[")
     var first = True
     for id in table.storage[].all():
         if not first:
             out += ","
         var e = sqrrl__Employee(table.storage[].handle_for(id))
-        out += "[" + String(id) + "," + sqrrl__Employee_to_json(e) + "]"
+        out += "[" + String(id) + "," + sqrrl__Employee_to_json(e, world) + "]"
         first = False
     out += "]"
     return out^
 
-def sqrrl__Employee_all_from_json(table: sqrrl__EmployeeTable, mut temp: List[sqrrl__Employee], mut sc: sqrrl___JsonScanner) raises:
+def sqrrl__Employee_all_from_json(table: sqrrl__EmployeeTable, world: sqrrl___World, mut temp: List[sqrrl__Employee], mut sc: sqrrl___JsonScanner) raises:
     sc.expect_byte(UInt8(ord("[")))
     if not sc.try_consume_byte(UInt8(ord("]"))):
         while True:
             sc.expect_byte(UInt8(ord("[")))
             var eid = UInt32(sc.parse_json_int())
             sc.expect_byte(UInt8(ord(",")))
-            var e = sqrrl__Employee_from_json_with_id(table, eid, sc)
+            var e = sqrrl__Employee_from_json_with_id(table, world, eid, sc)
             sc.expect_byte(UInt8(ord("]")))
             temp.append(e)
             if not sc.try_consume_byte(UInt8(ord(","))):
                 break
         sc.expect_byte(UInt8(ord("]")))
 
-def sqrrl__Department_to_json(e: sqrrl__Department) -> String:
+def sqrrl__Department_to_json(e: sqrrl__Department, world: sqrrl___World) -> String:
     var out = String("{")
     out += '"name":'
-    out += sqrrl__to_json(e._inner[].get_name())
+    out += sqrrl__to_json(e._inner[].get_name(), world)
     out += ","
     out += '"members":'
     ref fv_members = e._inner[].get_sqrrl__members()
@@ -183,7 +246,7 @@ def sqrrl__Department_to_json(e: sqrrl__Department) -> String:
     out += ds3
     out += ","
     out += '"tags":'
-    out += sqrrl__to_json(e._inner[].get_tags())
+    out += sqrrl__to_json(e._inner[].get_tags(), world)
     out += ","
     out += '"scores":'
     ref fv_scores = e._inner[].get_sqrrl__scores()
@@ -192,7 +255,7 @@ def sqrrl__Department_to_json(e: sqrrl__Department) -> String:
     for de4 in fv_scores.items():
         if not dfirst4:
             ds4 += ","
-        ds4 += "[" + String(de4.key.id()) + "," + sqrrl__to_json(de4.value) + "]"
+        ds4 += "[" + String(de4.key.id()) + "," + sqrrl__to_json(de4.value, world) + "]"
         dfirst4 = False
     ds4 += "]"
     out += ds4
@@ -204,23 +267,23 @@ def sqrrl__Department_to_json(e: sqrrl__Department) -> String:
     for de5 in fv_leads.items():
         if not dfirst5:
             ds5 += ","
-        ds5 += "[" + sqrrl__to_json(de5.key) + "," + String(de5.value.id()) + "]"
+        ds5 += "[" + sqrrl__to_json(de5.key, world) + "," + String(de5.value.id()) + "]"
         dfirst5 = False
     ds5 += "]"
     out += ds5
     out += ","
     out += '"groups":'
-    out += sqrrl__to_json(e._inner[].get_groups())
+    out += sqrrl__to_json(e._inner[].get_groups(), world)
     out += ","
     out += '"ring":'
-    out += sqrrl__to_json(e._inner[].get_ring())
+    out += sqrrl__to_json(e._inner[].get_ring(), world)
     out += ","
     out += '"grid":'
-    out += sqrrl__to_json(e._inner[].get_grid())
+    out += sqrrl__to_json(e._inner[].get_grid(), world)
     out += "}"
     return out^
 
-def sqrrl__Department_from_json_with_id(table: sqrrl__DepartmentTable, sqrrl__tbl_Employee: sqrrl__EmployeeTable, id: UInt32, mut sc: sqrrl___JsonScanner) raises -> sqrrl__Department:
+def sqrrl__Department_from_json_with_id(table: sqrrl__DepartmentTable, world: sqrrl___World, id: UInt32, mut sc: sqrrl___JsonScanner) raises -> sqrrl__Department:
     var parsed_name: Optional[String] = None
     var parsed_members: Optional[List[sqrrl__Employee]] = None
     var parsed_backup: Optional[Set[sqrrl__Employee]] = None
@@ -243,7 +306,7 @@ def sqrrl__Department_from_json_with_id(table: sqrrl__DepartmentTable, sqrrl__tb
                 sc.expect_byte(UInt8(ord("[")))
                 if not sc.try_consume_byte(UInt8(ord("]"))):
                     while True:
-                        nc1.append(sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sc.parse_json_int()))))
+                        nc1.append(sqrrl__Employee(world.Employee.storage[].handle_for(UInt32(sc.parse_json_int()))))
                         if not sc.try_consume_byte(UInt8(ord(","))):
                             break
                     sc.expect_byte(UInt8(ord("]")))
@@ -253,7 +316,7 @@ def sqrrl__Department_from_json_with_id(table: sqrrl__DepartmentTable, sqrrl__tb
                 sc.expect_byte(UInt8(ord("[")))
                 if not sc.try_consume_byte(UInt8(ord("]"))):
                     while True:
-                        nc1.add(sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sc.parse_json_int()))))
+                        nc1.add(sqrrl__Employee(world.Employee.storage[].handle_for(UInt32(sc.parse_json_int()))))
                         if not sc.try_consume_byte(UInt8(ord(","))):
                             break
                     sc.expect_byte(UInt8(ord("]")))
@@ -263,17 +326,17 @@ def sqrrl__Department_from_json_with_id(table: sqrrl__DepartmentTable, sqrrl__tb
                 if sc.try_consume_literal("null"):
                     nc1 = Optional[sqrrl__Employee]()
                 else:
-                    nc1 = Optional[sqrrl__Employee](sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sc.parse_json_int()))))
+                    nc1 = Optional[sqrrl__Employee](sqrrl__Employee(world.Employee.storage[].handle_for(UInt32(sc.parse_json_int()))))
                 parsed_lead = nc1^
             elif key == "tags":
-                parsed_tags = sqrrl__from_json[List[String]](sc)
+                parsed_tags = sqrrl__from_json[List[String]](sc, world)
             elif key == "scores":
                 var nc1 = Dict[sqrrl__Employee, String]()
                 sc.expect_byte(UInt8(ord("[")))
                 if not sc.try_consume_byte(UInt8(ord("]"))):
                     while True:
                         sc.expect_byte(UInt8(ord("[")))
-                        var nck1 = sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sc.parse_json_int())))
+                        var nck1 = sqrrl__Employee(world.Employee.storage[].handle_for(UInt32(sc.parse_json_int())))
                         sc.expect_byte(UInt8(ord(",")))
                         nc1[nck1] = sc.parse_json_string()
                         sc.expect_byte(UInt8(ord("]")))
@@ -289,18 +352,18 @@ def sqrrl__Department_from_json_with_id(table: sqrrl__DepartmentTable, sqrrl__tb
                         sc.expect_byte(UInt8(ord("[")))
                         var nck1 = sc.parse_json_string()
                         sc.expect_byte(UInt8(ord(",")))
-                        nc1[nck1] = sqrrl__Employee(sqrrl__tbl_Employee.storage[].handle_for(UInt32(sc.parse_json_int())))
+                        nc1[nck1] = sqrrl__Employee(world.Employee.storage[].handle_for(UInt32(sc.parse_json_int())))
                         sc.expect_byte(UInt8(ord("]")))
                         if not sc.try_consume_byte(UInt8(ord(","))):
                             break
                     sc.expect_byte(UInt8(ord("]")))
                 parsed_leads = nc1^
             elif key == "groups":
-                parsed_groups = sqrrl__from_json[List[List[String]]](sc)
+                parsed_groups = sqrrl__from_json[List[List[String]]](sc, world)
             elif key == "ring":
-                parsed_ring = sqrrl__from_json[Ring[String]](sc)
+                parsed_ring = sqrrl__from_json[Ring[String]](sc, world)
             elif key == "grid":
-                parsed_grid = sqrrl__from_json[Grid[String, Int]](sc)
+                parsed_grid = sqrrl__from_json[Grid[String, Int]](sc, world)
             else:
                 raise Error("InvalidJson: unknown field " + key + " for Department")
             if not sc.try_consume_byte(UInt8(ord(","))):
@@ -342,26 +405,26 @@ def sqrrl__Department_from_json_with_id(table: sqrrl__DepartmentTable, sqrrl__tb
     table.storage[].indexes.name.add(id, inner[]._name)
     return sqrrl__Department(inner^)
 
-def sqrrl__Department_all_to_json(table: sqrrl__DepartmentTable) -> String:
+def sqrrl__Department_all_to_json(table: sqrrl__DepartmentTable, world: sqrrl___World) -> String:
     var out = String("[")
     var first = True
     for id in table.storage[].all():
         if not first:
             out += ","
         var e = sqrrl__Department(table.storage[].handle_for(id))
-        out += "[" + String(id) + "," + sqrrl__Department_to_json(e) + "]"
+        out += "[" + String(id) + "," + sqrrl__Department_to_json(e, world) + "]"
         first = False
     out += "]"
     return out^
 
-def sqrrl__Department_all_from_json(table: sqrrl__DepartmentTable, sqrrl__tbl_Employee: sqrrl__EmployeeTable, mut temp: List[sqrrl__Department], mut sc: sqrrl___JsonScanner) raises:
+def sqrrl__Department_all_from_json(table: sqrrl__DepartmentTable, world: sqrrl___World, mut temp: List[sqrrl__Department], mut sc: sqrrl___JsonScanner) raises:
     sc.expect_byte(UInt8(ord("[")))
     if not sc.try_consume_byte(UInt8(ord("]"))):
         while True:
             sc.expect_byte(UInt8(ord("[")))
             var eid = UInt32(sc.parse_json_int())
             sc.expect_byte(UInt8(ord(",")))
-            var e = sqrrl__Department_from_json_with_id(table, sqrrl__tbl_Employee, eid, sc)
+            var e = sqrrl__Department_from_json_with_id(table, world, eid, sc)
             sc.expect_byte(UInt8(ord("]")))
             temp.append(e)
             if not sc.try_consume_byte(UInt8(ord(","))):
@@ -379,10 +442,10 @@ struct sqrrl___TempKeepAlives(Movable):
 def sqrrl___world_to_json(world: sqrrl___World) -> String:
     var out = String("{")
     out += '"Employee":'
-    out += sqrrl__Employee_all_to_json(world.Employee)
+    out += sqrrl__Employee_all_to_json(world.Employee, world)
     out += ","
     out += '"Department":'
-    out += sqrrl__Department_all_to_json(world.Department)
+    out += sqrrl__Department_all_to_json(world.Department, world)
     out += "}"
     return out^
 
@@ -393,9 +456,9 @@ def sqrrl___world_from_json(mut world: sqrrl___World, mut sc: sqrrl___JsonScanne
             var key = sc.parse_json_string()
             sc.expect_byte(UInt8(ord(":")))
             if key == "Employee":
-                sqrrl__Employee_all_from_json(world.Employee, temp.Employee, sc)
+                sqrrl__Employee_all_from_json(world.Employee, world, temp.Employee, sc)
             elif key == "Department":
-                sqrrl__Department_all_from_json(world.Department, world.Employee, temp.Department, sc)
+                sqrrl__Department_all_from_json(world.Department, world, temp.Department, sc)
             else:
                 raise Error("InvalidJson: unknown struct " + key + " in dump")
             if not sc.try_consume_byte(UInt8(ord(","))):

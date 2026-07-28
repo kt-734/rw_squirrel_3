@@ -22,12 +22,66 @@ def _body_err(full_source: String, body_start: Int, local_pos: Int, msg: String)
     return Error(source_location(full_source, body_start + local_pos) + ": " + msg)
 
 
+def _capture_method_body_suffix(
+    bs: Scanner, body: String, body_start: Int, mut method_body_start_offset: Int
+) -> Optional[String]:
+    """Shared by `parse_struct_body`/`parse_hand_written_struct_fields`:
+    both stop scanning fields the moment a line looks like a method
+    definition (`def name(...):`/`fn name(...):`), walk back to that
+    line's own start (a modifier keyword or the field type itself could
+    still be mid-line at `bs.pos`), and return everything from there to
+    the end of `body` as the method text to splice/discover separately.
+    `None` when `bs.pos` isn't at such a line at all -- the two callers
+    keep scanning fields in that case."""
+    if not (
+        (bs.starts_with("def") and not is_ident_char(bs.peek_at(3)))
+        or (bs.starts_with("fn") and not is_ident_char(bs.peek_at(2)))
+    ):
+        return None
+    var line_start = bs.pos
+    var body_bytes = body.as_bytes()
+    while line_start > 0 and body_bytes[line_start - 1] != UInt8(ord("\n")):
+        line_start -= 1
+    method_body_start_offset = body_start + line_start
+    return String(body[byte = line_start : body.byte_length()])
+
+
+def _check_container_marking(
+    name: String, name_is_marked: Bool, type_str: String, full_source: String, body_start: Int, bs_pos: Int
+) raises:
+    """Shared by `parse_struct_body`/`parse_hand_written_struct_fields`:
+    the marking-symmetry rule for a field's own name against its type.
+    A container of a relation (`List[@@Employee]`) is always bare now --
+    the type itself already says it's a relation, so the field's own
+    name no longer needs to repeat that -- unlike a *single* (non-
+    container) relation field (`@@dept: @@Department`), which has no
+    container wrapper of its own for the type alone to carry that
+    signal, and so is still required to match exactly."""
+    var type_is_relation = is_directly_entity_reachable(type_str)
+    var type_is_container = parse_type_expr(type_str).is_parameterized()
+    if type_is_relation and type_is_container:
+        if name_is_marked:
+            raise _body_err(full_source, body_start, bs_pos,
+                "InvalidSquirrelSyntax: '@@" + name + "' -- '@@'"
+                " marking on a container field's own name is no"
+                " longer used or needed (the type itself, '"
+                + type_str + "', already says so); write it bare: '"
+                + name + ": " + type_str + "'"
+            )
+    elif name_is_marked != type_is_relation:
+        raise _body_err(full_source, body_start, bs_pos,
+            "InvalidSquirrelSyntax: @@ marking must match between field"
+            " name and type"
+        )
+
+
 def parse_struct_body(
     body: String,
     full_source: String,
     body_start: Int,
     mut fields: List[Field],
     mut method_body_start_offset: Int,
+    mut key_groups: List[List[String]],
 ) raises -> String:
     """Splits an `@@struct` body into `name: Type` fields, up to whatever
     point a line looks like a method definition (`def name(...):`/`fn
@@ -39,6 +93,20 @@ def parse_struct_body(
     Adapted from rw_squirrel_2: the modifier-keyword set is `unique`/
     `indexed`/`multi`/`ordered` (was `unique`/`forwardonly`/`multi`/
     `ordered`) -- see `FieldModifier`'s own doc comment for why.
+
+    A `key(field1, field2, ...)` line is recognized separately, *before*
+    the modifier-keyword loop below -- it isn't a field declaration at all
+    (no name/type/modifier of its own), just a list of *other* fields'
+    names, so it can't fall through into the same name/`:`/type grammar
+    every field line uses. Each one appends a fresh `List[String]` to
+    `key_groups` (the out-param, accumulated across every `key(...)` line
+    in this body -- a struct with several gets one independent entry per
+    line, in declaration order) and `continue`s straight back to the top
+    of the outer loop. Field-name validation against `fields` (do these
+    names actually exist, no duplicates within one group, no two groups
+    with an identical field set) is deferred to `Scanner.parse_struct`,
+    once every field has actually been parsed -- a `key(...)` line may
+    itself appear before the fields it names.
 
     `full_source`/`body_start` are for error-location reporting only
     (`_body_err`, above) -- `bs` itself still scans the isolated `body`
@@ -65,15 +133,66 @@ def parse_struct_body(
         if bs.at_end():
             return String()
 
-        if (bs.starts_with("def") and not is_ident_char(bs.peek_at(3))) or (
-            bs.starts_with("fn") and not is_ident_char(bs.peek_at(2))
-        ):
-            var line_start = bs.pos
-            var body_bytes = body.as_bytes()
-            while line_start > 0 and body_bytes[line_start - 1] != UInt8(ord("\n")):
-                line_start -= 1
-            method_body_start_offset = body_start + line_start
-            return String(body[byte = line_start : body.byte_length()])
+        var method_suffix = _capture_method_body_suffix(bs, body, body_start, method_body_start_offset)
+        if method_suffix:
+            return method_suffix.value()
+
+        if bs.starts_with("pass") and not is_ident_char(bs.peek_at(4)):
+            # A bare `pass` -- the real Mojo/Python convention for "this
+            # block is intentionally empty." A genuinely empty body (zero
+            # lines at all) already parses fine with no error at all (the
+            # `bs.at_end()` check above returns first) -- `pass` support
+            # exists purely for the common instinct of writing it
+            # explicitly, most useful on a struct-inheritance target
+            # (`@@struct @@Name < @@Other: pass`) that adds nothing of its
+            # own beyond the inherited fields. Only legal as the *entire*
+            # body -- anything else following it (another field, another
+            # `pass`) is rejected rather than silently ignored.
+            bs.pos += 4
+            bs.skip_trivia()
+            if not bs.at_end():
+                raise _body_err(full_source, body_start, bs.pos,
+                    "InvalidSquirrelSyntax: 'pass' must be the only content"
+                    " in a struct body -- found more after it"
+                )
+            return String()
+
+        if bs.starts_with("key") and not is_ident_char(bs.peek_at(3)):
+            bs.pos += 3
+            bs.skip_trivia()
+            if not bs.try_consume("("):
+                raise _body_err(full_source, body_start, bs.pos,
+                    "InvalidSquirrelSyntax: expected '(' after 'key'"
+                )
+            var group = List[String]()
+            bs.skip_trivia()
+            if not bs.try_consume(")"):
+                while True:
+                    bs.skip_trivia()
+                    var field_name = bs.scan_ident()
+                    if field_name.byte_length() == 0:
+                        raise _body_err(full_source, body_start, bs.pos,
+                            "InvalidSquirrelSyntax: expected a field name in"
+                            " 'key(...)'"
+                        )
+                    group.append(field_name)
+                    bs.skip_trivia()
+                    if bs.try_consume(","):
+                        continue
+                    if bs.try_consume(")"):
+                        break
+                    raise _body_err(full_source, body_start, bs.pos,
+                        "InvalidSquirrelSyntax: expected ',' or ')' in"
+                        " 'key(...)'"
+                    )
+            if len(group) == 0:
+                raise _body_err(full_source, body_start, bs.pos,
+                    "InvalidSquirrelSyntax: 'key()' needs at least one field"
+                    " name"
+                )
+            key_groups.append(group^)
+            _ = bs.try_consume(",")
+            continue
 
         var modifier = FieldModifier.NONE
         var modifier_keyword = String()
@@ -132,29 +251,7 @@ def parse_struct_body(
         if type_str.byte_length() == 0:
             raise _body_err(full_source, body_start, bs.pos,"InvalidSquirrelSyntax: empty field type")
 
-        var type_is_relation = is_directly_entity_reachable(type_str)
-        var type_is_container = parse_type_expr(type_str).is_parameterized()
-        if type_is_relation and type_is_container:
-            # Mandatory marking dropped for a container-of-entity field
-            # (Part 2): the type itself (`List[@@Employee]`) already says
-            # this field is a relation, so the field's own name no longer
-            # needs `@@` too -- unlike a *single* relation field
-            # (`@@dept: @@Department`, unaffected, still required below),
-            # which has no container wrapper of its own for the type
-            # alone to carry that signal.
-            if name_is_marked:
-                raise _body_err(full_source, body_start, bs.pos,
-                    "InvalidSquirrelSyntax: '@@" + name + "' -- '@@'"
-                    " marking on a container field's own name is no"
-                    " longer used or needed (the type itself, '"
-                    + type_str + "', already says so); write it bare: '"
-                    + name + ": " + type_str + "'"
-                )
-        elif name_is_marked != type_is_relation:
-            raise _body_err(full_source, body_start, bs.pos,
-                "InvalidSquirrelSyntax: @@ marking must match between field"
-                " name and type"
-            )
+        _check_container_marking(name, name_is_marked, type_str, full_source, body_start, bs.pos)
         fields.append(
             Field(
                 name=name,
@@ -167,7 +264,7 @@ def parse_struct_body(
 
 
 def parse_hand_written_struct_fields(
-    body: String, full_source: String, body_start: Int, mut fields: List[Field]
+    body: String, full_source: String, body_start: Int, mut fields: List[Field], mut method_body_start_offset: Int
 ) raises -> String:
     """Extracts a hand-written (plain-structs milestone) struct's own `var
     name: Type`/`var @@name: @@Type` field declarations from `body`
@@ -201,20 +298,21 @@ def parse_hand_written_struct_fields(
 
     `full_source`/`body_start`: same as `parse_struct_body`'s own --
     error-location reporting only (`_body_err`), scanning itself still
-    bounded to `body`."""
+    bounded to `body`. `method_body_start_offset` is likewise set (same
+    as `parse_struct_body`'s own) but never consulted by this function's
+    own caller today -- a hand-written plain struct's methods are never
+    re-scanned by `rewrite_method_body` the way an `@@struct`'s own are
+    (they're real, hand-written Mojo, left in place) -- kept as a real
+    out-param anyway so both functions share `_capture_method_body_
+    suffix` instead of duplicating it."""
     var bs = Scanner(body)
     while True:
         bs.skip_trivia()
         if bs.at_end():
             return String()
-        if (bs.starts_with("def") and not is_ident_char(bs.peek_at(3))) or (
-            bs.starts_with("fn") and not is_ident_char(bs.peek_at(2))
-        ):
-            var line_start = bs.pos
-            var body_bytes = body.as_bytes()
-            while line_start > 0 and body_bytes[line_start - 1] != UInt8(ord("\n")):
-                line_start -= 1
-            return String(body[byte = line_start : body.byte_length()])
+        var method_suffix = _capture_method_body_suffix(bs, body, body_start, method_body_start_offset)
+        if method_suffix:
+            return method_suffix.value()
         if not (bs.starts_with("var") and not is_ident_char(bs.peek_at(3))):
             raise _body_err(full_source, body_start, bs.pos,
                 "InvalidSquirrelSyntax: expected a 'var name: Type' field"
@@ -238,22 +336,5 @@ def parse_hand_written_struct_fields(
             raise _body_err(full_source, body_start, bs.pos,"InvalidSquirrelSyntax: empty field type")
         if type_str.startswith("Self."):
             type_str = String(type_str[byte=5 : type_str.byte_length()])
-        var type_is_relation = is_directly_entity_reachable(type_str)
-        var type_is_container = parse_type_expr(type_str).is_parameterized()
-        if type_is_relation and type_is_container:
-            # Same relaxation as `parse_struct_body`'s own -- see its
-            # comment for the full "why."
-            if name_is_marked:
-                raise _body_err(full_source, body_start, bs.pos,
-                    "InvalidSquirrelSyntax: '@@" + name + "' -- '@@'"
-                    " marking on a container field's own name is no"
-                    " longer used or needed (the type itself, '"
-                    + type_str + "', already says so); write it bare: '"
-                    + name + ": " + type_str + "'"
-                )
-        elif name_is_marked != type_is_relation:
-            raise _body_err(full_source, body_start, bs.pos,
-                "InvalidSquirrelSyntax: @@ marking must match between field"
-                " name and type"
-            )
+        _check_container_marking(name, name_is_marked, type_str, full_source, body_start, bs.pos)
         fields.append(Field(name=name, type_str=type_str, modifier=FieldModifier.NONE, is_stats=False))

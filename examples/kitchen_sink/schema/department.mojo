@@ -22,57 +22,9 @@ struct sqrrl__DepartmentInner(Movable, ImplicitlyDeletable):
     def __del__(deinit self):
         self._table[].indexes.projects.remove_many(self._id, self._sqrrl__projects)
         self._table[].indexes.skills.remove_many(self._id, self._skills)
+        self._table[].indexes._sqrrl__value_key.remove(self._id, sqrrl__DepartmentValueKey(name=self._name, tags=self._tags.copy(), sqrrl__projects=self._sqrrl__projects.copy(), sqrrl__vendors=self._sqrrl__vendors.copy(), skills=self._skills.copy()))
         self._table[].free_id(self._id)
         self._table[].clear_weak_ref(self._id)
-
-    def set_name(mut self, v: String):
-        self._name = v
-
-    def set_tags(mut self, var v: List[String]):
-        self._tags = v^
-
-    def set_sqrrl__projects(mut self, var v: Set[sqrrl__Project]):
-        self._table[].indexes.projects.remove_many(self._id, self._sqrrl__projects)
-        self._sqrrl__projects = v^
-        self._table[].indexes.projects.add_many(self._id, self._sqrrl__projects)
-
-    def add_to_sqrrl__projects(mut self, value: sqrrl__Project) -> Bool:
-        if value in self._sqrrl__projects:
-            return False
-        self._sqrrl__projects.add(value)
-        self._table[].indexes.projects.add(self._id, value)
-        return True
-
-    def remove_from_sqrrl__projects(mut self, value: sqrrl__Project) -> Bool:
-        try:
-            self._sqrrl__projects.remove(value)
-        except:
-            return False
-        self._table[].indexes.projects.remove(self._id, value)
-        return True
-
-    def set_sqrrl__vendors(mut self, var v: Set[sqrrl__Vendor]):
-        self._sqrrl__vendors = v^
-
-    def set_skills(mut self, var v: Set[String]):
-        self._table[].indexes.skills.remove_many(self._id, self._skills)
-        self._skills = v^
-        self._table[].indexes.skills.add_many(self._id, self._skills)
-
-    def add_to_skills(mut self, value: String) -> Bool:
-        if value in self._skills:
-            return False
-        self._skills.add(value)
-        self._table[].indexes.skills.add(self._id, value)
-        return True
-
-    def remove_from_skills(mut self, value: String) -> Bool:
-        try:
-            self._skills.remove(value)
-        except:
-            return False
-        self._table[].indexes.skills.remove(self._id, value)
-        return True
 
     @always_inline
     def get_name(self) -> ref [self._name] String:
@@ -111,18 +63,13 @@ struct sqrrl__Department(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDele
         return Int(self._inner.count())
 
     def __hash__[H: Hasher](self, mut hasher: H):
-        hasher.update(self.id())
+        hasher.update(self._inner[].get_name())
+        hasher.update(self._inner[].get_tags())
+        hasher.update(self._inner[].get_sqrrl__projects())
+        hasher.update(self._inner[].get_sqrrl__vendors())
+        hasher.update(self._inner[].get_skills())
 
     def __eq__(self, other: Self) -> Bool:
-        return self.id() == other.id()
-
-    def __ne__(self, other: Self) -> Bool:
-        return self.id() != other.id()
-
-    def sqrrl__to_json(self) -> String:
-        return String(self.id())
-
-    def value_eq(self, other: Self) -> Bool:
         if self._inner[].get_name() != other._inner[].get_name():
             return False
         if self._inner[].get_tags() != other._inner[].get_tags():
@@ -135,14 +82,54 @@ struct sqrrl__Department(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDele
             return False
         return True
 
+    def __ne__(self, other: Self) -> Bool:
+        return not (self == other)
+
+    def sqrrl__to_json(self) -> String:
+        return String(self.id())
+
+
+@fieldwise_init
+struct sqrrl__DepartmentValueKey(Copyable, Movable, Hashable, Equatable):
+    var name: String
+    var tags: List[String]
+    var sqrrl__projects: Set[sqrrl__Project]
+    var sqrrl__vendors: Set[sqrrl__Vendor]
+    var skills: Set[String]
+
+    def __eq__(self, other: Self) -> Bool:
+        if self.name != other.name:
+            return False
+        if self.tags != other.tags:
+            return False
+        if self.sqrrl__projects != other.sqrrl__projects:
+            return False
+        if self.sqrrl__vendors != other.sqrrl__vendors:
+            return False
+        if self.skills != other.skills:
+            return False
+        return True
+
+    def __ne__(self, other: Self) -> Bool:
+        return not (self == other)
+
+    def __hash__[H: Hasher](self, mut hasher: H):
+        hasher.update(self.name)
+        hasher.update(self.tags)
+        hasher.update(self.sqrrl__projects)
+        hasher.update(self.sqrrl__vendors)
+        hasher.update(self.skills)
+
 
 struct sqrrl__DepartmentIndexes(Movable, ImplicitlyDeletable):
     var projects: MultiIndex[sqrrl__Project]
     var skills: MultiIndex[String]
+    var _sqrrl__value_key: UniqueIndex[sqrrl__DepartmentValueKey]
 
     def __init__(out self):
         self.projects = MultiIndex[sqrrl__Project]()
         self.skills = MultiIndex[String]()
+        self._sqrrl__value_key = UniqueIndex[sqrrl__DepartmentValueKey]()
 
 
 struct sqrrl__DepartmentTable(Movable):
@@ -152,9 +139,14 @@ struct sqrrl__DepartmentTable(Movable):
         self.storage = ArcPointer(EntityStorage[sqrrl__DepartmentIndexes, sqrrl__DepartmentInner](sqrrl__DepartmentIndexes()))
 
     def create(mut self, *, name: String, var tags: List[String], var sqrrl__projects: Set[sqrrl__Project] = Set[sqrrl__Project](), var sqrrl__vendors: Set[sqrrl__Vendor], var skills: Set[String] = Set[String]()) -> sqrrl__Department:
+        var sqrrl___value_key = sqrrl__DepartmentValueKey(name=name, tags=tags.copy(), sqrrl__projects=sqrrl__projects.copy(), sqrrl__vendors=sqrrl__vendors.copy(), skills=skills.copy())
+        var sqrrl___existing_id = self.storage[].indexes._sqrrl__value_key.get_bwd_or_none(sqrrl___value_key)
+        if sqrrl___existing_id:
+            return sqrrl__Department(self.storage[].handle_for(sqrrl___existing_id.value()))
         var id = self.storage[].alloc_id()
         var inner = ArcPointer(sqrrl__DepartmentInner(_id=id, _table=self.storage, _name=name, _tags=tags^, _sqrrl__projects=sqrrl__projects^, _sqrrl__vendors=sqrrl__vendors^, _skills=skills^))
         self.storage[].register_weak(id, inner)
+        self.storage[].indexes._sqrrl__value_key.add(id, sqrrl___value_key)
         self.storage[].indexes.projects.add_many(id, inner[]._sqrrl__projects)
         self.storage[].indexes.skills.add_many(id, inner[]._skills)
         return sqrrl__Department(inner^)
@@ -180,7 +172,7 @@ struct sqrrl__DepartmentTable(Movable):
             out.add(sqrrl__Department(self.storage[].handle_for(id)))
         return out^
 
-    def count_sqrrl__projects(self, value: sqrrl__Project) -> Int:
+    def count_for_sqrrl__projects(self, value: sqrrl__Project) -> Int:
         return len(self.storage[].indexes.projects.get_bwd(value))
 
     def group_by_sqrrl__projects(self) -> Dict[sqrrl__Project, Set[sqrrl__Department]]:
@@ -207,7 +199,7 @@ struct sqrrl__DepartmentTable(Movable):
             out.add(key.copy())
         return out^
 
-    def count_skills(self, value: String) -> Int:
+    def count_for_skills(self, value: String) -> Int:
         return len(self.storage[].indexes.skills.get_bwd(value))
 
     def group_by_skills(self) -> Dict[String, Set[sqrrl__Department]]:

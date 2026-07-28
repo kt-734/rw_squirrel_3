@@ -39,8 +39,11 @@ def sqrrl__make_project(mut sqrrl___world: sqrrl___World, name: String, priority
     var sqrrl__p = sqrrl___world.Project.create(name = name, priority = priority, sqrrl__vendor = sqrrl__vendor, budget = Money(budget_cents))
     return sqrrl__p
 
-def sqrrl__make_department(mut sqrrl___world: sqrrl___World, name: String) -> sqrrl__Department:
-    var sqrrl__d = sqrrl___world.Department.create(name = name, tags = List[String](), sqrrl__projects = Set[sqrrl__Project](), sqrrl__vendors = Set[sqrrl__Vendor](), skills = Set[String]())
+def sqrrl__make_department(mut sqrrl___world: sqrrl___World, name: String, var tags: List[String], var projects: Set[sqrrl__Project], var vendors: Set[sqrrl__Vendor], var skills: Set[String]) -> sqrrl__Department:
+    # `@@Department` is flagged `value` (field-immutable) -- every field,
+    # including its `multi` ones, has to be supplied here, up front; there
+    # is no `set_<field>`/`add_to_<field>` to call afterward.
+    var sqrrl__d = sqrrl___world.Department.create(name = name, tags = tags^, sqrrl__projects = projects^, sqrrl__vendors = vendors^, skills = skills^)
     return sqrrl__d
 
 def sqrrl__hire(mut sqrrl___world: sqrrl___World, name: String, email: String, title: String, years_employed: UInt32, salary: Float64, sqrrl__dept: sqrrl__Department) raises -> sqrrl__Employee:

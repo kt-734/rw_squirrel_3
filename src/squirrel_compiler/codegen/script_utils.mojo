@@ -153,12 +153,15 @@ def _is_bare_identifier(s: String) -> Bool:
     `^` on one isn't the harmless no-op an earlier version of this
     function's own comment assumed; confirmed via a real compile, Mojo
     rejects it outright ("expression does not live in a memory location,
-    so it need not be transferred"). Every existing example's own usage
+    so it need not be transferred"). Early on, every example's own usage
     happened to only ever exercise the named-variable case for a plain-
     struct field (`var addr = Address(...); .home = addr`) and the fresh-
-    literal case for a relation/multi field (`.@@members = [@@a, @@b]`),
-    which is exactly why this distinction was never forced into the open
-    before now."""
+    literal case for a relation/multi field (`.@@members = [@@a, @@b]`) --
+    which is exactly why `build_create_call`'s own multi-field move
+    handling (see `is_multi_field` there) went unexercised, and therefore
+    unnoticed, until an `Equatable` (field-immutable) struct's `multi`
+    field needed to be supplied as a whole, already-built, named `Set`
+    at `create()` time instead."""
     if s.byte_length() == 0:
         return False
     # `None`/`True`/`False` are identifier-shaped text but Mojo literals,
@@ -255,10 +258,23 @@ def build_create_call(
                 + "' here too"
             )
         var value = rewrite_markers(f.value, ctx)
+        # A `multi` field's own `relation_schema`/`plain_value_fields` entry
+        # is deliberately the bare *element* type, never `Set[...]`-wrapped
+        # (see `rewrite_field_access.mojo`'s own comment on this) -- but its
+        # real storage type at `create()` is always `Set[ElementType]`,
+        # which is just as much a container as any other, so it needs the
+        # same move treatment. Previously unreachable: every existing
+        # example only ever supplied a multi field as a fresh empty `Set`
+        # literal at `create()` time, populating it afterward via
+        # `add_to_<field>` -- never a *named* `Set` variable here. An
+        # `Equatable` struct (field-immutable, no `add_to_<field>` at all)
+        # has to supply a whole, already-built `Set` at `create()` instead,
+        # which is what actually exercised this gap for the first time.
+        var is_multi_field = type_name in ctx.multi_fields and f.name in ctx.multi_fields[type_name]
         var needs_move = False
         if f.name in type_plain_values:
             var pt = type_plain_values[f.name]
-            needs_move = is_container_type(pt) or parse_type_expr(pt).name in ctx.plain_struct_names
+            needs_move = is_container_type(pt) or parse_type_expr(pt).name in ctx.plain_struct_names or is_multi_field
         elif f.name in type_relations:
             # A wrapped relation (`@@members: List[@@Employee]`/`Dict[
             # @@Employee, String]`) is stored `@@`-stripped but still
@@ -267,7 +283,7 @@ def build_create_call(
             # as the plain-value case below applies here too. A *bare*
             # relation (`Employee`, no brackets) never matches, correctly
             # -- `sqrrl__Employee` is always `ImplicitlyCopyable`.
-            needs_move = is_container_type(type_relations[f.name])
+            needs_move = is_container_type(type_relations[f.name]) or is_multi_field
         if needs_move and _is_bare_identifier(value):
             # Neither a hand-written plain struct nor any container type
             # (`List`/`Set`/`Optional`/`Dict`/a custom wrapper) is

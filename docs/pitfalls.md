@@ -118,10 +118,10 @@ it's simply the wrong protocol for the current Mojo version. See
 `examples/container_fields/grid_module.mojo`'s own doc comment for the
 exact, working shape to copy.
 
-## `sqrrl__json.mojo:N: error: module '<X>' does not contain 'sqrrl__<Wrapper>_json_to_pairs'`
+## `sqrrl__json.mojo:N: error: module '<X>' does not contain 'sqrrl__<Wrapper>_to_json'`
 
-A custom container's JSON escape-hatch companions aren't where squirrelc
-assumed they'd be (alongside the wrapper type's own import). See
+A custom container's `_to_json`/`_from_json` companions aren't where
+squirrelc assumed they'd be (alongside the wrapper type's own import). See
 [json-and-custom-containers.md](json-and-custom-containers.md#where-the-import-comes-from)
 for the resolution order and the fix (an explicit import of the companion
 function itself, anywhere in the project).

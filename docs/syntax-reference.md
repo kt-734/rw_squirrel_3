@@ -24,15 +24,49 @@ be directly readable/chainable off an entity handle — see
 ### Struct-level flags
 
 ```
-@@struct equatable @@Department: ...
+@@struct value @@Department: ...
 @@struct keepalive @@Group: ...
 ```
 
-- `equatable` — adds `value_eq(other)`, a field-by-field comparison,
-  distinct from the handle's own `==` (id-based identity — the same row is
-  `==` with itself, never with a different row, however similar its
-  fields). Every field's type needs `!=` support for this to compile;
-  Mojo's own compiler is the one that checks that, not squirrelc.
+- `value` — this type's *whole* notion of equality becomes value-based:
+  the handle's own `==`/`!=`/`Hashable` compare/hash every field, not the
+  entity's id — and since every `Set`/`Dict`/`multi`-relation elsewhere
+  that stores this type as a member/key consumes that exact same
+  conformance, membership involving this type becomes value-based
+  everywhere too, not just at the handle's own `==`. (An earlier design
+  used real Mojo's `Equatable` trait, written into the struct's own trait
+  list, as this signal instead of a dedicated keyword — reverted once it
+  became clear the actual contract, below, promises much more than a real
+  `Equatable` conformance ever would, so borrowing that name oversold what
+  declaring it actually opts into. `(Equatable)` in a struct's own trait
+  list is now a compile error pointing at `value` instead.)
+
+  This comes with a real constraint, not just a comparison change: **no
+  `set_<field>`/`add_to_<field>`/`remove_from_<field>` is generated at
+  all**, for any field regardless of modifier — the struct is
+  field-immutable once `create()`d. The reason is concrete, not
+  precautionary: if an instance of this type is ever stored as a key
+  elsewhere (e.g. a *different* struct's own `indexed @@dept:
+  @@Department` backward index), mutating any field afterward changes
+  its hash out from under that index, silently corrupting it — a real
+  failure mode this project hit and fixed by removing the mutation path
+  entirely, not by trying to detect or repair it after the fact. A value
+  that can never change after construction is always safe to use as a
+  key anywhere.
+
+  `create()` correspondingly gets **get-or-create** semantics: calling it
+  with field values that exactly match an existing live row returns that
+  row's own handle (same `id()`) instead of inserting a duplicate — safe
+  since every field already matches. A `unique`-tagged field on the same
+  struct still raises `UniqueConstraintViolation` for a genuine conflict
+  (same field, different overall values); the whole-value match is
+  checked first, so a true duplicate never spuriously trips it. See
+  `examples/keepalive_and_value/` and `examples/kitchen_sink/` for
+  both `create()` shapes in action.
+
+  Every field's type needs `!=`/`Hashable`/`Copyable` support for this to
+  compile; Mojo's own compiler is the one that checks that, not
+  squirrelc.
 - `keepalive` — the table itself holds a genuine strong reference to every
   row it creates, so an entity can live with no other handle anywhere
   pointing at it. This hold propagates *forward* along that entity's own
@@ -42,6 +76,117 @@ be directly readable/chainable off an entity handle — see
   `Person` itself changes just because something else's `keepalive` field
   happens to point at it. See
   [World scope and keepalive](#world-scope-and-keepalive).
+
+### Composite keys (`key(...)`)
+
+```
+@@struct @@Series:
+    key(name, start_year)
+    name: String
+    start_year: UInt32
+    @@publisher: @@Publisher
+```
+
+A `key(field1, field2, ...)` line, written inside the struct body (anywhere relative to
+the fields it names — validated once the whole body has been parsed), declares that no
+two live rows may share the same combination of values across exactly those fields.
+Unlike a single-field `unique` modifier, this spans multiple fields at once without
+needing to factor them out into a separate helper struct.
+
+A struct may write `key(...)` more than once — each line is its own fully independent
+constraint, checked separately, with its own backing index:
+
+```
+@@struct @@Booking:
+    key(room, date)
+    key(guest, date)
+    room: String
+    date: String
+    guest: String
+```
+
+No two `Booking` rows may share the same `room`+`date`, *and* no two may share the same
+`guest`+`date` — a field (`date`, here) may appear in more than one group; each group is
+still checked and maintained on its own.
+
+**Every field that appears in *any* `key(...)` group becomes field-immutable** — no
+`set_<field>`/`add_to_<field>`/`remove_from_<field>` is generated for it, regardless of
+its own modifier — for the identical reason a `value`-flagged struct's fields are
+immutable (above): mutating a field that's part of a live composite key would corrupt
+that key's own backing index the same way. Fields *not* named in any `key(...)` group on
+the same struct are unaffected and keep their ordinary setters.
+
+`create()` raises `UniqueConstraintViolation: key(field1, field2, ...) already in use by
+another entity` for a genuine collision on any one group — never get-or-create (a
+*subset* match doesn't make the rest of the incoming row's data safely discardable the
+way a whole-entity `value` match does).
+
+Each `key(...)` line also earns a lookup method mirroring a single `unique` field's own
+`for_<field>`: `for_<f1>_<f2>_...(v1, v2, ...) raises -> Entity`. `Booking` above gets
+`for_room_date(room, date)` and `for_guest_date(guest, date)`, independently. Not (yet)
+generated for a composite key: `count_for_<...>`/`group_by_<...>`/`distinct_<...>` — lower
+value for a multi-field tuple than the lookup itself; a deliberate scope boundary, not an
+oversight.
+
+No modifier restriction on which fields may join a `key(...)` group — a relation field, a
+`multi` field, or a field that's *also* individually `unique`/`indexed`/`ordered` can all
+participate; every field's own type still needs `!=`/`Hashable`/`Copyable` support to
+compile. See `examples/composite_keys/` for both shapes above running end-to-end,
+including alongside the older "factor the composite key out into its own `value`-flagged
+struct, then `unique @@key: @@ThatStruct`" approach this feature exists to avoid the
+ceremony of.
+
+### Struct inheritance (`<`)
+
+```
+@@struct @@Series:
+    key(title, start_year)
+    title: String
+    start_year: Int
+    @@publisher: @@Publisher
+
+    def @@@describe(self) -> String:
+        return self.title
+
+@@struct @@VolumeSeries < @@Series:
+    volume_number: Int
+```
+
+`@@struct @@Name < @@Other:` copies `Other`'s entire field list — every field, every
+modifier, every `key(...)` group, and every spliced method — into `Name`, which still
+gets its own completely independent generated type, table, storage, id space, and
+indexes. `VolumeSeries` above ends up with `title`/`start_year`/`@@publisher`/
+`key(title, start_year)`/`describe()` *and* its own `volume_number: Int` — a real field
+`Series` doesn't have. **Purely structural, not virtual/polymorphic** — no shared table,
+no runtime dispatch, no way to hold "a Series-or-VolumeSeries" through one handle type;
+`Series.count()` and `VolumeSeries.count()` track completely independently, and a
+`Series` row and a `VolumeSeries` row with identical `title`/`start_year` don't collide
+with each other's own `key(...)` constraint (separate `UniqueIndex`es).
+
+The inheriting struct may add its own fields/`key(...)` groups beyond the copied set (as
+`VolumeSeries` does above), but may not redeclare one of the target's own field names —
+inheritance only ever adds, never overrides. `keepalive`/`value`/the target's own trait
+list are **not** inherited — those are per-table identity/behavior flags, not shape, and
+stay independently declared on each struct.
+
+A body that adds nothing of its own beyond the inherited fields may be written as a bare
+`pass` (or left genuinely empty — both are equivalent):
+
+```
+@@struct @@VolumeSeries < @@Series:
+    pass
+```
+
+No chaining: a struct named after `<` may not itself use `<` — `@@struct @@C < @@B:`
+is rejected if `B` is itself declared `@@struct @@B < @@A:`. Self-inheritance
+(`@@struct @@Name < @@Name:`) is rejected too.
+
+One accepted imprecision: an error genuinely originating *inside* an inherited method's
+body reports an approximate position (somewhere in the inheriting struct's own file, not
+the method's true original declaration) rather than the exact real location — the same
+class of trade-off this project already accepts for every other discovery-level check's
+coarser (struct-name-only, no line:col) error reporting. See `examples/absolute_db/` for
+this running end-to-end.
 
 ### Field modifiers
 
@@ -431,10 +576,13 @@ keeping every reloaded entity alive; `@@@end_init_from_json` drops that
 temporary hold, so anything not independently referenced by then is
 released, same as it would be for freshly-constructed entities.
 
-A custom container needs two hand-written escape-hatch companions to
-participate in JSON — `sqrrl__<Wrapper>_json_to_pairs`/`_from_pairs` for a
-two-argument wrapper, `_to_list`/`_from_list` for a one-argument one (see
+A custom container needs two hand-written companions to participate in
+JSON — `sqrrl__<Wrapper>_to_json(value, world) -> String` / `sqrrl__
+<Wrapper>_from_json[...](mut sc, world) raises -> Wrapper[...]`, the exact
+same contract every wrapper (built-in or custom, any arity) implements (see
 `grid_module.mojo`/`ring_module.mojo` for working examples). These are
 resolved automatically wherever the wrapper type itself is imported from; if
-they genuinely live somewhere else, an explicit import of the escape-hatch
-function itself, anywhere in the project, overrides that.
+they genuinely live somewhere else, an explicit import of the companion
+function itself, anywhere in the project, overrides that. See
+[json-and-custom-containers.md](json-and-custom-containers.md) for the full
+contract.

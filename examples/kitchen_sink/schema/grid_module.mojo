@@ -1,3 +1,8 @@
+from sqrrl__world import sqrrl___World
+from squirrel_runtime.json import sqrrl___JsonScanner
+from sqrrl__json import sqrrl__to_json, sqrrl__from_json
+
+
 @fieldwise_init
 struct _GridKeyIter[K: Copyable & ImplicitlyDeletable](IterableOwned, Iterator, Movable):
     """Grid's own `__iter__` companion -- an *owned* iterator (consumes a
@@ -33,12 +38,12 @@ struct _GridKeyIter[K: Copyable & ImplicitlyDeletable](IterableOwned, Iterator, 
 
 @fieldwise_init
 struct Grid[K: Copyable & ImplicitlyDeletable & Hashable & Equatable, V: Copyable & ImplicitlyDeletable](Movable, ImplicitlyDeletable):
-    """A hand-written custom two-argument container -- not Dict -- used
-    to demonstrate the @@container JSON escape hatch generalized to
-    two-argument wrappers: a fresh no-arg constructor is never assumed
-    for a custom wrapper, so JSON support goes through the two
-    hand-written companions below instead, mirroring the one-argument
-    Ring[T] example exactly.
+    """A hand-written custom two-argument container -- not Dict -- used to
+    demonstrate the `_to_json`/`_from_json` contract every wrapper (built-
+    in or custom) implements, generalized to two-argument wrappers: a
+    fresh no-arg constructor is never assumed for a custom wrapper, so
+    JSON support goes through the two hand-written companions below
+    instead, mirroring the one-argument Ring[T] example exactly.
 
     `__getitem__`/`__iter__` (key-yielding, matching real `Dict`
     iteration) make Grid a fully well-behaved two-argument wrapper for
@@ -71,13 +76,40 @@ struct Grid[K: Copyable & ImplicitlyDeletable & Hashable & Equatable, V: Copyabl
         return _GridKeyIter[Self.K](items=self.keys(), idx=0)
 
 
-def sqrrl__Grid_json_to_pairs[
+def sqrrl__Grid_to_json[
     K: Copyable & ImplicitlyDeletable & Hashable & Equatable, V: Copyable & ImplicitlyDeletable
-](container: Grid[K, V]) -> List[Tuple[K, V]]:
-    return container.pairs.copy()
+](value: Grid[K, V], world: sqrrl___World) -> String:
+    """The complete JSON text for `value` directly -- `[[k,v],...]`, same
+    shape `Dict` itself uses -- recursing through `sqrrl__to_json` (not a
+    bare `.copy()`+external renderer any more) so a relation in `K`/`V`
+    dumps correctly too."""
+    var out = String("[")
+    for i in range(len(value.pairs)):
+        if i > 0:
+            out += ","
+        out += "[" + sqrrl__to_json(value.pairs[i][0], world) + "," + sqrrl__to_json(value.pairs[i][1], world) + "]"
+    out += "]"
+    return out^
 
 
-def sqrrl__Grid_json_from_pairs[
+def sqrrl__Grid_from_json[
     K: Copyable & ImplicitlyDeletable & Hashable & Equatable, V: Copyable & ImplicitlyDeletable
-](var pairs: List[Tuple[K, V]]) -> Grid[K, V]:
+](mut sc: sqrrl___JsonScanner, world: sqrrl___World) raises -> Grid[K, V]:
+    """Parses `sqrrl__Grid_to_json`'s own `[[k,v],...]` text directly off
+    `sc`, building the finished `Grid` in one shot -- no known no-arg
+    constructor plus per-pair append method to rely on instead."""
+    var pairs = List[Tuple[K, V]]()
+    sc.expect_byte(UInt8(ord("[")))
+    if not sc.try_consume_byte(UInt8(ord("]"))):
+        while True:
+            sc.expect_byte(UInt8(ord("[")))
+            var k = sqrrl__from_json[K](sc, world)
+            sc.expect_byte(UInt8(ord(",")))
+            var v = sqrrl__from_json[V](sc, world)
+            sc.expect_byte(UInt8(ord("]")))
+            pairs.append((k.copy(), v.copy()))
+            if sc.try_consume_byte(UInt8(ord(","))):
+                continue
+            sc.expect_byte(UInt8(ord("]")))
+            break
     return Grid[K, V](pairs=pairs^)

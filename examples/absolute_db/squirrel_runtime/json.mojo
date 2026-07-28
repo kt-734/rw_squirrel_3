@@ -19,8 +19,8 @@ def sqrrl__movable_rebind[Src: Movable & ImplicitlyDeletable, Dst: Movable & Imp
     Goes through a real, tracked move instead of a raw pointer trick:
     `List[Dst](unsafe_uninit_length=1)` reserves one *uninitialized* slot
     (Mojo's own list-growth primitive, not a hand-rolled allocation),
-    `init_pointee_move` placement-constructs `src` into it bitcast as
-    `Src` (same underlying representation as `Dst` -- guaranteed by the
+    `unsafe_write` placement-constructs `src` into it bitcast as `Src`
+    (same underlying representation as `Dst` -- guaranteed by the
     caller's own `T == ConcreteType` check, never asserted here), and
     `.pop()` moves the now-valid `Dst` back out, decrementing the list's
     own tracked length to zero so nothing double-destroys it. Confirmed
@@ -33,10 +33,13 @@ def sqrrl__movable_rebind[Src: Movable & ImplicitlyDeletable, Dst: Movable & Imp
     `List`'s own tracked length instead avoids that: the list -- not a
     bare stack slot with its own independent destructor -- is what owns
     the slot's lifetime, and popping it updates that tracked length
-    directly."""
+    directly. (`unsafe_write` here, not the now-deprecated `init_pointee_
+    move` -- re-verified via a direct spike, including the heap-owning-
+    type double-free case above, that it's a safe drop-in: same placement-
+    move semantics, no warning.)"""
     var buf = List[Dst](unsafe_uninit_length=1)
     var raw = buf.unsafe_ptr().bitcast[UInt8]()
-    raw.bitcast[Src]().init_pointee_move(src^)
+    raw.bitcast[Src]().unsafe_write(src^)
     return buf.pop()
 
 
@@ -435,65 +438,16 @@ def sqrrl__from_json_default[T: Movable & ImplicitlyDeletable](mut sc: sqrrl___J
 # carry over unmodified.
 
 
-def sqrrl__List_json_to_list[T: Copyable](container: List[T]) -> List[T]:
-    """Built-in-wrapper adapter for `List` itself -- the identity, since
-    `List` already *is* the generic shape every 1-argument wrapper's own
-    JSON dump converts to first. Exists (rather than special-casing `List`
-    out of the dispatch table entirely) so `List`/`Set`/`Optional`/a custom
-    wrapper all go through the exact same generated dispatch-table shape,
-    with zero special cases for the three built-in ones -- see `driver/
-    json_module.mojo`'s own doc comment for why this matters."""
-    return container.copy()
-
-
-def sqrrl__List_json_from_list[T: Movable & ImplicitlyDeletable](var items: List[T]) -> List[T]:
-    return items^
-
-
-def sqrrl__Set_json_to_list[T: Copyable & ImplicitlyDeletable & Hashable & Equatable](container: Set[T]) -> List[T]:
-    var out = List[T]()
-    for elem in container:
-        out.append(elem.copy())
-    return out^
-
-
-def sqrrl__Set_json_from_list[
-    T: Copyable & ImplicitlyDeletable & Hashable & Equatable
-](var items: List[T]) -> Set[T]:
-    var out = Set[T]()
-    for item in items:
-        out.add(item.copy())
-    return out^
-
-
-def sqrrl__Optional_json_to_list[T: Copyable](container: Optional[T]) -> List[T]:
-    var out = List[T]()
-    if container:
-        out.append(container.value().copy())
-    return out^
-
-
-def sqrrl__Optional_json_from_list[T: Movable & ImplicitlyDeletable](var items: List[T]) raises -> Optional[T]:
-    if len(items) == 0:
-        return None
-    if len(items) > 1:
-        raise Error("InvalidJson: Optional field has more than one value")
-    return items.pop()
-
-
-def sqrrl__Dict_json_to_pairs[
-    K: Copyable & ImplicitlyDeletable & Hashable & Equatable, V: Copyable & ImplicitlyDeletable
-](container: Dict[K, V]) -> List[Tuple[K, V]]:
-    var out = List[Tuple[K, V]]()
-    for entry in container.items():
-        out.append((entry.key.copy(), entry.value.copy()))
-    return out^
-
-
-def sqrrl__Dict_json_from_pairs[
-    K: Copyable & ImplicitlyDeletable & Hashable & Equatable, V: Copyable & ImplicitlyDeletable
-](var pairs: List[Tuple[K, V]]) -> Dict[K, V]:
-    var out = Dict[K, V]()
-    for pair in pairs:
-        out[pair[0].copy()] = pair[1].copy()
-    return out^
+# `sqrrl__List/Set/Dict/Optional/Variant_to_json`/`_from_json` -- the
+# `_to_json`/`_from_json` contract every wrapper (built-in or custom, any
+# arity) implements -- used to live here as static functions (when their
+# own job was just "convert to/from a generic List[T]/List[Tuple[K,V]]
+# intermediate, let something else render the actual JSON text"). Now that
+# the contract is "return/consume the complete JSON text directly, `world:
+# sqrrl___World` threaded through for any nested relation," every one of
+# them needs to recurse into this *project's own* `sqrrl__to_json[T]`/
+# `sqrrl__from_json[T]` dispatch table, which only exists once generated --
+# so they're generated too now, directly in `driver/json_module.mojo`'s own
+# `emit_json_module` output (no intermediate `list_to_json`/`pairs_to_json`
+# layer underneath -- each wrapper renders/parses its own complete JSON
+# text itself), not static here any more.

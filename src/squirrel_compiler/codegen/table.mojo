@@ -22,6 +22,18 @@ def _table_name(struct_name: String) -> String:
     return sqrrl_prefixed(struct_name) + "Table"
 
 
+def _value_key_name(struct_name: String) -> String:
+    return sqrrl_prefixed(struct_name) + "ValueKey"
+
+
+def _key_group_name(struct_name: String, i: Int) -> String:
+    """Mirrors `entity.mojo`'s own `_key_group_name` exactly -- both files
+    duplicate the same small name-helpers rather than sharing an import,
+    matching this codebase's established convention (`_inner_name`/
+    `_indexes_name`/`_table_name` are already duplicated the same way)."""
+    return sqrrl_prefixed(struct_name) + "Key" + String(i)
+
+
 def _has_any_unique(parsed: ParsedStruct) -> Bool:
     for f in parsed.fields:
         if f.modifier == FieldModifier.UNIQUE:
@@ -29,15 +41,64 @@ def _has_any_unique(parsed: ParsedStruct) -> Bool:
     return False
 
 
+def _field_by_name(fields: List[Field], name: String) raises -> Field:
+    """Mirrors `entity.mojo`'s own `_field_by_name` -- resolves one of a
+    `key(...)` line's own field names back to its real `Field`. Raising
+    here is purely defensive (the parser already validated every name);
+    see that function's own doc comment for the full reasoning."""
+    for f in fields:
+        if f.name == name:
+            return f.copy()
+    raise Error("InternalError: key(...) referenced unknown field '" + name + "' -- parser should have already rejected this")
+
+
+def _resolve_group_fields(all_fields: List[Field], group: List[String]) raises -> List[Field]:
+    var out = List[Field]()
+    for name in group:
+        out.append(_field_by_name(all_fields, name))
+    return out^
+
+
+def _build_key_ctor_args(fields: List[Field], plain_struct_names: Dict[String, Bool]) -> String:
+    """Shared by `_build_value_key_ctor_args` (whole-entity,
+    `fields=parsed.fields`) and `create()`'s own per-key-group construction
+    (a `key(...)` line's own field subset) -- builds a key struct's own
+    constructor args from `create()`'s incoming parameters. A `.copy()`
+    for any field that `needs_move_assignment` (its parameter is
+    `var`-owned, and still needs to survive, intact, for the later move
+    into `Inner`'s own construction below); a bare read for everything
+    else (an ordinary `ImplicitlyCopyable` leaf, implicitly copied at each
+    read, `create()`'s parameter for it isn't `var` in the first place)."""
+    var out = String()
+    var first = True
+    for f in fields:
+        if not first:
+            out += ", "
+        out += param_name(f) + "="
+        if needs_move_assignment(f, plain_struct_names):
+            out += param_name(f) + ".copy()"
+        else:
+            out += param_name(f)
+        first = False
+    return out^
+
+
+def _build_value_key_ctor_args(parsed: ParsedStruct, plain_struct_names: Dict[String, Bool]) -> String:
+    return _build_key_ctor_args(parsed.fields, plain_struct_names)
+
+
 def _emit_count_field(f: Field, key_type: String) -> String:
-    """`count_<field>(value) -> Int` -- `len(for_<field>(value))` without
-    building an entity for every matching one just to throw it away right
-    after. Shared by every non-`unique` indexed-family modifier; `unique`
-    needs its own non-raising `contains`-based shape instead (`for_<field>`
-    on a `unique` field already raises when `value` is unused, so this is
-    genuinely new information there, not just a cheaper `len`)."""
+    """`count_for_<field>(value) -> Int` -- `len(for_<field>(value))`
+    without building an entity for every matching one just to throw it
+    away right after (`_for_` mirrors `for_<field>`'s own name deliberately
+    -- this is "count of what `for_<field>` would return," not an
+    unrelated name that happens to share a prefix). Shared by every
+    non-`unique` indexed-family modifier; `unique` needs its own non-
+    raising `contains`-based shape instead (`for_<field>` on a `unique`
+    field already raises when `value` is unused, so this is genuinely new
+    information there, not just a cheaper `len`)."""
     var out = String("\n")
-    out += "    def count_" + param_name(f) + "(self, value: " + key_type + ") -> Int:\n"
+    out += "    def count_for_" + param_name(f) + "(self, value: " + key_type + ") -> Int:\n"
     out += "        return len(self.storage[].indexes." + f.name + ".get_bwd(value))\n"
     return out^
 
@@ -100,6 +161,22 @@ def emit_indexes(parsed: ParsedStruct, plain_struct_names: Dict[String, Bool] = 
         if f.modifier != FieldModifier.NONE:
             out += "    var " + f.name + ": " + emit_index_type(f, plain_struct_names) + "\n"
             any_indexed = True
+    if parsed.is_value_type:
+        # Part B: backs `create()`'s get-or-create semantics -- an
+        # ordinary, non-cyclic `UniqueIndex` instantiation (see
+        # `entity.mojo`'s `emit_entity_value_key` for why `ValueKey`, not
+        # `sqrrl__<Name>` itself, is the key type here). A leading `_`
+        # (unlike every per-field entry above, which stays bare) --
+        # never collides with a real field's own name, which is never
+        # itself `_`-prefixed.
+        out += "    var _sqrrl__value_key: UniqueIndex[" + _value_key_name(parsed.name) + "]\n"
+        any_indexed = True
+    for i in range(len(parsed.key_groups)):
+        # One independent UniqueIndex per `key(...)` line -- same leading-`_`
+        # naming convention as `_sqrrl__value_key` above, never colliding
+        # with a real per-field entry.
+        out += "    var _sqrrl__key" + String(i) + ": UniqueIndex[" + _key_group_name(parsed.name, i) + "]\n"
+        any_indexed = True
     if any_indexed:
         out += "\n"
     out += "    def __init__(out self):\n"
@@ -108,12 +185,18 @@ def emit_indexes(parsed: ParsedStruct, plain_struct_names: Dict[String, Bool] = 
         if f.modifier != FieldModifier.NONE:
             out += "        self." + f.name + " = " + emit_index_type(f, plain_struct_names) + "()\n"
             any_init = True
+    if parsed.is_value_type:
+        out += "        self._sqrrl__value_key = UniqueIndex[" + _value_key_name(parsed.name) + "]()\n"
+        any_init = True
+    for i in range(len(parsed.key_groups)):
+        out += "        self._sqrrl__key" + String(i) + " = UniqueIndex[" + _key_group_name(parsed.name, i) + "]()\n"
+        any_init = True
     if not any_init:
         out += "        pass\n"
     return out^
 
 
-def emit_table(parsed: ParsedStruct, plain_struct_names: Dict[String, Bool] = Dict[String, Bool]()) -> String:
+def emit_table(parsed: ParsedStruct, plain_struct_names: Dict[String, Bool] = Dict[String, Bool]()) raises -> String:
     """Emits `sqrrl__<Name>Table` -- genuine whole-table operations only
     (point 6): `create`, `all`/`count`, and `for_<field>` for every
     indexed-family field. No `get_*`/`set_*` here at all any more --
@@ -172,11 +255,61 @@ def emit_table(parsed: ParsedStruct, plain_struct_names: Dict[String, Bool] = Di
         if f.modifier == FieldModifier.MULTI:
             params += " = " + emit_field_type(f, plain_struct_names) + "()"
         first = False
-    var has_unique = _has_any_unique(parsed)
+    var needs_raises = _has_any_unique(parsed) or len(parsed.key_groups) > 0
     out += "    def create(mut self, " + params + ")"
-    if has_unique:
+    if needs_raises:
         out += " raises"
     out += " -> " + entity_name + ":\n"
+    if parsed.is_value_type:
+        # Part B get-or-create: build the whole-entity value key *before*
+        # any individual `unique`-field check below -- a true whole-value
+        # duplicate has to short-circuit straight to "return the existing
+        # handle" without ever reaching (and spuriously tripping) a
+        # `unique`-tagged field's own availability check, since that
+        # existing row is, by construction, the *same* value in every
+        # field, including that one. Built from `.copy()`s (see
+        # `_build_value_key_ctor_args`) so every incoming parameter
+        # -- `var`-owned or not -- survives intact for the ordinary
+        # construction path below if no match is found.
+        out += (
+            "        var sqrrl___value_key = "
+            + _value_key_name(parsed.name)
+            + "("
+            + _build_value_key_ctor_args(parsed, plain_struct_names)
+            + ")\n"
+        )
+        out += "        var sqrrl___existing_id = self.storage[].indexes._sqrrl__value_key.get_bwd_or_none(sqrrl___value_key)\n"
+        out += "        if sqrrl___existing_id:\n"
+        out += "            return " + entity_name + "(self.storage[].handle_for(sqrrl___existing_id.value()))\n"
+    var key_group_fields = List[List[Field]]()
+    for i in range(len(parsed.key_groups)):
+        # Each `key(...)` line's own composite key, checked independently
+        # of every other line and of any individual `unique` field -- a
+        # collision on *this* group alone is enough to raise, regardless
+        # of whether any other group or field is also fine. Unlike the
+        # whole-entity `value` check above, a *subset* match never
+        # short-circuits to "return the existing row" -- the rest of the
+        # incoming data (fields outside this group) might genuinely
+        # differ, so silently discarding it would be wrong; raising is
+        # the only safe option, exactly like a plain `unique` field.
+        var group_fields = _resolve_group_fields(parsed.fields, parsed.key_groups[i])
+        out += (
+            "        var sqrrl___key" + String(i) + " = "
+            + _key_group_name(parsed.name, i)
+            + "(" + _build_key_ctor_args(group_fields, plain_struct_names) + ")\n"
+        )
+        out += "        if self.storage[].indexes._sqrrl__key" + String(i) + ".contains(sqrrl___key" + String(i) + "):\n"
+        var joined_names = String()
+        for j in range(len(parsed.key_groups[i])):
+            if j > 0:
+                joined_names += ", "
+            joined_names += parsed.key_groups[i][j]
+        out += (
+            '            raise Error("UniqueConstraintViolation: key('
+            + joined_names
+            + ") already in use by another entity\")\n"
+        )
+        key_group_fields.append(group_fields^)
     for f in parsed.fields:
         if f.modifier == FieldModifier.UNIQUE:
             out += (
@@ -202,6 +335,10 @@ def emit_table(parsed: ParsedStruct, plain_struct_names: Dict[String, Bool] = Di
             ctor_args += "^"
     out += "        var inner = ArcPointer(" + inner_name + "(" + ctor_args + "))\n"
     out += "        self.storage[].register_weak(id, inner)\n"
+    if parsed.is_value_type:
+        out += "        self.storage[].indexes._sqrrl__value_key.add(id, sqrrl___value_key)\n"
+    for i in range(len(parsed.key_groups)):
+        out += "        self.storage[].indexes._sqrrl__key" + String(i) + ".add(id, sqrrl___key" + String(i) + ")\n"
     for f in parsed.fields:
         if f.modifier == FieldModifier.MULTI:
             # Element-keyed index: whatever initial membership was supplied
@@ -242,6 +379,37 @@ def emit_table(parsed: ParsedStruct, plain_struct_names: Dict[String, Bool] = Di
     out += "\n"
     out += "    def count(self) -> Int:\n"
     out += "        return self.storage[].live_count()\n"
+
+    for i in range(len(key_group_fields)):
+        # One lookup per `key(...)` line, directly mirroring a plain
+        # `unique` field's own `for_<field>` (raises if not found) --
+        # this is the actual point of *using* a composite key as an
+        # index, not just an invisible write-time constraint. The
+        # method-name suffix and each parameter both use `param_name(f)`,
+        # same as every other generated identifier derived from a field's
+        # own identity (`sqrrl__` prefix iff that field is a relation) --
+        # so a group containing a relation field renders its method name
+        # and parameter with that prefix too, not the bare DSL spelling.
+        ref group_fields = key_group_fields[i]
+        var method_suffix = String()
+        var call_params = String()
+        var ctor_args = String()
+        for j in range(len(group_fields)):
+            var pname = param_name(group_fields[j])
+            if j > 0:
+                method_suffix += "_"
+                call_params += ", "
+                ctor_args += ", "
+            method_suffix += pname
+            call_params += pname + ": " + emit_field_type(group_fields[j], plain_struct_names)
+            ctor_args += pname + "=" + pname
+        out += "\n"
+        out += "    def for_" + method_suffix + "(self, " + call_params + ") raises -> " + entity_name + ":\n"
+        out += (
+            "        var id = self.storage[].indexes._sqrrl__key" + String(i) + ".get_bwd("
+            + _key_group_name(parsed.name, i) + "(" + ctor_args + "))\n"
+        )
+        out += "        return " + entity_name + "(self.storage[].handle_for(id))\n"
 
     for f in parsed.fields:
         if f.modifier == FieldModifier.UNIQUE:
@@ -302,13 +470,13 @@ def emit_table(parsed: ParsedStruct, plain_struct_names: Dict[String, Bool] = Di
             out += "            out.add(" + entity_name + "(self.storage[].handle_for(id)))\n"
             out += "        return out^\n"
 
-    # count_<field>/group_by_<field>/count_by_<field>/distinct_<field> (M4)
-    # -- every indexed-family field (any modifier but NONE), same
+    # count_for_<field>/group_by_<field>/count_by_<field>/distinct_<field>
+    # (M4) -- every indexed-family field (any modifier but NONE), same
     # eligibility as for_<field> above.
     for f in parsed.fields:
         if f.modifier == FieldModifier.UNIQUE:
             out += "\n"
-            out += "    def count_" + param_name(f) + "(self, value: " + emit_field_type(f, plain_struct_names) + ") -> Int:\n"
+            out += "    def count_for_" + param_name(f) + "(self, value: " + emit_field_type(f, plain_struct_names) + ") -> Int:\n"
             out += "        return 1 if self.storage[].indexes." + f.name + ".contains(value) else 0\n"
             out += "\n"
             out += "    def group_by_" + param_name(f) + "(self) -> Dict[" + emit_field_type(f, plain_struct_names) + ", " + entity_name + "]:\n"

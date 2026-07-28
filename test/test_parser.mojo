@@ -8,6 +8,13 @@ from squirrel_compiler.parser import (
     is_wrapped_relation_type,
     relation_target_of,
 )
+from squirrel_compiler.driver.discovery import (
+    DiscoveredStruct,
+    DiscoveryResult,
+    check_key_groups_dont_collide_with_fields,
+    resolve_struct_inheritance,
+    check_key_groups_after_inheritance,
+)
 
 
 def test_parse_struct_plain_fields() raises:
@@ -75,16 +82,471 @@ def test_parse_struct_captures_trailing_methods() raises:
     assert_true(parsed.method_body.startswith("    def @@@greeting"))
 
 
-def test_parse_struct_keepalive_and_equatable() raises:
+def test_parse_struct_keepalive_and_value() raises:
     var src = String(
-        "@@struct keepalive equatable @@Project:\n"
+        "@@struct keepalive value @@Project:\n"
         + "    name: String\n"
     )
     var s = Scanner(src)
     assert_true(s.find_next_struct_decl())
     var parsed = s.parse_struct()
     assert_true(parsed.is_keepalive)
-    assert_true(parsed.is_equatable)
+    assert_true(parsed.is_value_type)
+
+
+def test_parse_struct_old_equatable_keyword_rejected() raises:
+    var src = String(
+        "@@struct equatable @@Project:\n"
+        + "    name: String\n"
+    )
+    var s = Scanner(src)
+    assert_true(s.find_next_struct_decl())
+    var raised = False
+    try:
+        _ = s.parse_struct()
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_parse_struct_old_equatable_trait_spelling_rejected() raises:
+    """The mid-redesign `(Equatable)`-in-trait-list spelling (superseded by
+    the dedicated `value` keyword once the real contract -- field
+    immutability, get-or-create -- turned out to be much bigger than
+    "supports `==`") also raises a clear migration error, rather than
+    silently parsing and producing a struct that looks value-flagged in
+    its trait list but isn't."""
+    var src = String(
+        "@@struct @@Project(Equatable):\n"
+        + "    name: String\n"
+    )
+    var s = Scanner(src)
+    assert_true(s.find_next_struct_decl())
+    var raised = False
+    try:
+        _ = s.parse_struct()
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_parse_struct_single_key_group() raises:
+    var src = String(
+        "@@struct @@Series:\n"
+        + "    key(name, start_year)\n"
+        + "    name: String\n"
+        + "    start_year: UInt32\n"
+    )
+    var s = Scanner(src)
+    assert_true(s.find_next_struct_decl())
+    var parsed = s.parse_struct()
+    assert_equal(len(parsed.key_groups), 1)
+    assert_equal(len(parsed.key_groups[0]), 2)
+    assert_equal(parsed.key_groups[0][0], "name")
+    assert_equal(parsed.key_groups[0][1], "start_year")
+
+
+def test_parse_struct_two_independent_key_groups() raises:
+    """Two `key(...)` lines on one struct produce two independent
+    entries, each with its own field set -- not merged, not treated as an
+    error, and not requiring the two groups to be disjoint (`date`
+    appears in both here)."""
+    var src = String(
+        "@@struct @@Booking:\n"
+        + "    key(room, date)\n"
+        + "    key(guest, date)\n"
+        + "    room: String\n"
+        + "    date: String\n"
+        + "    guest: String\n"
+    )
+    var s = Scanner(src)
+    assert_true(s.find_next_struct_decl())
+    var parsed = s.parse_struct()
+    assert_equal(len(parsed.key_groups), 2)
+    assert_equal(len(parsed.key_groups[0]), 2)
+    assert_equal(parsed.key_groups[0][0], "room")
+    assert_equal(parsed.key_groups[0][1], "date")
+    assert_equal(len(parsed.key_groups[1]), 2)
+    assert_equal(parsed.key_groups[1][0], "guest")
+    assert_equal(parsed.key_groups[1][1], "date")
+
+
+def test_parse_struct_key_group_interleaved_with_fields() raises:
+    """A `key(...)` line may appear before the fields it names -- field-
+    name validation is deferred until the whole body has been parsed."""
+    var src = String(
+        "@@struct @@Booking:\n"
+        + "    key(room, date)\n"
+        + "    room: String\n"
+        + "    key(guest, date)\n"
+        + "    date: String\n"
+        + "    guest: String\n"
+    )
+    var s = Scanner(src)
+    assert_true(s.find_next_struct_decl())
+    var parsed = s.parse_struct()
+    assert_equal(len(parsed.key_groups), 2)
+
+
+def test_parse_struct_key_group_duplicate_field_rejected() raises:
+    var src = String(
+        "@@struct @@Series:\n"
+        + "    key(name, name)\n"
+        + "    name: String\n"
+    )
+    var s = Scanner(src)
+    assert_true(s.find_next_struct_decl())
+    var raised = False
+    try:
+        _ = s.parse_struct()
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_parse_struct_two_key_groups_with_identical_field_set_rejected() raises:
+    var src = String(
+        "@@struct @@Series:\n"
+        + "    key(name, start_year)\n"
+        + "    key(start_year, name)\n"
+        + "    name: String\n"
+        + "    start_year: UInt32\n"
+    )
+    var s = Scanner(src)
+    assert_true(s.find_next_struct_decl())
+    var raised = False
+    try:
+        _ = s.parse_struct()
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_parse_struct_key_group_undeclared_field_rejected() raises:
+    var src = String(
+        "@@struct @@Series:\n"
+        + "    key(name, publisher)\n"
+        + "    name: String\n"
+    )
+    var s = Scanner(src)
+    assert_true(s.find_next_struct_decl())
+    var raised = False
+    try:
+        _ = s.parse_struct()
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_check_key_group_collides_with_indexed_field_rejected() raises:
+    """Real, confirmed-via-repro gap: `key(room, date)`'s own generated
+    lookup method is named `for_room_date` -- exactly what a *separate*
+    `indexed room_date: String` field on the same struct would also earn.
+    Real Mojo happily accepts the resulting two same-named overloads
+    (different arity), but the rewrite engine's own call-site dispatch
+    matches by name text alone, before any argument count is known, so a
+    script calling the single-field lookup would get silently
+    mis-registered as the composite one. `check_key_groups_dont_collide_
+    with_fields` (driver-layer, technically -- tested here since it's a
+    direct extension of this same struct's own `key(...)` parsing, not
+    because it belongs to the parser module) rejects this combination
+    outright."""
+    var src = String(
+        "@@struct @@Booking:\n"
+        + "    key(room, date)\n"
+        + "    room: String\n"
+        + "    date: String\n"
+        + "    indexed room_date: String\n"
+    )
+    var s = Scanner(src)
+    assert_true(s.find_next_struct_decl())
+    var parsed = s.parse_struct()
+    var discovery = DiscoveryResult(
+        structs=[DiscoveredStruct(module_path="test", parsed=parsed^)],
+        module_of=Dict[String, String](),
+    )
+    var raised = False
+    try:
+        check_key_groups_dont_collide_with_fields(discovery)
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_check_key_group_no_collision_when_names_differ() raises:
+    """Sanity check alongside the rejection test above -- an ordinary
+    `key(...)` group whose joined name doesn't match any real field's own
+    derived method name (the common case, including every existing
+    example) passes this check without raising."""
+    var src = String(
+        "@@struct @@Booking:\n"
+        + "    key(room, date)\n"
+        + "    room: String\n"
+        + "    date: String\n"
+        + "    guest: String\n"
+    )
+    var s = Scanner(src)
+    assert_true(s.find_next_struct_decl())
+    var parsed = s.parse_struct()
+    var discovery = DiscoveryResult(
+        structs=[DiscoveredStruct(module_path="test", parsed=parsed^)],
+        module_of=Dict[String, String](),
+    )
+    check_key_groups_dont_collide_with_fields(discovery)
+
+
+def test_parse_struct_inherits_from() raises:
+    var src = String(
+        "@@struct @@VolumeSeries < @@Series:\n"
+        + "    volume_number: Int\n"
+    )
+    var s = Scanner(src)
+    assert_true(s.find_next_struct_decl())
+    var parsed = s.parse_struct()
+    assert_equal(parsed.inherits_from, "Series")
+    assert_equal(len(parsed.fields), 1)
+    assert_equal(parsed.fields[0].name, "volume_number")
+
+
+def test_parse_struct_pass_only_body_has_zero_fields() raises:
+    """A bare `pass` body parses the same as a genuinely empty one -- zero
+    fields, zero key groups, zero method body -- most useful on a struct
+    that inherits everything it needs and adds nothing of its own."""
+    var src = String(
+        "@@struct @@VolumeSeries < @@Series:\n"
+        + "    pass\n"
+    )
+    var s = Scanner(src)
+    assert_true(s.find_next_struct_decl())
+    var parsed = s.parse_struct()
+    assert_equal(parsed.inherits_from, "Series")
+    assert_equal(len(parsed.fields), 0)
+    assert_equal(len(parsed.key_groups), 0)
+    assert_equal(parsed.method_body, "")
+
+
+def test_parse_struct_pass_followed_by_more_content_rejected() raises:
+    var src = String(
+        "@@struct @@VolumeSeries < @@Series:\n"
+        + "    pass\n"
+        + "    volume_number: Int\n"
+    )
+    var s = Scanner(src)
+    assert_true(s.find_next_struct_decl())
+    var raised = False
+    try:
+        _ = s.parse_struct()
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_parse_struct_self_inheritance_rejected() raises:
+    var src = String(
+        "@@struct @@Series < @@Series:\n"
+        + "    pass\n"
+    )
+    var s = Scanner(src)
+    assert_true(s.find_next_struct_decl())
+    var raised = False
+    try:
+        _ = s.parse_struct()
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_parse_struct_inheriting_key_group_referencing_uninherited_field_deferred() raises:
+    """An inheriting struct's own `key(...)` line may reference a field it
+    doesn't declare itself -- it comes from the target, not visible at
+    parse time -- so this must parse without error here (validation is
+    deferred to `check_key_groups_after_inheritance`, post-merge, tested
+    separately below)."""
+    var src = String(
+        "@@struct @@VolumeSeries < @@Series:\n"
+        + "    key(title, volume_number)\n"
+        + "    volume_number: Int\n"
+    )
+    var s = Scanner(src)
+    assert_true(s.find_next_struct_decl())
+    var parsed = s.parse_struct()
+    assert_equal(len(parsed.key_groups), 1)
+    assert_equal(parsed.key_groups[0][0], "title")
+    assert_equal(parsed.key_groups[0][1], "volume_number")
+
+
+def test_resolve_struct_inheritance_merges_fields_and_key_groups() raises:
+    var series_src = String(
+        "@@struct @@Series:\n"
+        + "    title: String\n"
+        + "    start_year: Int\n"
+        + "    key(title, start_year)\n"
+    )
+    var volume_src = String(
+        "@@struct @@VolumeSeries < @@Series:\n"
+        + "    volume_number: Int\n"
+    )
+    var series_scanner = Scanner(series_src)
+    assert_true(series_scanner.find_next_struct_decl())
+    var series_parsed = series_scanner.parse_struct()
+    var volume_scanner = Scanner(volume_src)
+    assert_true(volume_scanner.find_next_struct_decl())
+    var volume_parsed = volume_scanner.parse_struct()
+
+    var discovery = DiscoveryResult(
+        structs=[
+            DiscoveredStruct(module_path="test", parsed=series_parsed^),
+            DiscoveredStruct(module_path="test", parsed=volume_parsed^),
+        ],
+        module_of=Dict[String, String](),
+    )
+    resolve_struct_inheritance(discovery)
+    check_key_groups_after_inheritance(discovery)
+
+    ref merged = discovery.structs[1].parsed
+    assert_equal(len(merged.fields), 3)
+    assert_equal(merged.fields[0].name, "title")
+    assert_equal(merged.fields[1].name, "start_year")
+    assert_equal(merged.fields[2].name, "volume_number")
+    assert_equal(len(merged.key_groups), 1)
+    assert_equal(merged.key_groups[0][0], "title")
+    assert_equal(merged.key_groups[0][1], "start_year")
+    # The target itself is untouched by resolving a *different* struct's
+    # inheritance from it.
+    assert_equal(len(discovery.structs[0].parsed.fields), 2)
+
+
+def test_resolve_struct_inheritance_merges_method_bodies() raises:
+    var series_src = String(
+        "@@struct @@Series:\n"
+        + "    title: String\n"
+        + "\n"
+        + "    def @@@describe(self) -> String:\n"
+        + "        return self.title\n"
+    )
+    var volume_src = String(
+        "@@struct @@VolumeSeries < @@Series:\n"
+        + "    pass\n"
+    )
+    var series_scanner = Scanner(series_src)
+    assert_true(series_scanner.find_next_struct_decl())
+    var series_parsed = series_scanner.parse_struct()
+    var volume_scanner = Scanner(volume_src)
+    assert_true(volume_scanner.find_next_struct_decl())
+    var volume_parsed = volume_scanner.parse_struct()
+
+    var discovery = DiscoveryResult(
+        structs=[
+            DiscoveredStruct(module_path="test", parsed=series_parsed^),
+            DiscoveredStruct(module_path="test", parsed=volume_parsed^),
+        ],
+        module_of=Dict[String, String](),
+    )
+    resolve_struct_inheritance(discovery)
+    assert_true("def @@@describe" in discovery.structs[1].parsed.method_body)
+
+
+def test_resolve_struct_inheritance_unknown_target_rejected() raises:
+    var src = String(
+        "@@struct @@Volume < @@NoSuchStruct:\n"
+        + "    pass\n"
+    )
+    var s = Scanner(src)
+    assert_true(s.find_next_struct_decl())
+    var parsed = s.parse_struct()
+    var discovery = DiscoveryResult(
+        structs=[DiscoveredStruct(module_path="test", parsed=parsed^)],
+        module_of=Dict[String, String](),
+    )
+    var raised = False
+    try:
+        resolve_struct_inheritance(discovery)
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_resolve_struct_inheritance_chaining_rejected() raises:
+    var a_scanner = Scanner("@@struct @@A:\n    name: String\n")
+    assert_true(a_scanner.find_next_struct_decl())
+    var a_parsed = a_scanner.parse_struct()
+    var b_scanner = Scanner("@@struct @@B < @@A:\n    pass\n")
+    assert_true(b_scanner.find_next_struct_decl())
+    var b_parsed = b_scanner.parse_struct()
+    var c_scanner = Scanner("@@struct @@C < @@B:\n    pass\n")
+    assert_true(c_scanner.find_next_struct_decl())
+    var c_parsed = c_scanner.parse_struct()
+
+    var discovery = DiscoveryResult(
+        structs=[
+            DiscoveredStruct(module_path="test", parsed=a_parsed^),
+            DiscoveredStruct(module_path="test", parsed=b_parsed^),
+            DiscoveredStruct(module_path="test", parsed=c_parsed^),
+        ],
+        module_of=Dict[String, String](),
+    )
+    var raised = False
+    try:
+        resolve_struct_inheritance(discovery)
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_resolve_struct_inheritance_duplicate_field_rejected() raises:
+    var a_scanner = Scanner("@@struct @@A:\n    name: String\n")
+    assert_true(a_scanner.find_next_struct_decl())
+    var a_parsed = a_scanner.parse_struct()
+    var b_scanner = Scanner("@@struct @@B < @@A:\n    name: Int\n")
+    assert_true(b_scanner.find_next_struct_decl())
+    var b_parsed = b_scanner.parse_struct()
+
+    var discovery = DiscoveryResult(
+        structs=[
+            DiscoveredStruct(module_path="test", parsed=a_parsed^),
+            DiscoveredStruct(module_path="test", parsed=b_parsed^),
+        ],
+        module_of=Dict[String, String](),
+    )
+    var raised = False
+    try:
+        resolve_struct_inheritance(discovery)
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_check_key_groups_after_inheritance_catches_post_merge_problem() raises:
+    """Confirms the deferred validation actually runs and actually catches
+    something -- `key(title, volume_number)` on `VolumeSeries` is fine
+    once `title` is inherited from `Series`, but a group referencing a
+    field that exists on *neither* struct must still be rejected, only
+    now visible after the merge instead of at parse time."""
+    var series_scanner = Scanner("@@struct @@Series:\n    title: String\n")
+    assert_true(series_scanner.find_next_struct_decl())
+    var series_parsed = series_scanner.parse_struct()
+    var volume_src = String(
+        "@@struct @@VolumeSeries < @@Series:\n"
+        + "    key(title, nonexistent_field)\n"
+    )
+    var volume_scanner = Scanner(volume_src)
+    assert_true(volume_scanner.find_next_struct_decl())
+    var volume_parsed = volume_scanner.parse_struct()
+
+    var discovery = DiscoveryResult(
+        structs=[
+            DiscoveredStruct(module_path="test", parsed=series_parsed^),
+            DiscoveredStruct(module_path="test", parsed=volume_parsed^),
+        ],
+        module_of=Dict[String, String](),
+    )
+    resolve_struct_inheritance(discovery)
+    var raised = False
+    try:
+        check_key_groups_after_inheritance(discovery)
+    except:
+        raised = True
+    assert_true(raised)
 
 
 def test_find_next_marker_struct() raises:

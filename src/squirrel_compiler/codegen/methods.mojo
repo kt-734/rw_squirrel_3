@@ -143,6 +143,7 @@ struct _MethodHeader(Copyable, Movable):
     var body: String
     var body_offset: Int
     var bare_return_type: Optional[String]
+    var span_absolute_offset: Int
 
 
 def _parse_method_span(
@@ -253,7 +254,29 @@ def _parse_method_span(
         body=body,
         body_offset=body_start,
         bare_return_type=bare_return_type,
+        span_absolute_offset=span_absolute_offset,
     )
+
+
+def _parse_all_method_spans(
+    method_body: String, struct_name: String, full_source: String, method_body_start_offset: Int
+) raises -> List[_MethodHeader]:
+    """Shared by `world_marked_method_names`/`bare_method_returns`/
+    `rewrite_method_body` -- all three used to separately re-implement
+    the identical "split into spans, track each span's own absolute file
+    offset, parse each header" loop, differing only in what they did
+    with each resulting `_MethodHeader` afterward. One list, built once;
+    each caller just iterates it for whatever it needs (`header.is_world_
+    marked`, `header.bare_return_type`, or the full header for `rewrite_
+    method_body`'s own per-method emission)."""
+    var out = List[_MethodHeader]()
+    if method_body.strip().byte_length() == 0:
+        return out^
+    var span_offset = 0
+    for span in _split_method_spans(method_body):
+        out.append(_parse_method_span(span, struct_name, full_source, method_body_start_offset + span_offset))
+        span_offset += span.byte_length()
+    return out^
 
 
 def _mark_self_field_access(body: String, mut insertions: List[Int]) raises -> String:
@@ -322,14 +345,9 @@ def world_marked_method_names(
     starts, so without this a malformed method header here would raise
     with no location at all, not even a filename."""
     var out = List[String]()
-    if method_body.strip().byte_length() == 0:
-        return out^
-    var span_offset = 0
-    for span in _split_method_spans(method_body):
-        var header = _parse_method_span(span, struct_name, full_source, method_body_start_offset + span_offset)
+    for header in _parse_all_method_spans(method_body, struct_name, full_source, method_body_start_offset):
         if header.is_world_marked:
             out.append(header.method_name)
-        span_offset += span.byte_length()
     return out^
 
 
@@ -356,14 +374,9 @@ def bare_method_returns(
     its return value is registered). `_handle_instance_call` only acts on
     an entry once it's also confirmed a chain actually follows."""
     var out = Dict[String, String]()
-    if method_body.strip().byte_length() == 0:
-        return out^
-    var span_offset = 0
-    for span in _split_method_spans(method_body):
-        var header = _parse_method_span(span, struct_name, full_source, method_body_start_offset + span_offset)
+    for header in _parse_all_method_spans(method_body, struct_name, full_source, method_body_start_offset):
         if header.bare_return_type:
             out[header.method_name] = header.bare_return_type.value()
-        span_offset += span.byte_length()
     return out^
 
 
@@ -417,10 +430,8 @@ def rewrite_method_body(
         return String()
 
     var out = String()
-    var span_offset = 0
-    for span in _split_method_spans(method_body):
-        var span_absolute_offset = method_body_start_offset + span_offset
-        var header = _parse_method_span(span, struct_name, full_source, span_absolute_offset)
+    for header in _parse_all_method_spans(method_body, struct_name, full_source, method_body_start_offset):
+        var span_absolute_offset = header.span_absolute_offset
 
         var method_ctx = ctx.fresh_function_scope()
 
@@ -535,5 +546,4 @@ def rewrite_method_body(
         out += rewritten_body
         if not out.endswith("\n"):
             out += "\n"
-        span_offset += span.byte_length()
     return out^

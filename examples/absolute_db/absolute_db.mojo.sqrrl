@@ -1,0 +1,130 @@
+@@struct @@Publisher:
+    title: String
+
+@@struct @@Series:
+    title: String
+    start_year: Int
+    @@publisher: @@Publisher
+    key(title, start_year)
+
+    def describe(self) -> String:
+        return self.title + " (" + String(self.start_year) + ")"
+
+@@struct @@VolumeSeries < @@Series:
+    pass
+
+@@struct @@Arc:
+    title: String
+    @@series: @@Series
+
+@@struct @@SourceArcPart:
+    @@arc: @@Arc
+    part: String
+
+@@struct keepalive @@Issue:
+    title: Optional[String]
+    source: Variant[@@SourceArcPart, @@Series]
+    no: Int
+    indexed owned: Bool
+
+@@struct keepalive @@Volume:
+    source: Variant[@@Arc, @@VolumeSeries]
+    multi @@issues: @@Issue
+    no: Int
+    indexed owned: Bool
+
+def main() raises:
+    @@@:
+        var @@acme = @@@Publisher { .title = "Acme Press" }
+
+        var @@series = @@@Series.create(title = "Foundation", start_year = 1951, @@publisher = @@acme)
+        print("series describe (own method):", @@series.describe())
+
+        # `< @@Series` copies title/start_year/@@publisher/key(title,
+        # start_year)/describe() into VolumeSeries verbatim 
+        var @@volume = @@@VolumeSeries.create(title = "Foundation", start_year = 1951, @@publisher = @@acme)
+        print("volume series describe (inherited method):", @@volume.describe())
+        
+        # Purely structural, not polymorphic -- separate tables, separate
+        # id spaces, separate counts, even with identical title/start_year.
+        print("series count:", @@@Series.count())
+        print("volume series count:", @@@VolumeSeries.count())
+
+        # The inherited key(title, start_year) group earns its own
+        # composite lookup on VolumeSeries too.
+        var @@found_volume = @@@VolumeSeries.for_title_start_year("Foundation", 1951)
+        print("found volume series via inherited composite lookup:", @@found_volume.title)
+
+        # create() raises on a genuine collision -- inherited from Series,
+        # enforced independently of Series's own key(title, start_year).
+        var volume_duplicate_raised = False
+        try:
+            _ = @@@VolumeSeries.create(title = "Foundation", start_year = 1951, @@publisher = @@acme)
+        except:
+            volume_duplicate_raised = True
+        print("volume series duplicate (title, start_year) correctly rejected:", volume_duplicate_raised)
+
+        # A VolumeSeries with a different (title, start_year) doesn't
+        # collide with Series's own row, or with the first VolumeSeries.
+        var @@volume2 = @@@VolumeSeries.create(title = "Second Foundation", start_year = 1953, @@publisher = @@acme)
+        print("second volume series count:", @@@VolumeSeries.count())
+
+        var @@arc = @@@Arc { .title = "The Mule", .@@series = @@series }
+        print("arc's series:", @@arc.@@series.title)
+
+
+
+        var @@issue = @@@Issue {
+            .title = "Issue 1",
+            .source = Variant[@@SourceArcPart, @@Series](@@@SourceArcPart { .@@arc = @@arc, .part = "The part" }),
+            .no = 1,
+            .owned = True,
+        }
+        print("issue number:", @@issue.no)
+
+        # A collection tracker needs wishlist items too -- catalogued, not
+        # (yet) owned.
+        var @@issue2 = @@@Issue {
+            .title = "Issue 2",
+            .source = Variant[@@SourceArcPart, @@Series](@@@SourceArcPart { .@@arc = @@arc, .part = "The other part" }),
+            .no = 2,
+            .owned = False,
+        }
+        print("issues owned:", @@@Issue.count_for_owned(True))
+        print("issues on wishlist:", @@@Issue.count_for_owned(False))
+
+        # @@Volume ties a single-book-or-series source (Variant[@@Arc,
+        # @@VolumeSeries]) together with the issues collected under it
+        # (multi @@issues) -- here sourced from the VolumeSeries created
+        # above.
+        var _ = @@@Volume {
+            .source = Variant[@@Arc, @@VolumeSeries](@@volume),
+            .@@issues = Set(@@issue),
+            .no = 1,
+            .owned = True,
+        }
+        var @@volume_wishlist = @@@Volume {
+            .source = Variant[@@Arc, @@VolumeSeries](@@volume),
+            .@@issues = Set(@@issue),
+            .no = 2,
+            .owned = False,
+        }
+        print("book volume issue count:", @@@Volume.count_for_@@issues(@@issue))
+        print("volumes owned:", @@@Volume.count_for_owned(True))
+
+        # Marking a wishlist volume as acquired -- an ordinary field write,
+        # same as any other non-key field.
+        @@volume_wishlist.owned = True
+        print("volumes owned after acquiring the wishlist copy:", @@@Volume.count_for_owned(True))
+
+        print(
+            "keep alive:",
+            @@series.title, @@volume.title, @@volume2.title,
+            @@found_volume.title, @@arc.title, @@issue.no, @@issue2.no,
+        )
+
+        var s = @@@to_json()
+
+        @@@init_from_json(s)
+
+        print(s)

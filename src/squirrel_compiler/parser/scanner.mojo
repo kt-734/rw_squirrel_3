@@ -32,6 +32,20 @@ from squirrel_compiler.parser.relation_type_text import is_directly_entity_reach
 from squirrel_compiler.parser.type_expr import parse_type_expr
 
 
+def _same_field_set(a: List[String], b: List[String]) -> Bool:
+    """Order-independent set equality for two `key(...)` groups -- `key(a,
+    b)` and `key(b, a)` count as the same group. Relies on the caller
+    having already rejected a duplicate field *within* either group (see
+    `Scanner.parse_struct`), so equal length plus "every name in `a`
+    appears in `b`" is enough to conclude the two sets are identical."""
+    if len(a) != len(b):
+        return False
+    for name in a:
+        if name not in b:
+            return False
+    return True
+
+
 def parse_construct_fields(body: String) raises -> List[ConstructField]:
     """Splits a construct's braced body into `.name = value` /
     `.@@name = value` segments, each becoming a `ConstructField`.
@@ -569,7 +583,10 @@ struct Scanner(Movable):
         var body = self.scan_indented_block(header_indent)
         var body_start = self.pos - body.byte_length()
         var struct_fields = List[Field]()
-        var method_body = parse_hand_written_struct_fields(body, self.source, body_start, struct_fields)
+        var unused_method_body_start_offset = 0
+        var method_body = parse_hand_written_struct_fields(
+            body, self.source, body_start, struct_fields, unused_method_body_start_offset
+        )
         return ParsedStruct(name=name, fields=struct_fields^, method_body=method_body^, type_params=type_params^)
 
     def peek_empty_call_follows(mut self) -> Bool:
@@ -904,6 +921,30 @@ struct Scanner(Movable):
             binding_prefix=binding_prefix,
         )
 
+    def _at_bare_for_loop_prefix(mut self) -> Bool:
+        """Shared prefix for `at_bare_for_loop_over_marked_chain`/`at_
+        bare_for_loop_over_bare_chain`: `for [var/ref ]<loop_var> in`,
+        leaving `self.pos` right after `in` (trivia skipped) either way.
+        Never restores `self.pos` on failure -- same reasoning `_at_
+        bare_chain_receiver_tail`'s own doc comment gives; every caller
+        already wraps its own save/restore around the whole check."""
+        if not (self.starts_with("for") and not is_ident_char(self.peek_at(3))):
+            return False
+        self.pos += 3
+        self.skip_trivia()
+        _ = self.try_consume_word("var")
+        _ = self.try_consume_word("ref")
+        self.skip_trivia()
+        var loop_var = self.scan_ident()
+        if loop_var.byte_length() == 0:
+            return False
+        self.skip_trivia()
+        if not (self.starts_with("in") and not is_ident_char(self.peek_at(2))):
+            return False
+        self.pos += 2
+        self.skip_trivia()
+        return True
+
     def at_bare_for_loop_over_marked_chain(mut self) raises -> Bool:
         """True if `self.pos` starts `for [var/ref ]<loop_var> in @@` --
         a *bare* (never `@@`-marked) loop variable whose own iterated
@@ -931,24 +972,9 @@ struct Scanner(Movable):
         var save = self.pos
         if not self.at_identifier_boundary():
             return False
-        if not (self.starts_with("for") and not is_ident_char(self.peek_at(3))):
+        if not self._at_bare_for_loop_prefix():
             self.pos = save
             return False
-        self.pos += 3
-        self.skip_trivia()
-        _ = self.try_consume_word("var")
-        _ = self.try_consume_word("ref")
-        self.skip_trivia()
-        var loop_var = self.scan_ident()
-        if loop_var.byte_length() == 0:
-            self.pos = save
-            return False
-        self.skip_trivia()
-        if not (self.starts_with("in") and not is_ident_char(self.peek_at(2))):
-            self.pos = save
-            return False
-        self.pos += 2
-        self.skip_trivia()
         var matched = self.starts_with("@@") and not self.starts_with("@@@")
         self.pos = save
         return matched
@@ -979,6 +1005,26 @@ struct Scanner(Movable):
         _ = self.try_consume_word("in")
         return BareForLoopHeader(loop_var=loop_var, binding_prefix=binding_prefix)
 
+    def _at_bare_var_decl_prefix(mut self) -> Bool:
+        """Shared prefix for `at_bare_var_decl_over_marked_chain`/`at_
+        bare_var_decl_over_bare_chain`: `var <bare_name> =`, leaving
+        `self.pos` right after the `=` (trivia skipped) either way.
+        Never restores `self.pos` on failure -- same reasoning `_at_
+        bare_chain_receiver_tail`'s own doc comment gives; every caller
+        already wraps its own save/restore around the whole check."""
+        if not self.try_consume_word("var"):
+            return False
+        self.skip_trivia()
+        var name = self.scan_ident()
+        if name.byte_length() == 0:
+            return False
+        self.skip_trivia()
+        if not self.at_assignment():
+            return False
+        self.pos += 1
+        self.skip_trivia()
+        return True
+
     def at_bare_var_decl_over_marked_chain(mut self) raises -> Bool:
         """True if `self.pos` starts `var <bare_name> = @@` (single `@@`,
         not `@@@` -- a table-level call's own result is always compiler-
@@ -1004,20 +1050,9 @@ struct Scanner(Movable):
         var save = self.pos
         if not self.at_identifier_boundary():
             return False
-        if not self.try_consume_word("var"):
+        if not self._at_bare_var_decl_prefix():
             self.pos = save
             return False
-        self.skip_trivia()
-        var name = self.scan_ident()
-        if name.byte_length() == 0:
-            self.pos = save
-            return False
-        self.skip_trivia()
-        if not self.at_assignment():
-            self.pos = save
-            return False
-        self.pos += 1
-        self.skip_trivia()
         var matched = self.starts_with("@@") and not self.starts_with("@@@")
         self.pos = save
         return matched
@@ -1038,6 +1073,31 @@ struct Scanner(Movable):
         _ = self.at_assignment()
         self.pos += 1
         return name
+
+    def _at_bare_chain_receiver_tail(mut self) -> Bool:
+        """Shared tail for `at_bare_rooted_chain`/`at_bare_var_decl_over_
+        bare_chain`/`at_bare_for_loop_over_bare_chain`: requires `self.
+        pos` already sitting at a bare receiver's own start (right after
+        each caller's own, different prefix -- the receiver's own
+        position differs per caller: right at the marker itself for `at_
+        bare_rooted_chain`, well after `var`/`for ... in` for the other
+        two). True if the shape from there is `<ident>[...]` (an index,
+        the chain's first hop) or `<ident>.<ident>` (a field/method-call
+        hop -- no trailing `(` required, see `at_bare_rooted_chain`'s own
+        doc comment for why). Never restores `self.pos` itself either
+        way -- every caller already wraps its own call in a save/restore
+        around its own full check, so restoring here too would just be
+        redundant."""
+        var receiver = self.scan_ident()
+        if receiver.byte_length() == 0:
+            return False
+        if self.peek() == UInt8(ord("[")):
+            return True
+        if self.peek() != UInt8(ord(".")):
+            return False
+        self.pos += 1
+        var method_name = self.scan_ident()
+        return method_name.byte_length() > 0
 
     def at_bare_rooted_chain(mut self) raises -> Bool:
         """True if `self.pos` starts `<bare_ident>.<ident>(` -- a bare
@@ -1073,48 +1133,24 @@ struct Scanner(Movable):
         every other fallback check in this file, misfiring here is the
         common case by a wide margin, not the exception -- the handler's
         own silent, harmless no-op has to hold up under that, not just
-        the occasional false match."""
+        the occasional false match. `<bare_ident>[...]` (an index, not a
+        dot at all -- `scores_dict["senior"].name`, a bare local
+        container indexed directly) also matches -- `scan_access_steps()`
+        already starts by checking for `[` first in its own loop. Nor
+        does the `.`-rooted shape require a trailing `(` -- `handle_
+        bare_rooted_chain`'s own `scan_access_steps()` parses a plain
+        `.field` hop exactly as generically as a `.method(...)` one, and
+        `_walk_access_chain` is equally type-agnostic either way; needed
+        so a genuinely bare plain-struct local's own container-of-entity
+        field can be read/iterated at all (`t.members`, no call anywhere
+        in the chain) -- still safe, the handler's own no-op just gets
+        taken more often, never does anything different."""
         var save = self.pos
         if is_after_dot(self.source, save) or not self.at_identifier_boundary():
             return False
-        var receiver = self.scan_ident()
-        if receiver.byte_length() == 0:
-            self.pos = save
-            return False
-        if self.peek() == UInt8(ord("[")):
-            # `<bare_ident>[...]` -- the chain's first hop is an index,
-            # not a dot at all (`scores_dict["senior"].name`, a bare
-            # local container indexed directly) -- `scan_access_steps()`
-            # already starts by checking for `[` first in its own loop,
-            # so this needs no further lookahead here, same reasoning as
-            # the `.`-rooted case just below.
-            self.pos = save
-            return True
-        if self.peek() != UInt8(ord(".")):
-            self.pos = save
-            return False
-        self.pos += 1
-        var method_name = self.scan_ident()
-        if method_name.byte_length() == 0:
-            self.pos = save
-            return False
-        # No longer requires a trailing `(` -- `handle_bare_rooted_chain`'s
-        # own `scan_access_steps()` already parses a plain `.field`/
-        # `[index]` hop exactly as generically as a `.method(...)` one (it
-        # was never call-specific, just never reached with anything else
-        # at the front before this widening), and `_walk_access_chain` is
-        # equally type-agnostic either way. Needed so a genuinely bare
-        # (never `@@`-marked) plain-struct local's own container-of-entity
-        # field can be read/iterated at all (`t.members`, no call anywhere
-        # in the whole chain) -- nothing else recognizes a bare `ident.
-        # field` with no call as a marker-worthy position, so `pending_
-        # for_loop_decl`/a later marked step through it would otherwise
-        # never resolve. Still safe: the handler already no-ops, silently
-        # and harmlessly, for any receiver that isn't actually a tracked
-        # bare local -- this widening only grows how often that no-op
-        # path is taken, not what it does.
+        var matched = self._at_bare_chain_receiver_tail()
         self.pos = save
-        return True
+        return matched
 
     def at_bare_var_decl_over_bare_chain(mut self) raises -> Bool:
         """True if `self.pos` starts `var <bare_name> = <bare_ident>.
@@ -1143,42 +1179,12 @@ struct Scanner(Movable):
         var save = self.pos
         if not self.at_identifier_boundary():
             return False
-        if not self.try_consume_word("var"):
+        if not self._at_bare_var_decl_prefix():
             self.pos = save
             return False
-        self.skip_trivia()
-        var name = self.scan_ident()
-        if name.byte_length() == 0:
-            self.pos = save
-            return False
-        self.skip_trivia()
-        if not self.at_assignment():
-            self.pos = save
-            return False
-        self.pos += 1
-        self.skip_trivia()
-        var receiver = self.scan_ident()
-        if receiver.byte_length() == 0:
-            self.pos = save
-            return False
-        if self.peek() == UInt8(ord("[")):
-            self.pos = save
-            return True
-        if self.peek() != UInt8(ord(".")):
-            self.pos = save
-            return False
-        self.pos += 1
-        var method_name = self.scan_ident()
-        if method_name.byte_length() == 0:
-            self.pos = save
-            return False
-        # No longer requires a trailing `(` -- see `at_bare_rooted_chain`'s
-        # own updated doc comment for the full "why" (this marker's own
-        # job is just to set `pending_decl` a step early; `BARE_ROOTED_
-        # CHAIN` is guaranteed to fire immediately after it either way,
-        # call or plain field, and consume it).
+        var matched = self._at_bare_chain_receiver_tail()
         self.pos = save
-        return True
+        return matched
 
     def at_bare_for_loop_over_bare_chain(mut self) raises -> Bool:
         """True if `self.pos` starts `for [var/ref ]<loop_var> in
@@ -1192,43 +1198,12 @@ struct Scanner(Movable):
         var save = self.pos
         if not self.at_identifier_boundary():
             return False
-        if not (self.starts_with("for") and not is_ident_char(self.peek_at(3))):
+        if not self._at_bare_for_loop_prefix():
             self.pos = save
             return False
-        self.pos += 3
-        self.skip_trivia()
-        _ = self.try_consume_word("var")
-        _ = self.try_consume_word("ref")
-        self.skip_trivia()
-        var loop_var = self.scan_ident()
-        if loop_var.byte_length() == 0:
-            self.pos = save
-            return False
-        self.skip_trivia()
-        if not (self.starts_with("in") and not is_ident_char(self.peek_at(2))):
-            self.pos = save
-            return False
-        self.pos += 2
-        self.skip_trivia()
-        var receiver = self.scan_ident()
-        if receiver.byte_length() == 0:
-            self.pos = save
-            return False
-        if self.peek() == UInt8(ord("[")):
-            self.pos = save
-            return True
-        if self.peek() != UInt8(ord(".")):
-            self.pos = save
-            return False
-        self.pos += 1
-        var method_name = self.scan_ident()
-        if method_name.byte_length() == 0:
-            self.pos = save
-            return False
-        # No longer requires a trailing `(` -- see `at_bare_rooted_chain`'s
-        # own updated doc comment for the full "why."
+        var matched = self._at_bare_chain_receiver_tail()
         self.pos = save
-        return True
+        return matched
 
     def at_bare_call_chain(mut self) raises -> Bool:
         """True if `self.pos` starts `<bare_ident>(...)` (a call, its own
@@ -1292,27 +1267,61 @@ struct Scanner(Movable):
 
     def parse_struct(mut self) raises -> ParsedStruct:
         """Requires `self.pos` at the `@@struct` token. Grammar: `@@struct
-        [keepalive] [equatable] @@Name[(Trait1, Trait2, ...)]:` (every part
-        but the name optional) followed by an indented block -- fields
+        [keepalive] [value] @@Name[(Trait1, Trait2, ...)] [< @@Other]:`
+        (every part but the name optional, `keepalive`/`value` in either
+        order) followed by an indented block -- fields/`key(...)` groups
         first (newline-separated, no commas), then optionally user-written
-        methods (captured verbatim, spliced in once M3 lands)."""
+        methods (captured verbatim, spliced in once M3 lands).
+
+        `< @@Other` (struct inheritance) records *which* struct to copy
+        fields/key(...) groups/methods from (`ParsedStruct.inherits_from`)
+        -- it does not resolve or copy anything itself, since the target's
+        own full content may not even be parsed yet (forward reference
+        within a file, or declared in an entirely different file). The
+        actual copy happens later, project-wide, in `driver/discovery.
+        mojo`'s `resolve_struct_inheritance`, once every struct has been
+        independently discovered. Self-inheritance (`< @@Name` naming this
+        exact struct) is rejected immediately, here, since it needs no
+        cross-struct lookup to detect.
+
+        `value` is a dedicated struct-level flag keyword, alongside
+        `keepalive` -- an earlier design instead derived this from whether
+        the struct's own trait list included real Mojo's `Equatable`
+        (`@@struct @@Name(Equatable):`), reusing the real trait name as the
+        signal. Reverted once the actual contract grew well past "supports
+        `==`": a `value`-flagged struct is also field-immutable (no
+        `set_<field>`/`add_to_<field>` generated at all) and gets
+        get-or-create semantics on `create()` -- a real Mojo `Equatable`
+        conformance promises none of that, so borrowing its name as the
+        trigger oversold what declaring it actually opts into. `equatable`
+        (the *original*, pre-trait-list keyword spelling) and the
+        trait-list spelling are both still matched at their old positions,
+        specifically so a migration error can be raised there instead of
+        falling through into an unrelated, confusing "expected '@@' before
+        struct name" parse error."""
         var header_indent = line_indent_of(self.source, self.pos)
         if not self.try_consume("@@struct"):
             raise self.err("InvalidSquirrelSyntax: expected '@@struct'")
         self.skip_trivia()
         var is_keepalive = False
-        var is_equatable = False
+        var is_value_type = False
         while True:
             if self.starts_with("keepalive") and not is_ident_char(self.peek_at(9)):
                 self.pos += 9
                 self.skip_trivia()
                 is_keepalive = True
                 continue
-            if self.starts_with("equatable") and not is_ident_char(self.peek_at(9)):
-                self.pos += 9
+            if self.starts_with("value") and not is_ident_char(self.peek_at(5)):
+                self.pos += 5
                 self.skip_trivia()
-                is_equatable = True
+                is_value_type = True
                 continue
+            if self.starts_with("equatable") and not is_ident_char(self.peek_at(9)):
+                raise self.err(
+                    "InvalidSquirrelSyntax: 'equatable' is no longer a"
+                    " struct-level keyword; write '@@struct value @@Name:'"
+                    " instead"
+                )
             break
         if not self.try_consume("@@"):
             raise self.err("InvalidSquirrelSyntax: expected '@@' before struct name ('@@struct @@Name:')")
@@ -1324,18 +1333,80 @@ struct Scanner(Movable):
         if self.peek() == UInt8(ord("(")):
             trait_list = self.parse_trait_list()
             self.skip_trivia()
+        if "Equatable" in trait_list and not is_value_type:
+            raise self.err(
+                "InvalidSquirrelSyntax: '(Equatable)' is no longer the"
+                " signal for value-based identity -- write '@@struct value"
+                " @@Name:' instead"
+            )
+        var inherits_from = String()
+        if self.try_consume("<"):
+            self.skip_trivia()
+            if not self.try_consume("@@"):
+                raise self.err("InvalidSquirrelSyntax: expected '@@' after '<'")
+            inherits_from = self.scan_ident()
+            if inherits_from.byte_length() == 0:
+                raise self.err("InvalidSquirrelSyntax: expected a struct name after '<'")
+            if inherits_from == name:
+                raise self.err(
+                    "InvalidSquirrelSyntax: '@@" + name + " < @@" + name
+                    + "' -- a struct can't inherit from itself"
+                )
+            self.skip_trivia()
         if not self.try_consume(":"):
             raise self.err("InvalidSquirrelSyntax: expected ':' after struct name")
         var body = self.scan_indented_block(header_indent)
         var body_start = self.pos - body.byte_length()
         var struct_fields = List[Field]()
         var method_body_start_offset = 0
-        var method_body = parse_struct_body(body, self.source, body_start, struct_fields, method_body_start_offset)
+        var key_groups = List[List[String]]()
+        var method_body = parse_struct_body(
+            body, self.source, body_start, struct_fields, method_body_start_offset, key_groups
+        )
+        # `key(...)` field-name validation is deferred here, once every
+        # field has actually been parsed -- a `key(...)` line may itself
+        # appear before the fields it names (see parse_struct_body's own
+        # doc comment). Skipped entirely when this struct inherits (`<
+        # @@Other`): an inheriting struct's own `key(...)` lines may
+        # legitimately reference fields it doesn't declare itself (they
+        # come from the target, not visible at all at this point in a
+        # single-file, single-pass parse) -- re-run instead, post-merge,
+        # by `discovery.mojo`'s `check_key_groups_after_inheritance`,
+        # once the target's fields have actually been copied in.
+        if inherits_from == "":
+            for group in key_groups:
+                for field_name in group:
+                    var found = False
+                    for f in struct_fields:
+                        if f.name == field_name:
+                            found = True
+                            break
+                    if not found:
+                        raise self.err(
+                            "InvalidSquirrelSyntax: 'key(...)' references"
+                            " undeclared field '" + field_name + "'"
+                        )
+                for i in range(len(group)):
+                    for j in range(i + 1, len(group)):
+                        if group[i] == group[j]:
+                            raise self.err(
+                                "InvalidSquirrelSyntax: 'key(...)' lists field '"
+                                + group[i] + "' more than once"
+                            )
+            for i in range(len(key_groups)):
+                for j in range(i + 1, len(key_groups)):
+                    if _same_field_set(key_groups[i], key_groups[j]):
+                        raise self.err(
+                            "InvalidSquirrelSyntax: two 'key(...)' groups declare"
+                            " the exact same field set"
+                        )
         return ParsedStruct(
             name=name,
             fields=struct_fields^,
             is_keepalive=is_keepalive,
-            is_equatable=is_equatable,
+            is_value_type=is_value_type,
+            key_groups=key_groups^,
+            inherits_from=inherits_from^,
             trait_list=trait_list^,
             method_body=method_body^,
             method_body_start_offset=method_body_start_offset,

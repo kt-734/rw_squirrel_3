@@ -1,0 +1,59 @@
+from absolute_db import sqrrl__PublisherTable
+from absolute_db import sqrrl__SeriesTable
+from absolute_db import sqrrl__VolumeSeriesTable
+from absolute_db import sqrrl__ArcTable
+from absolute_db import sqrrl__SourceArcPartTable
+from absolute_db import sqrrl__IssueTable
+from absolute_db import sqrrl__VolumeTable
+from std.os import abort
+
+
+struct sqrrl___World(Movable):
+    var Publisher: sqrrl__PublisherTable
+    var Series: sqrrl__SeriesTable
+    var VolumeSeries: sqrrl__VolumeSeriesTable
+    var Arc: sqrrl__ArcTable
+    var SourceArcPart: sqrrl__SourceArcPartTable
+    var Issue: sqrrl__IssueTable
+    var Volume: sqrrl__VolumeTable
+
+    def __init__(out self):
+        self.Publisher = sqrrl__PublisherTable()
+        self.Series = sqrrl__SeriesTable()
+        self.VolumeSeries = sqrrl__VolumeSeriesTable()
+        self.Arc = sqrrl__ArcTable()
+        self.SourceArcPart = sqrrl__SourceArcPartTable()
+        self.Issue = sqrrl__IssueTable()
+        self.Volume = sqrrl__VolumeTable()
+
+    def sqrrl__check_no_leaks(mut self):
+        _ = self.Issue.storage[].keepalive_clear()
+        _ = self.Volume.storage[].keepalive_clear()
+        var leaked_Publisher = self.Publisher.count()
+        if leaked_Publisher > 0:
+            abort("LeakedEntities: 'Publisher' still has " + String(leaked_Publisher) + " live entities outside sqrrl___world -- something external still references them")
+        var leaked_Series = self.Series.count()
+        if leaked_Series > 0:
+            abort("LeakedEntities: 'Series' still has " + String(leaked_Series) + " live entities outside sqrrl___world -- something external still references them")
+        var leaked_VolumeSeries = self.VolumeSeries.count()
+        if leaked_VolumeSeries > 0:
+            abort("LeakedEntities: 'VolumeSeries' still has " + String(leaked_VolumeSeries) + " live entities outside sqrrl___world -- something external still references them")
+        var leaked_Arc = self.Arc.count()
+        if leaked_Arc > 0:
+            abort("LeakedEntities: 'Arc' still has " + String(leaked_Arc) + " live entities outside sqrrl___world -- something external still references them")
+        var leaked_SourceArcPart = self.SourceArcPart.count()
+        if leaked_SourceArcPart > 0:
+            abort("LeakedEntities: 'SourceArcPart' still has " + String(leaked_SourceArcPart) + " live entities outside sqrrl___world -- something external still references them")
+        var leaked_Issue = self.Issue.count()
+        if leaked_Issue > 0:
+            abort("LeakedEntities: 'Issue' still has " + String(leaked_Issue) + " live entities outside sqrrl___world -- something external still references them")
+        var leaked_Volume = self.Volume.count()
+        if leaked_Volume > 0:
+            abort("LeakedEntities: 'Volume' still has " + String(leaked_Volume) + " live entities outside sqrrl___world -- something external still references them")
+
+    def __del__(deinit self):
+        self.sqrrl__check_no_leaks()
+
+
+def sqrrl___init() -> sqrrl___World:
+    return sqrrl___World()

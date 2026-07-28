@@ -17,4 +17,15 @@ def main() raises:
         var @@team = @@@Person.for_name("alice")
         print("found by index:", len(@@team))
 
-        print("count:", @@@Person.count(), @@alice.name, @@bob.name)
+        # Regression coverage for a real, once-present bug: a `unique`
+        # field's own `set_<field>` used to check_unique/remove/assign
+        # but never re-add the new value to its own backward index --
+        # `for_<field>` on the *new* value would then wrongly raise
+        # "no entity currently holds this value" even though the field
+        # itself already held it.
+        var @@ops = @@@Department { .name = "Operations" }
+        @@ops.name = "Ops Renamed"
+        var @@found_ops = @@@Department.for_name("Ops Renamed")
+        print("found renamed department by its new name:", @@found_ops.name)
+
+        print("count:", @@@Person.count(), @@alice.name, @@bob.name, @@ops.name)

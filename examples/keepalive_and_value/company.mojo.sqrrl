@@ -1,0 +1,42 @@
+@@struct keepalive @@Project:
+    unique name: String
+
+@@struct value @@Person:
+    name: String
+    age: UInt32
+
+def main() raises:
+    @@@:
+        _ = @@@Project.create(name = "Website Revamp")
+        _ = @@@Project.create(name = "Onboarding Redesign")
+        print("all projects:", len(@@@Project.all()))
+
+        var @@handle = @@@Project.for_name("Website Revamp")
+        var released = @@handle.dont_keepalive()
+        print("released website revamp:", released)
+
+        var @@alice = @@@Person { .name = "alice", .age = 30 }
+        var @@alice_twin = @@@Person { .name = "alice", .age = 30 }
+        var @@bob = @@@Person { .name = "bob", .age = 25 }
+
+        print("alice equals alice_twin:", @@alice == @@alice_twin)
+        print("alice equals bob:", @@alice == @@bob)
+
+        # `@@Person` is flagged `value`, so `create()` (what `@@@Person {
+        # ... }` compiles down to) gets get-or-create semantics: a value-duplicate
+        # doesn't insert a second, separate row -- it hands back the
+        # *existing* one. `@@alice_twin` isn't a distinct entity at all;
+        # it's the very same row `@@alice` already is, confirmed here by
+        # comparing `id()` directly (not just `==`, which field-by-field
+        # equality would already guarantee even for two genuinely distinct
+        # rows) and by the whole table's own count staying at 2 (alice,
+        # bob), not 3.
+        print("alice id equals alice_twin id:", @@alice.id() == @@alice_twin.id())
+        print("person count (alice_twin was not a new row):", @@@Person.count())
+
+        # Mojo's own ASAP destruction drops a local right after its last
+        # textual use -- `@@bob`'s was the `==` comparison above, so
+        # without this line it (and, once `Person.count()` above no
+        # longer needs them either, `@@alice`/`@@alice_twin` too) could
+        # already be gone by the time `count()` ran, undercounting.
+        print("keep alive:", @@alice.name, @@alice_twin.name, @@bob.name)

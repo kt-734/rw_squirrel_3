@@ -1,5 +1,6 @@
 from squirrel_compiler.codegen.rewrite import rewrite_markers
 from squirrel_compiler.codegen.rewrite_context import RewriteContext
+from squirrel_compiler.parser import Field
 
 
 def transform_source(
@@ -12,6 +13,10 @@ def transform_source(
     ordered_fields: Dict[String, List[String]] = Dict[String, List[String]](),
     world_methods: Dict[String, List[String]] = Dict[String, List[String]](),
     stats_fields: Dict[String, List[String]] = Dict[String, List[String]](),
+    key_group_lookup_names: Dict[String, List[String]] = Dict[String, List[String]](),
+    struct_fields: Dict[String, List[Field]] = Dict[String, List[Field]](),
+    struct_key_groups: Dict[String, List[List[String]]] = Dict[String, List[List[String]]](),
+    struct_method_body: Dict[String, String] = Dict[String, String](),
     plain_struct_names: Dict[String, Bool] = Dict[String, Bool](),
     plain_value_fields: Dict[String, Dict[String, String]] = Dict[String, Dict[String, String]](),
     json_used: Bool = False,
@@ -36,6 +41,10 @@ def transform_source(
         ordered_fields=ordered_fields.copy(),
         world_methods=world_methods.copy(),
         stats_fields=stats_fields.copy(),
+        key_group_lookup_names=key_group_lookup_names.copy(),
+        struct_fields=struct_fields.copy(),
+        struct_key_groups=struct_key_groups.copy(),
+        struct_method_body=struct_method_body.copy(),
         plain_struct_names=plain_struct_names.copy(),
         plain_value_fields=plain_value_fields.copy(),
         bare_function_returns=bare_function_returns.copy(),

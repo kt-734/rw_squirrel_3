@@ -1,3 +1,6 @@
+from squirrel_compiler.parser import Field
+
+
 @fieldwise_init
 struct RewriteContext(Copyable, Movable):
     """Bundles the read-only, project-wide analysis inputs plus the two
@@ -45,6 +48,29 @@ struct RewriteContext(Copyable, Movable):
     consulted separately to decide *how* to call it), never its return
     shape.
 
+    `key_group_lookup_names` (composite-key feature) lets table-level-call
+    dispatch recognize `@@@Type.for_<f1>_<f2>_...(...)` as a valid
+    composite lookup -- struct name -> one precomputed, already-joined
+    lookup-method suffix per `key(...)` line it declares (`discovery.mojo`'s
+    `build_key_group_lookup_names`), compared as a whole string against the
+    call site's own text rather than split apart (a field name can itself
+    contain an underscore, so splitting a joined suffix back into its
+    component field names is ambiguous in general -- whole-string
+    comparison against every group's own precomputed name isn't).
+
+    `struct_fields`/`struct_key_groups`/`struct_method_body` (struct-
+    inheritance feature) are struct name -> that struct's own, *post-
+    inheritance-merge* `fields`/`key_groups`/`method_body` (`discovery.
+    mojo`'s `build_struct_fields`/`build_struct_key_groups`/`build_struct_
+    method_bodies`) -- `codegen/rewrite.mojo`'s own `STRUCT` branch
+    overwrites its freshly re-parsed `parsed.fields`/`.key_groups`/
+    `.method_body` from these three right after parsing, since that fresh
+    parse never consults `DiscoveryResult` at all and so never sees an
+    inheriting struct's fields/key groups/methods copied in from its `<
+    @@Other` target. A no-op override for a non-inheriting struct -- its
+    own fresh parse and these discovery-computed maps are always
+    identical.
+
     `plain_struct_names`/`plain_value_fields` (plain-structs milestone) are
     the general access-chain walk's `owner_is_real`/`owner_is_plain`
     dispatch's own two project-wide maps: `plain_struct_names` says which
@@ -65,6 +91,10 @@ struct RewriteContext(Copyable, Movable):
     var ordered_fields: Dict[String, List[String]]
     var world_methods: Dict[String, List[String]]
     var stats_fields: Dict[String, List[String]]
+    var key_group_lookup_names: Dict[String, List[String]]
+    var struct_fields: Dict[String, List[Field]]
+    var struct_key_groups: Dict[String, List[List[String]]]
+    var struct_method_body: Dict[String, String]
     var plain_struct_names: Dict[String, Bool]
     var plain_value_fields: Dict[String, Dict[String, String]]
     var bare_function_returns: Dict[String, String]
@@ -91,6 +121,10 @@ struct RewriteContext(Copyable, Movable):
             ordered_fields=self.ordered_fields.copy(),
             world_methods=self.world_methods.copy(),
             stats_fields=self.stats_fields.copy(),
+            key_group_lookup_names=self.key_group_lookup_names.copy(),
+            struct_fields=self.struct_fields.copy(),
+            struct_key_groups=self.struct_key_groups.copy(),
+            struct_method_body=self.struct_method_body.copy(),
             plain_struct_names=self.plain_struct_names.copy(),
             plain_value_fields=self.plain_value_fields.copy(),
             bare_function_returns=self.bare_function_returns.copy(),
