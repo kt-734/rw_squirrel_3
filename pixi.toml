@@ -11,4 +11,4 @@ test = "mojo run -I src -I test test/test_id_allocator.mojo && mojo run -I src -
 build = { cmd = "mojo build -I src -o squirrelc src/main.mojo" }
 
 [dependencies]
-mojo = ">=1.0.0b3.dev2026071405,<2"
+mojo = ">=1.0.0b3.dev2026072806,<2"

@@ -158,21 +158,28 @@ struct Construct(Copyable, Movable):
 
 @fieldwise_init
 struct AccessStep(Copyable, Movable):
-    """One `.field`/`.@@field`/`.@@@field`/`[index]` segment inside a
-    `@@entity<steps...>` access chain (plain-structs milestone's general
-    recursive access-chain redesign -- see the plan's Revision 3). A chain
-    is just `List[AccessStep]`; there is no fixed depth and no special-
-    cased "bare indexed reference" shape any more -- `@@matches[0]` is
-    simply `steps == [AccessStep(kind=INDEX, ...)]`.
+    """One `.field`/`.@@field`/`.@@@field`/`[index]`/`.(Type)` segment
+    inside a `@@entity<steps...>` access chain (plain-structs milestone's
+    general recursive access-chain redesign -- see the plan's Revision 3).
+    A chain is just `List[AccessStep]`; there is no fixed depth and no
+    special-cased "bare indexed reference" shape any more -- `@@matches[0]`
+    is simply `steps == [AccessStep(kind=INDEX, ...)]`.
 
-    `kind` is `FIELD` or `INDEX`. For `FIELD`, `name` is the identifier
-    (a compound marked-call suffix like `add_to_@@projects` is still
-    combined into one segment/one step here, exactly as today -- that
-    stays a same-segment scanning concern, not a separate step kind).
+    `kind` is `FIELD`, `INDEX`, or `CAST`. For `FIELD`, `name` is the
+    identifier (a compound marked-call suffix like `add_to_@@projects` is
+    still combined into one segment/one step here, exactly as today --
+    that stays a same-segment scanning concern, not a separate step kind).
     `marked`/`marked_world` are `FIELD`-only, meaning `.@@name`/`.@@@name`
     respectively (mutually exclusive, both false for a plain `.name`).
     For `INDEX`, `name` holds the raw, unparsed bracket-interior text, and
-    `marked`/`marked_world` are always false.
+    `marked`/`marked_world` are always false. For `CAST` (`.( @@Type )` --
+    re-pointing the walk's own `current_type` mid-chain to a type the
+    scanner/walker couldn't otherwise infer, e.g. right after a generic
+    method call like `Variant.unsafe_get[T]()`), `name` holds the raw type
+    text between the parens, `@@` marking preserved exactly as written (so
+    the walker can strip it the same way any other type position does);
+    `marked`/`marked_world` are always false here too -- the type text's
+    own marking is what matters, not a marker on the `CAST` step itself.
 
     `end_pos` is pure scan-time bookkeeping -- the byte offset in the
     source immediately after this step's own token. It is never compared
@@ -183,6 +190,7 @@ struct AccessStep(Copyable, Movable):
 
     comptime FIELD = 0
     comptime INDEX = 1
+    comptime CAST = 2
 
     var kind: Int
     var name: String
@@ -195,6 +203,9 @@ struct AccessStep(Copyable, Movable):
 
     def is_index(self) -> Bool:
         return self.kind == Self.INDEX
+
+    def is_cast(self) -> Bool:
+        return self.kind == Self.CAST
 
 
 @fieldwise_init

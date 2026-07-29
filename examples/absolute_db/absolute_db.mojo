@@ -483,10 +483,8 @@ struct sqrrl__IssueInner(Movable, ImplicitlyDeletable):
     var _title: Optional[String]
     var _sqrrl__source: Variant[sqrrl__SourceArcPart, sqrrl__Series]
     var _no: Int
-    var _owned: Bool
 
     def __del__(deinit self):
-        self._table[].indexes.owned.remove(self._id, self._owned)
         self._table[].free_id(self._id)
         self._table[].clear_weak_ref(self._id)
 
@@ -499,11 +497,6 @@ struct sqrrl__IssueInner(Movable, ImplicitlyDeletable):
     def set_no(mut self, v: Int):
         self._no = v
 
-    def set_owned(mut self, v: Bool):
-        self._table[].indexes.owned.remove(self._id, self._owned)
-        self._owned = v
-        self._table[].indexes.owned.add(self._id, self._owned)
-
     @always_inline
     def get_title(self) -> ref [self._title] Optional[String]:
         return self._title
@@ -515,10 +508,6 @@ struct sqrrl__IssueInner(Movable, ImplicitlyDeletable):
     @always_inline
     def get_no(self) -> ref [self._no] Int:
         return self._no
-
-    @always_inline
-    def get_owned(self) -> ref [self._owned] Bool:
-        return self._owned
 
 
 struct sqrrl__Issue(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable, sqrrl___JsonSerializable):
@@ -553,10 +542,8 @@ struct sqrrl__Issue(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable
 
 
 struct sqrrl__IssueIndexes(Movable, ImplicitlyDeletable):
-    var owned: PlainIndex[Bool]
-
     def __init__(out self):
-        self.owned = PlainIndex[Bool]()
+        pass
 
 
 struct sqrrl__IssueTable(Movable):
@@ -565,11 +552,10 @@ struct sqrrl__IssueTable(Movable):
     def __init__(out self):
         self.storage = ArcPointer(EntityStorage[sqrrl__IssueIndexes, sqrrl__IssueInner](sqrrl__IssueIndexes()))
 
-    def create(mut self, *, var title: Optional[String], var sqrrl__source: Variant[sqrrl__SourceArcPart, sqrrl__Series], no: Int, owned: Bool) -> sqrrl__Issue:
+    def create(mut self, *, var title: Optional[String], var sqrrl__source: Variant[sqrrl__SourceArcPart, sqrrl__Series], no: Int) -> sqrrl__Issue:
         var id = self.storage[].alloc_id()
-        var inner = ArcPointer(sqrrl__IssueInner(_id=id, _table=self.storage, _title=title^, _sqrrl__source=sqrrl__source^, _no=no, _owned=owned))
+        var inner = ArcPointer(sqrrl__IssueInner(_id=id, _table=self.storage, _title=title^, _sqrrl__source=sqrrl__source^, _no=no))
         self.storage[].register_weak(id, inner)
-        self.storage[].indexes.owned.add(id, inner[]._owned)
         self.storage[].keepalive_add(id, inner.copy())
         return sqrrl__Issue(inner^)
 
@@ -582,39 +568,6 @@ struct sqrrl__IssueTable(Movable):
     def count(self) -> Int:
         return self.storage[].live_count()
 
-    def for_owned(self, value: Bool) -> Set[sqrrl__Issue]:
-        var out = Set[sqrrl__Issue]()
-        for id in self.storage[].indexes.owned.get_bwd(value):
-            out.add(sqrrl__Issue(self.storage[].handle_for(id)))
-        return out^
-
-    def count_for_owned(self, value: Bool) -> Int:
-        return len(self.storage[].indexes.owned.get_bwd(value))
-
-    def group_by_owned(self) -> Dict[Bool, Set[sqrrl__Issue]]:
-        ref buckets = self.storage[].indexes.owned.all_bwd()
-        var out = Dict[Bool, Set[sqrrl__Issue]]()
-        for entry in buckets.items():
-            var handles = Set[sqrrl__Issue]()
-            for id in entry.value:
-                handles.add(sqrrl__Issue(self.storage[].handle_for(id)))
-            out[entry.key] = handles^
-        return out^
-
-    def count_by_owned(self) -> Dict[Bool, Int]:
-        ref buckets = self.storage[].indexes.owned.all_bwd()
-        var out = Dict[Bool, Int]()
-        for entry in buckets.items():
-            out[entry.key] = len(entry.value)
-        return out^
-
-    def distinct_owned(self) -> Set[Bool]:
-        var out = Set[Bool]()
-        ref buckets = self.storage[].indexes.owned.all_bwd()
-        for key in buckets.keys():
-            out.add(key.copy())
-        return out^
-
 @fieldwise_init
 struct sqrrl__VolumeInner(Movable, ImplicitlyDeletable):
     var _id: UInt32
@@ -622,11 +575,9 @@ struct sqrrl__VolumeInner(Movable, ImplicitlyDeletable):
     var _sqrrl__source: Variant[sqrrl__Arc, sqrrl__VolumeSeries]
     var _sqrrl__issues: Set[sqrrl__Issue]
     var _no: Int
-    var _owned: Bool
 
     def __del__(deinit self):
         self._table[].indexes.issues.remove_many(self._id, self._sqrrl__issues)
-        self._table[].indexes.owned.remove(self._id, self._owned)
         self._table[].free_id(self._id)
         self._table[].clear_weak_ref(self._id)
 
@@ -656,11 +607,6 @@ struct sqrrl__VolumeInner(Movable, ImplicitlyDeletable):
     def set_no(mut self, v: Int):
         self._no = v
 
-    def set_owned(mut self, v: Bool):
-        self._table[].indexes.owned.remove(self._id, self._owned)
-        self._owned = v
-        self._table[].indexes.owned.add(self._id, self._owned)
-
     @always_inline
     def get_sqrrl__source(self) -> ref [self._sqrrl__source] Variant[sqrrl__Arc, sqrrl__VolumeSeries]:
         return self._sqrrl__source
@@ -672,10 +618,6 @@ struct sqrrl__VolumeInner(Movable, ImplicitlyDeletable):
     @always_inline
     def get_no(self) -> ref [self._no] Int:
         return self._no
-
-    @always_inline
-    def get_owned(self) -> ref [self._owned] Bool:
-        return self._owned
 
 
 struct sqrrl__Volume(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable, sqrrl___JsonSerializable):
@@ -711,11 +653,9 @@ struct sqrrl__Volume(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletabl
 
 struct sqrrl__VolumeIndexes(Movable, ImplicitlyDeletable):
     var issues: MultiIndex[sqrrl__Issue]
-    var owned: PlainIndex[Bool]
 
     def __init__(out self):
         self.issues = MultiIndex[sqrrl__Issue]()
-        self.owned = PlainIndex[Bool]()
 
 
 struct sqrrl__VolumeTable(Movable):
@@ -724,12 +664,11 @@ struct sqrrl__VolumeTable(Movable):
     def __init__(out self):
         self.storage = ArcPointer(EntityStorage[sqrrl__VolumeIndexes, sqrrl__VolumeInner](sqrrl__VolumeIndexes()))
 
-    def create(mut self, *, var sqrrl__source: Variant[sqrrl__Arc, sqrrl__VolumeSeries], var sqrrl__issues: Set[sqrrl__Issue] = Set[sqrrl__Issue](), no: Int, owned: Bool) -> sqrrl__Volume:
+    def create(mut self, *, var sqrrl__source: Variant[sqrrl__Arc, sqrrl__VolumeSeries], var sqrrl__issues: Set[sqrrl__Issue] = Set[sqrrl__Issue](), no: Int) -> sqrrl__Volume:
         var id = self.storage[].alloc_id()
-        var inner = ArcPointer(sqrrl__VolumeInner(_id=id, _table=self.storage, _sqrrl__source=sqrrl__source^, _sqrrl__issues=sqrrl__issues^, _no=no, _owned=owned))
+        var inner = ArcPointer(sqrrl__VolumeInner(_id=id, _table=self.storage, _sqrrl__source=sqrrl__source^, _sqrrl__issues=sqrrl__issues^, _no=no))
         self.storage[].register_weak(id, inner)
         self.storage[].indexes.issues.add_many(id, inner[]._sqrrl__issues)
-        self.storage[].indexes.owned.add(id, inner[]._owned)
         self.storage[].keepalive_add(id, inner.copy())
         return sqrrl__Volume(inner^)
 
@@ -745,12 +684,6 @@ struct sqrrl__VolumeTable(Movable):
     def for_sqrrl__issues(self, value: sqrrl__Issue) -> Set[sqrrl__Volume]:
         var out = Set[sqrrl__Volume]()
         for id in self.storage[].indexes.issues.get_bwd(value):
-            out.add(sqrrl__Volume(self.storage[].handle_for(id)))
-        return out^
-
-    def for_owned(self, value: Bool) -> Set[sqrrl__Volume]:
-        var out = Set[sqrrl__Volume]()
-        for id in self.storage[].indexes.owned.get_bwd(value):
             out.add(sqrrl__Volume(self.storage[].handle_for(id)))
         return out^
 
@@ -781,30 +714,119 @@ struct sqrrl__VolumeTable(Movable):
             out.add(key.copy())
         return out^
 
-    def count_for_owned(self, value: Bool) -> Int:
-        return len(self.storage[].indexes.owned.get_bwd(value))
+# Ownership as its own entity, not a flag on @@Issue/@@Volume directly --
+# existence of a matching row *is* "owned"; there's no explicit "not
+# owned" state to maintain. `unique item` enforces at most one @@Owned row
+# per Issue/Volume (can't double-own the same item), and its own
+# Variant[@@Volume, @@Issue] lets one table cover both ownable kinds.
+# `keepalive` because nothing else ever holds a forward reference *to* an
+# @@Owned row (it only ever points *at* an Issue/Volume, never the other
+# way) -- unlike @@Series/@@Publisher/@@Arc, which stay alive transitively
+# through @@Issue's own forward fields, an @@Owned row's only chance of
+# surviving past its own local variable's last use is this tag.
+@fieldwise_init
+struct sqrrl__OwnedInner(Movable, ImplicitlyDeletable):
+    var _id: UInt32
+    var _table: ArcPointer[EntityStorage[sqrrl__OwnedIndexes, sqrrl__OwnedInner]]
+    var _sqrrl__item: Variant[sqrrl__Volume, sqrrl__Issue]
 
-    def group_by_owned(self) -> Dict[Bool, Set[sqrrl__Volume]]:
-        ref buckets = self.storage[].indexes.owned.all_bwd()
-        var out = Dict[Bool, Set[sqrrl__Volume]]()
-        for entry in buckets.items():
-            var handles = Set[sqrrl__Volume]()
-            for id in entry.value:
-                handles.add(sqrrl__Volume(self.storage[].handle_for(id)))
-            out[entry.key] = handles^
+    def __del__(deinit self):
+        self._table[].indexes.item.remove(self._id, self._sqrrl__item)
+        self._table[].free_id(self._id)
+        self._table[].clear_weak_ref(self._id)
+
+    def set_sqrrl__item(mut self, v: Variant[sqrrl__Volume, sqrrl__Issue]) raises:
+        self._table[].indexes.item.check_unique(v, self._id)
+        self._table[].indexes.item.remove(self._id, self._sqrrl__item)
+        self._sqrrl__item = v
+        self._table[].indexes.item.add(self._id, self._sqrrl__item)
+
+    @always_inline
+    def get_sqrrl__item(self) -> ref [self._sqrrl__item] Variant[sqrrl__Volume, sqrrl__Issue]:
+        return self._sqrrl__item
+
+
+struct sqrrl__Owned(Hashable, Equatable, ImplicitlyCopyable, ImplicitlyDeletable, sqrrl___JsonSerializable):
+    var _inner: ArcPointer[sqrrl__OwnedInner]
+
+    def __init__(out self, var inner: sqrrl__OwnedInner):
+        self._inner = ArcPointer(inner^)
+
+    def __init__(out self, var inner: ArcPointer[sqrrl__OwnedInner]):
+        self._inner = inner^
+
+    def id(self) -> UInt32:
+        return self._inner[]._id
+
+    def ref_count(self) -> Int:
+        return Int(self._inner.count())
+
+    def __hash__[H: Hasher](self, mut hasher: H):
+        hasher.update(self.id())
+
+    def __eq__(self, other: Self) -> Bool:
+        return self.id() == other.id()
+
+    def __ne__(self, other: Self) -> Bool:
+        return self.id() != other.id()
+
+    def sqrrl__to_json(self) -> String:
+        return String(self.id())
+
+    def dont_keepalive(mut self) -> Bool:
+        return self._inner[]._table[].keepalive_remove(self.id())
+
+
+struct sqrrl__OwnedIndexes(Movable, ImplicitlyDeletable):
+    var item: UniqueIndex[Variant[sqrrl__Volume, sqrrl__Issue]]
+
+    def __init__(out self):
+        self.item = UniqueIndex[Variant[sqrrl__Volume, sqrrl__Issue]]()
+
+
+struct sqrrl__OwnedTable(Movable):
+    var storage: ArcPointer[EntityStorage[sqrrl__OwnedIndexes, sqrrl__OwnedInner]]
+
+    def __init__(out self):
+        self.storage = ArcPointer(EntityStorage[sqrrl__OwnedIndexes, sqrrl__OwnedInner](sqrrl__OwnedIndexes()))
+
+    def create(mut self, *, var sqrrl__item: Variant[sqrrl__Volume, sqrrl__Issue]) raises -> sqrrl__Owned:
+        if self.storage[].indexes.item.contains(sqrrl__item):
+            raise Error("UniqueConstraintViolation: 'item' already in use by another entity")
+        var id = self.storage[].alloc_id()
+        var inner = ArcPointer(sqrrl__OwnedInner(_id=id, _table=self.storage, _sqrrl__item=sqrrl__item^))
+        self.storage[].register_weak(id, inner)
+        self.storage[].indexes.item.add(id, inner[]._sqrrl__item)
+        self.storage[].keepalive_add(id, inner.copy())
+        return sqrrl__Owned(inner^)
+
+    def all(self) -> Set[sqrrl__Owned]:
+        var out = Set[sqrrl__Owned]()
+        for id in self.storage[].all():
+            out.add(sqrrl__Owned(self.storage[].handle_for(id)))
         return out^
 
-    def count_by_owned(self) -> Dict[Bool, Int]:
-        ref buckets = self.storage[].indexes.owned.all_bwd()
-        var out = Dict[Bool, Int]()
-        for entry in buckets.items():
-            out[entry.key] = len(entry.value)
+    def count(self) -> Int:
+        return self.storage[].live_count()
+
+    def for_sqrrl__item(self, value: Variant[sqrrl__Volume, sqrrl__Issue]) raises -> sqrrl__Owned:
+        var id = self.storage[].indexes.item.get_bwd(value)
+        return sqrrl__Owned(self.storage[].handle_for(id))
+
+    def count_for_sqrrl__item(self, value: Variant[sqrrl__Volume, sqrrl__Issue]) -> Int:
+        return 1 if self.storage[].indexes.item.contains(value) else 0
+
+    def group_by_sqrrl__item(self) -> Dict[Variant[sqrrl__Volume, sqrrl__Issue], sqrrl__Owned]:
+        ref ids = self.storage[].indexes.item.all_bwd()
+        var out = Dict[Variant[sqrrl__Volume, sqrrl__Issue], sqrrl__Owned]()
+        for entry in ids.items():
+            out[entry.key] = sqrrl__Owned(self.storage[].handle_for(entry.value))
         return out^
 
-    def distinct_owned(self) -> Set[Bool]:
-        var out = Set[Bool]()
-        ref buckets = self.storage[].indexes.owned.all_bwd()
-        for key in buckets.keys():
+    def distinct_sqrrl__item(self) -> Set[Variant[sqrrl__Volume, sqrrl__Issue]]:
+        var out = Set[Variant[sqrrl__Volume, sqrrl__Issue]]()
+        ref ids = self.storage[].indexes.item.all_bwd()
+        for key in ids.keys():
             out.add(key.copy())
         return out^
 
@@ -850,33 +872,41 @@ def main() raises:
 
 
 
-        var sqrrl__issue = sqrrl___world.Issue.create(title = "Issue 1", sqrrl__source = Variant[sqrrl__SourceArcPart, sqrrl__Series](sqrrl___world.SourceArcPart.create(sqrrl__arc = sqrrl__arc, part = "The part")), no = 1, owned = True)
+        var sqrrl__issue = sqrrl___world.Issue.create(title = "Issue 1", sqrrl__source = Variant[sqrrl__SourceArcPart, sqrrl__Series](sqrrl___world.SourceArcPart.create(sqrrl__arc = sqrrl__arc, part = "The part")), no = 1)
         print("issue number:", sqrrl__issue._inner[]._no)
+        var sqrrl__issue_owned = sqrrl___world.Owned.create(sqrrl__item = Variant[sqrrl__Volume, sqrrl__Issue](sqrrl__issue))
+        print("issue owned:", sqrrl__issue_owned._inner[]._sqrrl__item.isa[sqrrl__Issue]())
 
-        # A collection tracker needs wishlist items too -- catalogued, not
-        # (yet) owned.
-        var sqrrl__issue2 = sqrrl___world.Issue.create(title = "Issue 2", sqrrl__source = Variant[sqrrl__SourceArcPart, sqrrl__Series](sqrrl___world.SourceArcPart.create(sqrrl__arc = sqrrl__arc, part = "The other part")), no = 2, owned = False)
-        print("issues owned:", sqrrl___world.Issue.count_for_owned(True))
-        print("issues on wishlist:", sqrrl___world.Issue.count_for_owned(False))
+        # A collection tracker needs wishlist items too -- catalogued, no
+        # matching @@Owned row (yet).
+        var sqrrl__issue2 = sqrrl___world.Issue.create(title = "Issue 2", sqrrl__source = Variant[sqrrl__SourceArcPart, sqrrl__Series](sqrrl___world.SourceArcPart.create(sqrrl__arc = sqrrl__arc, part = "The other part")), no = 2)
+        print("issue 1 owned:", sqrrl___world.Owned.count_for_sqrrl__item(Variant[sqrrl__Volume, sqrrl__Issue](sqrrl__issue)) > 0)
+        print("issue 2 owned:", sqrrl___world.Owned.count_for_sqrrl__item(Variant[sqrrl__Volume, sqrrl__Issue](sqrrl__issue2)) > 0)
 
         # @@Volume ties a single-book-or-series source (Variant[@@Arc,
         # @@VolumeSeries]) together with the issues collected under it
         # (multi @@issues) -- here sourced from the VolumeSeries created
         # above.
-        var _ = sqrrl___world.Volume.create(sqrrl__source = Variant[sqrrl__Arc, sqrrl__VolumeSeries](sqrrl__volume), sqrrl__issues = Set(sqrrl__issue), no = 1, owned = True)
-        var sqrrl__volume_wishlist = sqrrl___world.Volume.create(sqrrl__source = Variant[sqrrl__Arc, sqrrl__VolumeSeries](sqrrl__volume), sqrrl__issues = Set(sqrrl__issue), no = 2, owned = False)
+        var sqrrl__vol1 = sqrrl___world.Volume.create(sqrrl__source = Variant[sqrrl__Arc, sqrrl__VolumeSeries](sqrrl__volume), sqrrl__issues = Set(sqrrl__issue), no = 1)
+        var sqrrl__volume_wishlist = sqrrl___world.Volume.create(sqrrl__source = Variant[sqrrl__Arc, sqrrl__VolumeSeries](sqrrl__volume), sqrrl__issues = Set(sqrrl__issue), no = 2)
+        var sqrrl__vol1_owned = sqrrl___world.Owned.create(sqrrl__item = Variant[sqrrl__Volume, sqrrl__Issue](sqrrl__vol1))
         print("book volume issue count:", sqrrl___world.Volume.count_for_sqrrl__issues(sqrrl__issue))
-        print("volumes owned:", sqrrl___world.Volume.count_for_owned(True))
+        print("total owned items:", sqrrl___world.Owned.count())
 
-        # Marking a wishlist volume as acquired -- an ordinary field write,
-        # same as any other non-key field.
-        sqrrl__volume_wishlist._inner[].set_owned(True);
-        print("volumes owned after acquiring the wishlist copy:", sqrrl___world.Volume.count_for_owned(True))
+        # Acquiring a wishlist volume -- creating its own @@Owned row, not
+        # flipping a flag; there's nothing to "un-acquire" to, since not
+        # owning something is just the absence of a row.
+        var sqrrl__volume_wishlist_owned = sqrrl___world.Owned.create(sqrrl__item = Variant[sqrrl__Volume, sqrrl__Issue](sqrrl__volume_wishlist))
+        print("total owned items after acquiring the wishlist copy:", sqrrl___world.Owned.count())
 
+        var no = sqrrl__vol1_owned._inner[]._sqrrl__item.unsafe_get[sqrrl__Volume]()._inner[]._no
         print(
             "keep alive:",
             sqrrl__series._inner[]._title, sqrrl__volume._inner[]._title, sqrrl__volume2._inner[]._title,
             sqrrl__found_volume._inner[]._title, sqrrl__arc._inner[]._title, sqrrl__issue._inner[]._no, sqrrl__issue2._inner[]._no,
+            sqrrl__issue_owned._inner[]._sqrrl__item.isa[sqrrl__Issue](), sqrrl__vol1_owned._inner[]._sqrrl__item.isa[sqrrl__Volume](),
+            sqrrl__volume_wishlist_owned._inner[]._sqrrl__item.isa[sqrrl__Volume](),
+            no
         )
 
         var s = sqrrl___world_to_json(sqrrl___world)

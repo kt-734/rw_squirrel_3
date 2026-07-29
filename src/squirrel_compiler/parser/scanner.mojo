@@ -1620,10 +1620,44 @@ struct Scanner(Movable):
                         kind = MarkerKind.NAME_REF
                     self.pos = save_colon
                 elif self.peek() == UInt8(ord("]")):
-                    if is_after_container_bracket(self.source, marker_start):
+                    # A generic method call's own type argument (`h.
+                    # source.unsafe_get[@@Type]`) is *also* `Ident[...]`-
+                    # shaped, so it'd otherwise match the plain-rename
+                    # `is_after_container_bracket` case below same as an
+                    # ordinary container's own type argument -- fine on
+                    # its own, but if a cast follows later in the same
+                    # chain (`.unsafe_get[@@Type]().( @@Type )`), that
+                    # cast's own rewind needs the *whole* chain, starting
+                    # from here, recognized as one `FIELD_ACCESS` so `_
+                    # walk_access_chain` sees the call and the cast as
+                    # sibling steps of the same walk rather than two
+                    # independently-emitted fragments. `bare_root_before_
+                    # dot` disambiguates the two: it only resolves here
+                    # when the identifier right before `[` is itself
+                    # preceded by `.` (true for `unsafe_get[`, never true
+                    # for a bare container type's own name at the start
+                    # of a declaration).
+                    var bare_root_start = bare_root_before_dot(self.source, marker_start)
+                    if bare_root_start >= 0:
+                        kind = MarkerKind.FIELD_ACCESS
+                        marker_start = bare_root_start
+                    elif is_after_container_bracket(self.source, marker_start):
                         kind = MarkerKind.RETURN_TYPE
                     else:
                         kind = MarkerKind.NAME_REF
+                elif self.peek() == UInt8(ord(")")) and bare_root_before_dot(self.source, marker_start) >= 0:
+                    # A cast's own type, immediately before its closing
+                    # `)` (`.( @@Type )`) -- the marked type itself is
+                    # otherwise indistinguishable from an ordinary call
+                    # argument (`foo(@@bar)`, also followed by `)`);
+                    # `bare_root_before_dot` is what actually tells them
+                    # apart (only resolves when a `.` sits directly
+                    # before the opening `(`, whitespace aside -- never
+                    # true for an ordinary call's own name). Same
+                    # widen-to-the-chain's-root reasoning as the `]`
+                    # branch above.
+                    kind = MarkerKind.FIELD_ACCESS
+                    marker_start = bare_root_before_dot(self.source, marker_start)
                 elif self.peek() == UInt8(ord(",")) and is_after_container_bracket(self.source, marker_start):
                     kind = MarkerKind.RETURN_TYPE
                 elif (
@@ -1936,6 +1970,23 @@ struct Scanner(Movable):
                 break
             self.pos += 1  # consume '.'
             self.skip_trivia()
+            if self.try_consume("("):
+                # `.( @@Type )` -- a cast, re-pointing the walk's own
+                # `current_type` to something the walker couldn't
+                # otherwise infer (typically right after a generic method
+                # call like `Variant.unsafe_get[T]()`). Never terminal --
+                # unlike `.@@@name`, the chain is expected to keep going
+                # after a cast (a cast with nothing after it is legal but
+                # pointless, not a special case here).
+                var cast_type = self.scan_bracket_depth_aware_span(")")
+                if cast_type.byte_length() == 0:
+                    raise self.err("InvalidSquirrelSyntax: expected a type inside '.( )'")
+                if not self.try_consume(")"):
+                    raise self.err("InvalidSquirrelSyntax: expected ')' to close '.(" + cast_type + "'")
+                steps.append(
+                    AccessStep(kind=AccessStep.CAST, name=cast_type, marked=False, marked_world=False, end_pos=self.pos)
+                )
+                continue
             if self.try_consume("@@@"):
                 # `.@@@name` -- call-site symmetry with a spliced method's
                 # own `@@@`-marked declaration (needs `sqrrl___world`).

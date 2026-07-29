@@ -15,7 +15,7 @@ struct Ring[T: Copyable & ImplicitlyDeletable](Movable, ImplicitlyDeletable):
 
     var items: List[Self.T]
 
-    def __getitem__(self, i: Int) -> ref [self.items] Self.T:
+    def __getitem__(self, i: Int) -> ref [self.items[i]] Self.T:
         return self.items[i]
 
 

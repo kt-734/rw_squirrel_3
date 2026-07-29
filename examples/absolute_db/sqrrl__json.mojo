@@ -10,6 +10,7 @@ from absolute_db import sqrrl__Arc, sqrrl__ArcInner, sqrrl__ArcTable
 from absolute_db import sqrrl__SourceArcPart, sqrrl__SourceArcPartInner, sqrrl__SourceArcPartTable
 from absolute_db import sqrrl__Issue, sqrrl__IssueInner, sqrrl__IssueTable
 from absolute_db import sqrrl__Volume, sqrrl__VolumeInner, sqrrl__VolumeTable
+from absolute_db import sqrrl__Owned, sqrrl__OwnedInner, sqrrl__OwnedTable
 
 
 def sqrrl__List_to_json[T: Movable](value: List[T], world: sqrrl___World) -> String:
@@ -141,6 +142,12 @@ def sqrrl__to_json[T: AnyType](value: T, world: sqrrl___World) -> String:
         return sqrrl__Variant_to_json(rebind[Variant[sqrrl__Arc, sqrrl__VolumeSeries]](value), world)
     elif T == sqrrl__VolumeSeries:
         return String(rebind[sqrrl__VolumeSeries](value).id())
+    elif T == Variant[sqrrl__Volume, sqrrl__Issue]:
+        return sqrrl__Variant_to_json(rebind[Variant[sqrrl__Volume, sqrrl__Issue]](value), world)
+    elif T == sqrrl__Volume:
+        return String(rebind[sqrrl__Volume](value).id())
+    elif T == sqrrl__Issue:
+        return String(rebind[sqrrl__Issue](value).id())
     else:
         return sqrrl__to_json_default(value)
 
@@ -164,6 +171,12 @@ def sqrrl__from_json[T: Movable & ImplicitlyDeletable](mut sc: sqrrl___JsonScann
         return sqrrl__movable_rebind[Variant[sqrrl__Arc, sqrrl__VolumeSeries], T](sqrrl__Variant_from_json[sqrrl__Arc, sqrrl__VolumeSeries](sc, world))
     elif T == sqrrl__VolumeSeries:
         return sqrrl__movable_rebind[sqrrl__VolumeSeries, T](sqrrl__VolumeSeries(world.VolumeSeries.storage[].handle_for(UInt32(sc.parse_json_int()))))
+    elif T == Variant[sqrrl__Volume, sqrrl__Issue]:
+        return sqrrl__movable_rebind[Variant[sqrrl__Volume, sqrrl__Issue], T](sqrrl__Variant_from_json[sqrrl__Volume, sqrrl__Issue](sc, world))
+    elif T == sqrrl__Volume:
+        return sqrrl__movable_rebind[sqrrl__Volume, T](sqrrl__Volume(world.Volume.storage[].handle_for(UInt32(sc.parse_json_int()))))
+    elif T == sqrrl__Issue:
+        return sqrrl__movable_rebind[sqrrl__Issue, T](sqrrl__Issue(world.Issue.storage[].handle_for(UInt32(sc.parse_json_int()))))
     else:
         return sqrrl__from_json_default[T](sc)
 
@@ -511,9 +524,6 @@ def sqrrl__Issue_to_json(e: sqrrl__Issue, world: sqrrl___World) -> String:
     out += ","
     out += '"no":'
     out += sqrrl__to_json(e._inner[].get_no(), world)
-    out += ","
-    out += '"owned":'
-    out += sqrrl__to_json(e._inner[].get_owned(), world)
     out += "}"
     return out^
 
@@ -521,7 +531,6 @@ def sqrrl__Issue_from_json_with_id(table: sqrrl__IssueTable, world: sqrrl___Worl
     var parsed_title: Optional[Optional[String]] = None
     var parsed_source: Optional[Variant[sqrrl__SourceArcPart, sqrrl__Series]] = None
     var parsed_no: Optional[Int] = None
-    var parsed_owned: Optional[Bool] = None
     sc.expect_byte(UInt8(ord("{")))
     if not sc.try_consume_byte(UInt8(ord("}"))):
         while True:
@@ -533,8 +542,6 @@ def sqrrl__Issue_from_json_with_id(table: sqrrl__IssueTable, world: sqrrl___Worl
                 parsed_source = sqrrl__Variant_from_json[sqrrl__SourceArcPart, sqrrl__Series](sc, world)
             elif key == "no":
                 parsed_no = Int(sc.parse_json_int())
-            elif key == "owned":
-                parsed_owned = sc.parse_json_bool()
             else:
                 raise Error("InvalidJson: unknown field " + key + " for Issue")
             if not sc.try_consume_byte(UInt8(ord(","))):
@@ -546,16 +553,12 @@ def sqrrl__Issue_from_json_with_id(table: sqrrl__IssueTable, world: sqrrl___Worl
         raise Error("InvalidJson: missing field source for Issue")
     if not parsed_no:
         raise Error("InvalidJson: missing field no for Issue")
-    if not parsed_owned:
-        raise Error("InvalidJson: missing field owned for Issue")
     table.storage[].alloc_specific_id(id)
     var v_title = parsed_title.take()
     var v_source = parsed_source.take()
     var v_no = parsed_no.value()
-    var v_owned = parsed_owned.value()
-    var inner = ArcPointer(sqrrl__IssueInner(_id=id, _table=table.storage, _title=v_title^, _sqrrl__source=v_source^, _no=v_no, _owned=v_owned))
+    var inner = ArcPointer(sqrrl__IssueInner(_id=id, _table=table.storage, _title=v_title^, _sqrrl__source=v_source^, _no=v_no))
     table.storage[].register_weak(id, inner)
-    table.storage[].indexes.owned.add(id, inner[]._owned)
     table.storage[].keepalive_add(id, inner.copy())
     return sqrrl__Issue(inner^)
 
@@ -604,9 +607,6 @@ def sqrrl__Volume_to_json(e: sqrrl__Volume, world: sqrrl___World) -> String:
     out += ","
     out += '"no":'
     out += sqrrl__to_json(e._inner[].get_no(), world)
-    out += ","
-    out += '"owned":'
-    out += sqrrl__to_json(e._inner[].get_owned(), world)
     out += "}"
     return out^
 
@@ -614,7 +614,6 @@ def sqrrl__Volume_from_json_with_id(table: sqrrl__VolumeTable, world: sqrrl___Wo
     var parsed_source: Optional[Variant[sqrrl__Arc, sqrrl__VolumeSeries]] = None
     var parsed_issues: Optional[Set[sqrrl__Issue]] = None
     var parsed_no: Optional[Int] = None
-    var parsed_owned: Optional[Bool] = None
     sc.expect_byte(UInt8(ord("{")))
     if not sc.try_consume_byte(UInt8(ord("}"))):
         while True:
@@ -635,8 +634,6 @@ def sqrrl__Volume_from_json_with_id(table: sqrrl__VolumeTable, world: sqrrl___Wo
                 parsed_issues = mset^
             elif key == "no":
                 parsed_no = Int(sc.parse_json_int())
-            elif key == "owned":
-                parsed_owned = sc.parse_json_bool()
             else:
                 raise Error("InvalidJson: unknown field " + key + " for Volume")
             if not sc.try_consume_byte(UInt8(ord(","))):
@@ -648,17 +645,13 @@ def sqrrl__Volume_from_json_with_id(table: sqrrl__VolumeTable, world: sqrrl___Wo
         raise Error("InvalidJson: missing field issues for Volume")
     if not parsed_no:
         raise Error("InvalidJson: missing field no for Volume")
-    if not parsed_owned:
-        raise Error("InvalidJson: missing field owned for Volume")
     table.storage[].alloc_specific_id(id)
     var v_source = parsed_source.take()
     var v_issues = parsed_issues.take()
     var v_no = parsed_no.value()
-    var v_owned = parsed_owned.value()
-    var inner = ArcPointer(sqrrl__VolumeInner(_id=id, _table=table.storage, _sqrrl__source=v_source^, _sqrrl__issues=v_issues^, _no=v_no, _owned=v_owned))
+    var inner = ArcPointer(sqrrl__VolumeInner(_id=id, _table=table.storage, _sqrrl__source=v_source^, _sqrrl__issues=v_issues^, _no=v_no))
     table.storage[].register_weak(id, inner)
     table.storage[].indexes.issues.add_many(id, inner[]._sqrrl__issues)
-    table.storage[].indexes.owned.add(id, inner[]._owned)
     table.storage[].keepalive_add(id, inner.copy())
     return sqrrl__Volume(inner^)
 
@@ -682,6 +675,64 @@ def sqrrl__Volume_all_from_json(table: sqrrl__VolumeTable, world: sqrrl___World,
             var eid = UInt32(sc.parse_json_int())
             sc.expect_byte(UInt8(ord(",")))
             var e = sqrrl__Volume_from_json_with_id(table, world, eid, sc)
+            sc.expect_byte(UInt8(ord("]")))
+            _ = e
+            if not sc.try_consume_byte(UInt8(ord(","))):
+                break
+        sc.expect_byte(UInt8(ord("]")))
+
+def sqrrl__Owned_to_json(e: sqrrl__Owned, world: sqrrl___World) -> String:
+    var out = String("{")
+    out += '"item":'
+    ref fv_item = e._inner[].get_sqrrl__item()
+    out += sqrrl__Variant_to_json(fv_item, world)
+    out += "}"
+    return out^
+
+def sqrrl__Owned_from_json_with_id(table: sqrrl__OwnedTable, world: sqrrl___World, id: UInt32, mut sc: sqrrl___JsonScanner) raises -> sqrrl__Owned:
+    var parsed_item: Optional[Variant[sqrrl__Volume, sqrrl__Issue]] = None
+    sc.expect_byte(UInt8(ord("{")))
+    if not sc.try_consume_byte(UInt8(ord("}"))):
+        while True:
+            var key = sc.parse_json_string()
+            sc.expect_byte(UInt8(ord(":")))
+            if key == "item":
+                parsed_item = sqrrl__Variant_from_json[sqrrl__Volume, sqrrl__Issue](sc, world)
+            else:
+                raise Error("InvalidJson: unknown field " + key + " for Owned")
+            if not sc.try_consume_byte(UInt8(ord(","))):
+                break
+        sc.expect_byte(UInt8(ord("}")))
+    if not parsed_item:
+        raise Error("InvalidJson: missing field item for Owned")
+    table.storage[].alloc_specific_id(id)
+    var v_item = parsed_item.take()
+    var inner = ArcPointer(sqrrl__OwnedInner(_id=id, _table=table.storage, _sqrrl__item=v_item^))
+    table.storage[].register_weak(id, inner)
+    table.storage[].indexes.item.add(id, inner[]._sqrrl__item)
+    table.storage[].keepalive_add(id, inner.copy())
+    return sqrrl__Owned(inner^)
+
+def sqrrl__Owned_all_to_json(table: sqrrl__OwnedTable, world: sqrrl___World) -> String:
+    var out = String("[")
+    var first = True
+    for id in table.storage[].all():
+        if not first:
+            out += ","
+        var e = sqrrl__Owned(table.storage[].handle_for(id))
+        out += "[" + String(id) + "," + sqrrl__Owned_to_json(e, world) + "]"
+        first = False
+    out += "]"
+    return out^
+
+def sqrrl__Owned_all_from_json(table: sqrrl__OwnedTable, world: sqrrl___World, mut sc: sqrrl___JsonScanner) raises:
+    sc.expect_byte(UInt8(ord("[")))
+    if not sc.try_consume_byte(UInt8(ord("]"))):
+        while True:
+            sc.expect_byte(UInt8(ord("[")))
+            var eid = UInt32(sc.parse_json_int())
+            sc.expect_byte(UInt8(ord(",")))
+            var e = sqrrl__Owned_from_json_with_id(table, world, eid, sc)
             sc.expect_byte(UInt8(ord("]")))
             _ = e
             if not sc.try_consume_byte(UInt8(ord(","))):
@@ -724,6 +775,9 @@ def sqrrl___world_to_json(world: sqrrl___World) -> String:
     out += ","
     out += '"Volume":'
     out += sqrrl__Volume_all_to_json(world.Volume, world)
+    out += ","
+    out += '"Owned":'
+    out += sqrrl__Owned_all_to_json(world.Owned, world)
     out += "}"
     return out^
 
@@ -747,6 +801,8 @@ def sqrrl___world_from_json(mut world: sqrrl___World, mut sc: sqrrl___JsonScanne
                 sqrrl__Issue_all_from_json(world.Issue, world, sc)
             elif key == "Volume":
                 sqrrl__Volume_all_from_json(world.Volume, world, sc)
+            elif key == "Owned":
+                sqrrl__Owned_all_from_json(world.Owned, world, sc)
             else:
                 raise Error("InvalidJson: unknown struct " + key + " in dump")
             if not sc.try_consume_byte(UInt8(ord(","))):

@@ -36,9 +36,24 @@ def sqrrl__movable_rebind[Src: Movable & ImplicitlyDeletable, Dst: Movable & Imp
     directly. (`unsafe_write` here, not the now-deprecated `init_pointee_
     move` -- re-verified via a direct spike, including the heap-owning-
     type double-free case above, that it's a safe drop-in: same placement-
-    move semantics, no warning.)"""
+    move semantics, no warning.)
+
+    `UnsafePointer(unsafe_from=...)` wraps `buf.unsafe_ptr()`'s own result
+    explicitly -- `List.unsafe_ptr()` returns a `Pointer[..., _safe=True]`
+    now, and `bitcast` is constrained `where not _safe`, so calling it
+    directly on that result raises "invalid call to 'bitcast': violated
+    constraint". `UnsafePointer(to=value)` (line below, and every other
+    `bitcast` call site in this file) already builds a `_safe=False`
+    pointer directly and needs no such wrapping -- this is specifically
+    about `List.unsafe_ptr()`'s own, newly-safer default. Specifically the
+    `unsafe_from=` keyword form, not the bare positional `UnsafePointer(p)`
+    -- confirmed via a real compile that the positional form silently picks
+    an overload that discards the origin's own mutability (`origin_of(...)`
+    in its own synthetic signature), which then fails `unsafe_write`'s own
+    `where self.origin.mut` constraint two lines down; `unsafe_from=`
+    resolves to the sibling overload that keeps `other.origin` verbatim."""
     var buf = List[Dst](unsafe_uninit_length=1)
-    var raw = buf.unsafe_ptr().bitcast[UInt8]()
+    var raw = UnsafePointer(unsafe_from=buf.unsafe_ptr()).bitcast[UInt8]()
     raw.bitcast[Src]().unsafe_write(src^)
     return buf.pop()
 

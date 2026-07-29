@@ -24,7 +24,8 @@ def _relation_schema_target_base_name(target: String) -> String:
     live dependency edges were wrapped ones."""
     var t = parse_type_expr(target)
     while t.is_parameterized():
-        t = t.arg(0).copy()
+        var next = t.arg(0).copy()
+        t = next^
     return t.name
 
 

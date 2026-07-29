@@ -25,13 +25,24 @@
     title: Optional[String]
     source: Variant[@@SourceArcPart, @@Series]
     no: Int
-    indexed owned: Bool
 
 @@struct keepalive @@Volume:
     source: Variant[@@Arc, @@VolumeSeries]
     multi @@issues: @@Issue
     no: Int
-    indexed owned: Bool
+
+# Ownership as its own entity, not a flag on @@Issue/@@Volume directly --
+# existence of a matching row *is* "owned"; there's no explicit "not
+# owned" state to maintain. `unique item` enforces at most one @@Owned row
+# per Issue/Volume (can't double-own the same item), and its own
+# Variant[@@Volume, @@Issue] lets one table cover both ownable kinds.
+# `keepalive` because nothing else ever holds a forward reference *to* an
+# @@Owned row (it only ever points *at* an Issue/Volume, never the other
+# way) -- unlike @@Series/@@Publisher/@@Arc, which stay alive transitively
+# through @@Issue's own forward fields, an @@Owned row's only chance of
+# surviving past its own local variable's last use is this tag.
+@@struct keepalive @@Owned:
+    unique item: Variant[@@Volume, @@Issue]
 
 def main() raises:
     @@@:
@@ -78,49 +89,53 @@ def main() raises:
             .title = "Issue 1",
             .source = Variant[@@SourceArcPart, @@Series](@@@SourceArcPart { .@@arc = @@arc, .part = "The part" }),
             .no = 1,
-            .owned = True,
         }
         print("issue number:", @@issue.no)
+        var @@issue_owned = @@@Owned { .item = Variant[@@Volume, @@Issue](@@issue) }
+        print("issue owned:", @@issue_owned.item.isa[@@Issue]())
 
-        # A collection tracker needs wishlist items too -- catalogued, not
-        # (yet) owned.
+        # A collection tracker needs wishlist items too -- catalogued, no
+        # matching @@Owned row (yet).
         var @@issue2 = @@@Issue {
             .title = "Issue 2",
             .source = Variant[@@SourceArcPart, @@Series](@@@SourceArcPart { .@@arc = @@arc, .part = "The other part" }),
             .no = 2,
-            .owned = False,
         }
-        print("issues owned:", @@@Issue.count_for_owned(True))
-        print("issues on wishlist:", @@@Issue.count_for_owned(False))
+        print("issue 1 owned:", @@@Owned.count_for_item(Variant[@@Volume, @@Issue](@@issue)) > 0)
+        print("issue 2 owned:", @@@Owned.count_for_item(Variant[@@Volume, @@Issue](@@issue2)) > 0)
 
         # @@Volume ties a single-book-or-series source (Variant[@@Arc,
         # @@VolumeSeries]) together with the issues collected under it
         # (multi @@issues) -- here sourced from the VolumeSeries created
         # above.
-        var _ = @@@Volume {
+        var @@vol1 = @@@Volume {
             .source = Variant[@@Arc, @@VolumeSeries](@@volume),
             .@@issues = Set(@@issue),
             .no = 1,
-            .owned = True,
         }
         var @@volume_wishlist = @@@Volume {
             .source = Variant[@@Arc, @@VolumeSeries](@@volume),
             .@@issues = Set(@@issue),
             .no = 2,
-            .owned = False,
         }
+        var @@vol1_owned = @@@Owned { .item = Variant[@@Volume, @@Issue](@@vol1) }
         print("book volume issue count:", @@@Volume.count_for_@@issues(@@issue))
-        print("volumes owned:", @@@Volume.count_for_owned(True))
+        print("total owned items:", @@@Owned.count())
 
-        # Marking a wishlist volume as acquired -- an ordinary field write,
-        # same as any other non-key field.
-        @@volume_wishlist.owned = True
-        print("volumes owned after acquiring the wishlist copy:", @@@Volume.count_for_owned(True))
+        # Acquiring a wishlist volume -- creating its own @@Owned row, not
+        # flipping a flag; there's nothing to "un-acquire" to, since not
+        # owning something is just the absence of a row.
+        var @@volume_wishlist_owned = @@@Owned { .item = Variant[@@Volume, @@Issue](@@volume_wishlist) }
+        print("total owned items after acquiring the wishlist copy:", @@@Owned.count())
 
+        var no = @@vol1_owned.item.unsafe_get[@@Volume]().(@@Volume).no
         print(
             "keep alive:",
             @@series.title, @@volume.title, @@volume2.title,
             @@found_volume.title, @@arc.title, @@issue.no, @@issue2.no,
+            @@issue_owned.item.isa[@@Issue](), @@vol1_owned.item.isa[@@Volume](),
+            @@volume_wishlist_owned.item.isa[@@Volume](),
+            no
         )
 
         var s = @@@to_json()

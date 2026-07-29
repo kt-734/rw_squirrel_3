@@ -335,6 +335,8 @@ def parse_hand_written_struct_fields(
         if type_str.byte_length() == 0:
             raise _body_err(full_source, body_start, bs.pos,"InvalidSquirrelSyntax: empty field type")
         if type_str.startswith("Self."):
-            type_str = String(type_str[byte=5 : type_str.byte_length()])
+            var trimmed = type_str[byte=5 : type_str.byte_length()]
+            var stripped = String(trimmed)
+            type_str = stripped
         _check_container_marking(name, name_is_marked, type_str, full_source, body_start, bs.pos)
         fields.append(Field(name=name, type_str=type_str, modifier=FieldModifier.NONE, is_stats=False))

@@ -205,17 +205,23 @@ def _parse_method_span(
             " 'fn') in '@@struct @@" + struct_name + "'"
         )
     rest_offset += keyword.byte_length()
-    rest = String(rest[byte = keyword.byte_length() : rest.byte_length()])
+    var after_keyword = rest[byte = keyword.byte_length() : rest.byte_length()]
+    var without_keyword = String(after_keyword)
+    rest = without_keyword
 
     var is_world_marked = rest.startswith("@@@")
     var is_entity_marked = False
     if is_world_marked:
         rest_offset += 3
-        rest = String(rest[byte = 3 : rest.byte_length()])
+        var after_world_mark = rest[byte = 3 : rest.byte_length()]
+        var without_world_mark = String(after_world_mark)
+        rest = without_world_mark
     elif rest.startswith("@@"):
         is_entity_marked = True
         rest_offset += 2
-        rest = String(rest[byte = 2 : rest.byte_length()])
+        var after_entity_mark = rest[byte = 2 : rest.byte_length()]
+        var without_entity_mark = String(after_entity_mark)
+        rest = without_entity_mark
 
     var paren = rest.find("(")
     if paren < 0:

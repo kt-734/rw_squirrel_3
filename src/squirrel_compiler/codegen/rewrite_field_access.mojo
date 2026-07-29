@@ -18,6 +18,7 @@ from squirrel_compiler.codegen.helpers import (
     storage_field_name_for_hop,
     storage_field_name_for_plain,
     param_name_for_construct_field,
+    rewritten_field_type,
 )
 from squirrel_compiler.codegen.script_utils import (
     is_in_import_statement,
@@ -227,6 +228,120 @@ def _walk_access_chain(
     for i in range(len(steps)):
         ref step = steps[i]
         var is_last = i == len(steps) - 1
+
+        # `.( @@Type )` -- a cast, re-pointing `current_type` to something
+        # the walker couldn't otherwise infer (typically right after a
+        # generic method call like `Variant.unsafe_get[T]()`, whose own
+        # return type this walker never tracks -- see the generic-call
+        # branch just below). Pure DSL bookkeeping, no Mojo text emitted
+        # at all: the underlying value's own real Mojo type already *is*
+        # the cast target (a trust-the-author assertion, same stance
+        # `rebind`/a custom wrapper's own JSON contract already take
+        # elsewhere in this project -- never verified, right or wrong is
+        # on the author). `render_relation_stripped` is the same renderer
+        # `relation_schema`'s own entries already go through, so `current_
+        # type` ends up in the identical bare-name-or-container-shape text
+        # every other branch here already expects, whether the cast
+        # target is a bare relation, a plain leaf, or a container.
+        if step.is_cast():
+            current_type = parse_type_expr(step.name).render_relation_stripped()
+            prev_end_pos = step.end_pos
+            if is_last:
+                # A cast with nothing after it is legal but pointless
+                # (the updated `current_type` has no further step to
+                # matter to) -- an ordinary terminal read of `expr`,
+                # unchanged; writing through it or calling it directly
+                # both fail to name anything real, so those stay errors.
+                if write_value:
+                    raise sc.err(
+                        "InvalidSquirrelSyntax: can't write through a cast"
+                        " ('.(" + step.name + ")') -- it's read-only"
+                    )
+                if is_call:
+                    raise sc.err(
+                        "InvalidSquirrelSyntax: a cast ('.(" + step.name
+                        + ")') can't itself be called -- chain a method"
+                        " name after it instead"
+                    )
+                out += expr
+                pending_decl = None
+                pending_for_loop_decl = None
+                return
+            continue
+
+        # A generic method call with an explicit type argument -- `.name[
+        # TypeArg, ...](...)` (`Variant.isa[T]()`/`.unsafe_get[T]()` are
+        # the motivating case, but this is general: any method name, any
+        # number of type arguments, on any `current_type`). The scanner
+        # itself can't tell "a container index" apart from "a generic
+        # call's own type-argument list" -- both are bare `IDENT '['
+        # ... ']'` text, tokenized as an ordinary FIELD step immediately
+        # followed by an INDEX step either way -- so this is keyed on the
+        # one thing that actually disambiguates them: a call immediately
+        # follows the bracket (`is_call`, checked below), not an index
+        # read/write. Placed before any container/struct-specific dispatch
+        # below so it applies uniformly regardless of what `current_type`
+        # is, with no separate handling needed per call site.
+        if (
+            step.is_field()
+            and i + 1 < len(steps)
+            and steps[i + 1].is_index()
+            and i + 1 == len(steps) - 1
+            and is_call
+        ):
+            var generic_args = parse_type_expr("sqrrl___generic_call_args[" + steps[i + 1].name + "]")
+            var rewritten_type_args = String()
+            for ai in range(generic_args.arg_count()):
+                if ai > 0:
+                    rewritten_type_args += ", "
+                rewritten_type_args += rewritten_field_type(generic_args.arg(ai).render(), ctx.plain_struct_names)
+            # `scan_call_or_write_tail` (back in `parse_field_access`)
+            # only *peeked* at this call's own opening `(` -- `sc.pos`
+            # still sits right there. Consume the whole argument list
+            # ourselves now, the same way `handle_func_call_marker`
+            # already does for a top-level function call
+            # (`scan_call_args_to_close` + a recursive `rewrite_markers`
+            # pass over its text), so `sc.pos` lands cleanly past the
+            # matching `)` and a trailing chain (if any) is detectable --
+            # left unconsumed, the outer marker loop would resume
+            # scanning *inside* this call's own parens out of context,
+            # misreading anything `@@`-marked in a trailing cast as an
+            # unrelated, free-standing reference (confirmed via a real
+            # compile: exactly this, before this fix).
+            if not sc.try_consume("("):
+                raise sc.err(
+                    "InvalidSquirrelSyntax: expected '(' after '" + step.name + "[" + rewritten_type_args + "]'"
+                )
+            var call_arg_text = sc.scan_call_args_to_close()
+            var rewritten_call_args = rewrite_markers(call_arg_text, ctx)
+            var call_end_pos = sc.pos
+            var call_text = expr + "." + step.name + "[" + rewritten_type_args + "](" + rewritten_call_args + ")"
+            # No registered return type to seed a trailing chain with (a
+            # generic method's own return type can never be known
+            # generically) -- the shared helper falls back to requiring
+            # an explicit cast (`.( @@Type )`) as the chain's own first
+            # step instead, the one way to supply what this call site
+            # can't.
+            _consume_call_then_maybe_continue_chain(
+                sc,
+                source,
+                marker_start,
+                ctx,
+                call_text,
+                call_end_pos,
+                None,
+                "InvalidSquirrelSyntax: can't continue an access chain off '"
+                + step.name
+                + "["
+                + rewritten_type_args
+                + "](...)' -- its own return type isn't known generically; cast it first"
+                " ('.( @@Type )')",
+                entity_label + "." + step.name + "(...)",
+                pending_decl,
+                pending_for_loop_decl,
+                out,
+            )
+            return
 
         if is_container_type(current_type) and container_wrapper_of(current_type) in ctx.plain_struct_names:
             # A generic plain-struct instantiation (`Tagged[String]`) is
@@ -607,6 +722,82 @@ def _walk_access_chain(
     # `handle_func_call_marker`'s own "chain follows" lookahead).
 
 
+def _consume_call_then_maybe_continue_chain(
+    mut sc: Scanner,
+    source: String,
+    marker_start: Int,
+    mut ctx: RewriteContext,
+    call_text: String,
+    call_end_pos: Int,
+    seed_type: Optional[String],
+    no_seed_error: String,
+    entity_label: String,
+    mut pending_decl: Optional[String],
+    mut pending_for_loop_decl: Optional[PendingForLoopDecl],
+    mut out: String,
+) raises:
+    """Shared tail for any call site that's already consumed its own
+    `(...)` and now needs to know whether a `.field`/`[index]` chain
+    continues past it -- `handle_func_call_marker` (a registered top-level
+    function's own return type) and the generic-method-call branch of
+    `_walk_access_chain` (`Variant.isa[T]()`/`.unsafe_get[T]()` and any
+    other `.name[Type](...)` shape, which has no registered return type at
+    all) both used to duplicate this exact "peek, scan steps, scan tail,
+    recurse or emit" shape independently; this is the one copy both share
+    now, requires `sc.pos` to already sit right past the call's own
+    closing `)` (`call_end_pos`, for the recursive walk's own rollback
+    anchor).
+
+    `seed_type`, given, is used as the continuation's own `current_type`
+    directly (a function whose own return type is already known). Not
+    given, the continuation's first step must be an explicit cast (`.(
+    @@Type )`) instead -- the one way to supply a type this call site
+    itself can never know generically -- and `no_seed_error` (the
+    caller's own call-site-specific wording) is raised verbatim if it
+    isn't. With no trailing chain at all, just emits `call_text` and
+    registers `pending_decl`/`pending_for_loop_decl` against `seed_type`
+    if one was given (nothing to register otherwise -- an untracked
+    generic call's result is just an ordinary, untracked Mojo value from
+    here on, same as any other native method the DSL doesn't understand)."""
+    if sc.peek_trailing_chain_follows():
+        var next_steps = sc.scan_access_steps()
+        var seed: String
+        if seed_type:
+            seed = seed_type.value()
+        elif len(next_steps) > 0 and next_steps[0].is_cast():
+            seed = ""  # overwritten by the CAST step itself, first thing `_walk_access_chain` does with it
+        else:
+            raise sc.err(no_seed_error)
+        var next_tail = sc.scan_call_or_write_tail()
+        _walk_access_chain(
+            sc,
+            source,
+            marker_start,
+            ctx,
+            next_steps,
+            next_tail.is_call,
+            next_tail.write_value,
+            seed,
+            call_text,
+            call_end_pos,
+            entity_label,
+            pending_decl,
+            pending_for_loop_decl,
+            out,
+        )
+        return
+
+    out += call_text
+    if seed_type:
+        if pending_decl:
+            ctx.entity_to_type[pending_decl.value()] = seed_type.value()
+        if pending_for_loop_decl and is_container_type(seed_type.value()):
+            _require_for_loop_marking_matches(sc, ctx, seed_type.value(), pending_for_loop_decl.value())
+            ctx.entity_to_type[pending_for_loop_decl.value().name] = container_element_of(seed_type.value())
+    pending_decl = None
+    pending_for_loop_decl = None
+
+
 def handle_func_call_marker(
     mut sc: Scanner,
     source: String,
@@ -700,43 +891,23 @@ def handle_func_call_marker(
         + ")"
     )
 
-    if sc.peek_trailing_chain_follows():
-        if not registered:
-            raise sc.err(
-                "InvalidSquirrelSyntax: can't continue an access chain off"
-                " '@@@" + func_name
-                + "(...)' -- '" + func_name + "' doesn't return an"
-                " '@@'-marked value"
-            )
-        var steps = sc.scan_access_steps()
-        var tail = sc.scan_call_or_write_tail()
-        _walk_access_chain(
-            sc,
-            source,
-            marker_start,
-            ctx,
-            steps,
-            tail.is_call,
-            tail.write_value,
-            registered.value(),
-            call_text,
-            call_end_pos,
-            func_name + "(...)",
-            pending_decl,
-            pending_for_loop_decl,
-            out,
-        )
-        return
-
-    out += call_text
-    if registered:
-        if pending_decl:
-            ctx.entity_to_type[pending_decl.value()] = registered.value()
-        if pending_for_loop_decl and is_container_type(registered.value()):
-            _require_for_loop_marking_matches(sc, ctx, registered.value(), pending_for_loop_decl.value())
-            ctx.entity_to_type[pending_for_loop_decl.value().name] = container_element_of(registered.value())
-    pending_decl = None
-    pending_for_loop_decl = None
+    _consume_call_then_maybe_continue_chain(
+        sc,
+        source,
+        marker_start,
+        ctx,
+        call_text,
+        call_end_pos,
+        registered,
+        "InvalidSquirrelSyntax: can't continue an access chain off"
+        " '@@@" + func_name
+        + "(...)' -- '" + func_name + "' doesn't return an"
+        " '@@'-marked value",
+        func_name + "(...)",
+        pending_decl,
+        pending_for_loop_decl,
+        out,
+    )
 
 
 def handle_bare_call_chain(
@@ -1327,45 +1498,22 @@ def _handle_table_level_call(
             is_list_returning = True
             registered_type = encode_container_type("List", fa.entity)
         else:
-            var is_unique = fa.entity in ctx.unique_fields and _contains(ctx.unique_fields[fa.entity], target_field)
-            var is_indexed = fa.entity in ctx.indexed_fields and _contains(ctx.indexed_fields[fa.entity], target_field)
-            var is_multi = fa.entity in ctx.multi_fields and _contains(ctx.multi_fields[fa.entity], target_field)
-            var is_ordered = fa.entity in ctx.ordered_fields and _contains(ctx.ordered_fields[fa.entity], target_field)
-            # A `multi` field isn't always a relation field (`multi
-            # skills: String`) -- gated on `relation_schema` membership
-            # alone, same as every other field-derived-name marking
-            # decision, not an unconditional "multi implies relation"
-            # assumption.
-            var is_relation_target = fa.entity in ctx.relation_schema and target_field in ctx.relation_schema[fa.entity]
-            if is_relation_target and not field_marked:
-                raise sc.err(
-                    "InvalidSquirrelSyntax: '" + target_field + "' on '"
-                    + fa.entity + "' is a relation field -- write 'for_@@"
-                    + target_field + "', not 'for_" + target_field + "'"
-                )
-            if field_marked and not is_relation_target:
-                raise sc.err(
-                    "InvalidSquirrelSyntax: '" + target_field + "' on '"
-                    + fa.entity + "' is a plain field -- write 'for_"
-                    + target_field + "', not 'for_@@" + target_field + "'"
-                )
-            method_name = "for_" + param_name_for_construct_field(target_field, is_relation_target)
-            if is_unique:
+            # Shares `_resolve_groupable_target`'s own eligibility +
+            # marking validation with `count_for_<field>`/`group_by_
+            # <field>`/`count_by_<field>`/`distinct_<field>` -- `for_
+            # <field>`'s own inline copy of this exact check used to drift
+            # from it (confirmed via a real compile: this copy had no
+            # container-relation exemption at all, so a `Variant[@@A,
+            # @@B]`-shaped field's own bare name was wrongly rejected here
+            # even though the identical field read bare correctly at the
+            # ordinary field-access level).
+            var t = _resolve_groupable_target(sc, fa, ctx, "for_", target_field)
+            method_name = "for_" + param_name_for_construct_field(target_field, t.is_relation_or_multi)
+            if t.is_unique:
                 is_entity_returning = True
-            elif is_indexed or is_multi or is_ordered:
+            else:
                 is_list_returning = True
                 registered_type = encode_container_type("Set", fa.entity)
-            else:
-                raise sc.err(
-                    "InvalidSquirrelSyntax: field '"
-                    + target_field
-                    + "' on '"
-                    + fa.entity
-                    + "' has no backward index -- tag it 'indexed' or"
-                    " 'unique' to get 'for_"
-                    + target_field
-                    + "'"
-                )
     elif field.startswith("count_by_"):
         var target_field = String(field[byte=9 : field.byte_length()])
         var m = _match_groupable_field(sc, fa, ctx, "count_by_", target_field)
@@ -1776,7 +1924,18 @@ def _resolve_groupable_target(
     # every other field-derived-name marking decision, not an
     # unconditional "multi implies relation" assumption.
     var is_relation_target = fa.entity in ctx.relation_schema and target_field in ctx.relation_schema[fa.entity]
-    if is_relation_target and not fa.steps[0].marked:
+    # A container-of-entity field (`item: Variant[@@Volume, @@Issue]`,
+    # `List[@@Employee]`, ...) is bare here too, same as everywhere else
+    # this exemption already applies (`_walk_access_chain`'s own
+    # `is_container_relation` -- the type alone already says it's a
+    # relation, so the field's own name never needs `@@` on top of that).
+    # Confirmed missing via a real compile: `@@Owned.item`'s own `Variant[
+    # @@Volume, @@Issue]` read bare at the field-access level already, but
+    # `count_for_item(...)` demanded `count_for_@@item` regardless --
+    # this function's own check had no container exemption at all, unlike
+    # every sibling check that already grew one.
+    var is_container_relation = is_relation_target and is_container_type(ctx.relation_schema[fa.entity][target_field])
+    if is_relation_target and not is_container_relation and not fa.steps[0].marked:
         raise sc.err(
             "InvalidSquirrelSyntax: '"
             + target_field
@@ -1790,6 +1949,19 @@ def _resolve_groupable_target(
             + prefix_for_error
             + target_field
             + "'"
+        )
+    if is_container_relation and fa.steps[0].marked:
+        raise sc.err(
+            "InvalidSquirrelSyntax: '"
+            + target_field
+            + "' on '"
+            + fa.entity
+            + "' -- '@@' marking on a container relation field's own"
+            " name is no longer used or needed (the field's type already"
+            " says so); write '"
+            + prefix_for_error
+            + target_field
+            + "' (no '@@')"
         )
     if fa.steps[0].marked and not is_relation_target:
         raise sc.err(

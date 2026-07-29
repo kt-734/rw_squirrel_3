@@ -35,7 +35,9 @@ def module_path_for(sqrrl_path: String, target_root: String) -> String:
         root_prefix += "/"
     var relative = sqrrl_path
     if relative.startswith(root_prefix):
-        relative = String(relative.removeprefix(root_prefix))
+        var trimmed = relative.removeprefix(root_prefix)
+        var stripped = String(trimmed)
+        relative = stripped
     var without_ext = String(
         relative[byte = 0 : relative.byte_length() - String(".mojo.sqrrl").byte_length()]
     )

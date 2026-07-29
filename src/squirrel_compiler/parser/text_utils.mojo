@@ -143,6 +143,21 @@ def is_after_open_paren_or_comma(source: String, pos: Int) -> Bool:
     return i > 0 and (bytes[i - 1] == UInt8(ord("(")) or bytes[i - 1] == UInt8(ord(",")))
 
 
+def _skip_ws_backward(source: String, pos: Int) -> Int:
+    """Walks backward from `pos` over spaces/tabs, returning the position
+    right after the last non-whitespace byte (`pos` itself if there's
+    none). Shared by `is_after_dot`'s own whitespace-tolerant `.` check
+    and `bare_root_before_dot`'s matching check for a cast's own `.(`
+    (`Scanner.scan_access_steps`'s own cast-step parsing tolerates
+    trivia between the `.` and the `(` the same way it does everywhere
+    else, so both backward checks have to tolerate it too)."""
+    var bytes = source.as_bytes()
+    var i = pos
+    while i > 0 and (bytes[i - 1] == UInt8(ord(" ")) or bytes[i - 1] == UInt8(ord("\t"))):
+        i -= 1
+    return i
+
+
 def is_after_dot(source: String, pos: Int) -> Bool:
     """True if, scanning backward from byte offset `pos` (skipping spaces/
     tabs), the immediately preceding byte is `.` -- `pos` sits right after
@@ -158,22 +173,77 @@ def is_after_dot(source: String, pos: Int) -> Bool:
     = ...`/`@@x = ...` -- never preceded by `.` -- would wrongly be
     treated as a field write instead of an ordinary name reference)."""
     var bytes = source.as_bytes()
-    var i = pos
-    while i > 0 and (bytes[i - 1] == UInt8(ord(" ")) or bytes[i - 1] == UInt8(ord("\t"))):
-        i -= 1
+    var i = _skip_ws_backward(source, pos)
     return i > 0 and bytes[i - 1] == UInt8(ord("."))
 
 
+def _skip_balanced_group_backward(source: String, pos: Int) -> Int:
+    """If byte offset `pos` is immediately preceded by a closing `]`/`)`/
+    `}`, returns the position of its own matching opener, skipping over
+    any further same-kind nesting along the way (the backward mirror of
+    `Scanner.scan_bracket_depth_aware_span`'s own forward depth-
+    tracking). Returns `pos` unchanged if it isn't immediately preceded
+    by a closer at all -- the common case, "no group here", handled the
+    same way as an actual empty group so callers can loop until the
+    position stops moving. Returns `-1` if the nesting never balances
+    before the start of `source`."""
+    var bytes = source.as_bytes()
+    if pos == 0:
+        return pos
+    var closer = bytes[pos - 1]
+    var opener: UInt8
+    if closer == UInt8(ord("]")):
+        opener = UInt8(ord("["))
+    elif closer == UInt8(ord(")")):
+        opener = UInt8(ord("("))
+    elif closer == UInt8(ord("}")):
+        opener = UInt8(ord("{"))
+    else:
+        return pos
+    var depth = 0
+    var k = pos - 1
+    while k >= 0:
+        if bytes[k] == closer:
+            depth += 1
+        elif bytes[k] == opener:
+            depth -= 1
+            if depth == 0:
+                return k
+        k -= 1
+    return -1
+
+
 def bare_root_before_dot(source: String, pos: Int) -> Int:
-    """If byte offset `pos` (the start of an `@@`-marked token, e.g.
-    `@@ref` in `n.@@ref`, `notes[0].@@ref`, or `foo.bar.@@ref`) is
-    immediately preceded by `.` then a chain of one or more `ident[...]`
-    segments (each own bracket span balanced, each pair joined by a
-    further `.`) -- returns that outermost identifier's own start offset
-    once the chain stops (the byte right before it is no longer `.`).
-    Returns `-1` if there's no real identifier there at all (`).@@ref`/
-    `].@@ref` immediately, with nothing bracket-balanced behind it, or
-    the source's own start).
+    """If byte offset `pos` (the start of an `@@`-marked token) sits at
+    the front of a chain hop that continues an earlier bare-rooted
+    chain, returns that chain's outermost identifier's own start offset.
+    Returns `-1` if there's no such chain behind `pos` at all.
+
+    Three entry shapes reach the same backward walk:
+      - `pos` immediately preceded by `.` -- an ordinary field/method
+        hop (`n.@@ref`, `notes[0].@@ref`, `foo.bar.@@ref`).
+      - `pos` immediately preceded by `[` -- a generic method call's own
+        type argument (`h.source.unsafe_get[@@Type]`), *if* the
+        identifier right before that `[` is itself preceded by `.` (this
+        second condition is what keeps an ordinary container type's own
+        type argument, `Dict[@@Type, V]`/`Dict[K, @@Type]`, from ever
+        matching here at all -- neither is ever preceded by an
+        identifier-then-`.` in this specific shape).
+      - `pos` immediately preceded by `(` (skipping trivia), itself
+        preceded by `.` -- a cast's own opening (`.( @@Type )`, this
+        chain's own cast-in-chain syntax -- the only DSL shape that ever
+        puts a marked type directly after a bare `(` with no identifier
+        in between, so this alone distinguishes it from an ordinary call
+        argument like `foo(@@bar)`, where the identifier `foo` -- not
+        `.` -- always sits directly before that same `(`).
+
+    Once positioned at a `.` via any of the three, walks backward through
+    a chain of one or more `ident[...]`/`ident(...)` segments (each own
+    bracket/paren span balanced via `_skip_balanced_group_backward`, each
+    pair joined by a further `.`) until the chain stops (the byte right
+    before it is no longer `.`), returning that outermost identifier's
+    own start offset. Returns `-1` if there's no real identifier there at
+    all, or the source's own start.
 
     Deliberately doesn't also gate on what comes *before* that outermost
     identifier (no allowlist of "valid" preceding characters/keywords) --
@@ -194,36 +264,58 @@ def bare_root_before_dot(source: String, pos: Int) -> Int:
     as a single field-access chain rooted at `n`/`notes`/`foo`, not a
     stray `@@ref` reference the scanner would otherwise stop at on its
     own -- the root itself carries no `@@` at all, so nothing about
-    scanning forward from it ever finds a marker until `@@ref`."""
+    scanning forward from it ever finds a marker until `@@ref`. Also lets
+    a generic method call's own type argument, and a cast immediately
+    following one, be recognized the same way (`h.source.unsafe_get[@@
+    Series]().( @@Series ).title`)."""
     var bytes = source.as_bytes()
-    if pos == 0 or bytes[pos - 1] != UInt8(ord(".")):
+    var i: Int
+    if pos > 0 and bytes[pos - 1] == UInt8(ord(".")):
+        i = pos - 1
+    elif pos > 0 and bytes[pos - 1] == UInt8(ord("[")):
+        var method_start = _ident_start_backward(source, pos - 1)
+        if method_start == pos - 1 or method_start == 0 or bytes[method_start - 1] != UInt8(ord(".")):
+            return -1
+        i = method_start - 1
+    elif pos > 0 and bytes[pos - 1] == UInt8(ord("(")):
+        var before_paren = _skip_ws_backward(source, pos - 1)
+        if before_paren == 0 or bytes[before_paren - 1] != UInt8(ord(".")):
+            return -1
+        i = before_paren - 1
+    else:
         return -1
-    var i = pos - 1
     while True:
         var j = i
-        while j > 0 and bytes[j - 1] == UInt8(ord("]")):
-            var depth = 0
-            var k = j - 1
-            while k >= 0:
-                if bytes[k] == UInt8(ord("]")):
-                    depth += 1
-                elif bytes[k] == UInt8(ord("[")):
-                    depth -= 1
-                    if depth == 0:
-                        break
-                k -= 1
-            if k < 0:
+        while True:
+            var skipped = _skip_balanced_group_backward(source, j)
+            if skipped == -1:
                 return -1
-            j = k
+            if skipped == j:
+                break
+            j = skipped
         var ident_end = j
-        while j > 0 and is_ident_char(bytes[j - 1]):
-            j -= 1
+        j = _ident_start_backward(source, j)
         if j == ident_end:
             return -1
         if j > 0 and bytes[j - 1] == UInt8(ord(".")):
             i = j - 1
             continue
         return j
+
+
+def _ident_start_backward(source: String, pos: Int) -> Int:
+    """Walks backward from `pos` over identifier characters, returning
+    the start of that run -- `pos` itself if there's none. Shared by
+    `bare_root_before_dot`'s own entry shapes (the identifier immediately
+    before an opening `[` in the generic-call case) and its main
+    backward-walk loop (each chain hop's own identifier) -- both are
+    exactly this same "how far back does this identifier go" step, just
+    starting from different positions."""
+    var bytes = source.as_bytes()
+    var j = pos
+    while j > 0 and is_ident_char(bytes[j - 1]):
+        j -= 1
+    return j
 
 
 def is_after_container_bracket(source: String, pos: Int) -> Bool:
