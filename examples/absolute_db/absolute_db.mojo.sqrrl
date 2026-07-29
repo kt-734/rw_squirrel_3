@@ -17,13 +17,13 @@
     title: String
     @@series: @@Series
 
-@@struct @@SourceArcPart:
-    @@arc: @@Arc
-    part: String
+struct SourceArcPart:
+    var @@arc: @@Arc
+    var part: String
 
 @@struct keepalive @@Issue:
     title: Optional[String]
-    source: Variant[@@SourceArcPart, @@Series]
+    source: Variant[SourceArcPart, @@Series]
     no: Int
 
 @@struct keepalive @@Volume:
@@ -87,7 +87,7 @@ def main() raises:
 
         var @@issue = @@@Issue {
             .title = "Issue 1",
-            .source = Variant[@@SourceArcPart, @@Series](@@@SourceArcPart { .@@arc = @@arc, .part = "The part" }),
+            .source = Variant[SourceArcPart, @@Series]({ .@@arc = @@arc, .part = "The part" }),
             .no = 1,
         }
         print("issue number:", @@issue.no)
@@ -98,7 +98,7 @@ def main() raises:
         # matching @@Owned row (yet).
         var @@issue2 = @@@Issue {
             .title = "Issue 2",
-            .source = Variant[@@SourceArcPart, @@Series](@@@SourceArcPart { .@@arc = @@arc, .part = "The other part" }),
+            .source = Variant({ .@@arc = @@arc, .part = "The other part" }),
             .no = 2,
         }
         print("issue 1 owned:", @@@Owned.count_for_item(Variant[@@Volume, @@Issue](@@issue)) > 0)

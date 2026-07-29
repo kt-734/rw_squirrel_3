@@ -1,6 +1,6 @@
-from catalog import sqrrl__PublisherTable
-from catalog import sqrrl__SeriesTable
-from catalog import sqrrl__BookingTable
+from catalog_impl import sqrrl__PublisherTable
+from catalog_impl import sqrrl__SeriesTable
+from catalog_impl import sqrrl__BookingTable
 from std.os import abort
 
 

@@ -1,4 +1,4 @@
-from people import sqrrl__PersonTable
+from people_impl import sqrrl__PersonTable
 from std.os import abort
 
 

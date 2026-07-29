@@ -1,5 +1,5 @@
-from main import sqrrl__EmployeeTable
-from main import sqrrl__DepartmentTable
+from main_impl import sqrrl__EmployeeTable
+from main_impl import sqrrl__DepartmentTable
 from std.os import abort
 
 

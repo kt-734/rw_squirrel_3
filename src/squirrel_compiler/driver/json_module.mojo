@@ -1879,6 +1879,7 @@ def emit_json_module(
     topo_order: List[DiscoveredStruct],
     plain_struct_discovery: PlainStructDiscovery = PlainStructDiscovery(Dict[String, List[Field]](), Dict[String, String]()),
     raw_imports: Dict[String, String] = Dict[String, String](),
+    output_module_prefix: String = "",
 ) raises -> String:
     """Emits `sqrrl__json.mojo`'s whole content -- every JSON-related
     generated symbol for the whole project, in this one file (the
@@ -1895,7 +1896,19 @@ def emit_json_module(
     every `.mojo.sqrrl` file's own raw `from X import Y` lines project-
     wide -- is the true-origin lookup a custom container wrapper's/leaf
     type's own escape-hatch companions use below, in place of the older
-    "whichever struct's field first referenced it" guess."""
+    "whichever struct's field first referenced it" guess.
+
+    `output_module_prefix` (`convert_directory.mojo`'s own `output_
+    module_prefix`, e.g. `"src."`) prefixes this file's own `squirrel_
+    runtime`/`sqrrl__world` imports -- both otherwise bare, top-level
+    names, which only resolve as such when this file lives at the same
+    directory `-I <target_root>` itself points at. Once this file moves
+    into a `src/` subdirectory instead (`entry_split.mojo`'s own reason
+    for `output_root` existing at all), that directory needs its own
+    `__init__.mojo` for `src.main_impl`-style cross-file imports to work
+    -- but that alone makes Mojo treat `src` as a real package, and a
+    bare `from squirrel_runtime import ...` from *inside* it no longer
+    resolves (confirmed via a real, minimal repro) without this prefix."""
     var plain_struct_fields = plain_struct_discovery.fields.copy()
     var plain_struct_names = Dict[String, Bool]()
     var plain_struct_name_list = List[String]()
@@ -1906,9 +1919,9 @@ def emit_json_module(
     var out = String(
         "from std.memory import ArcPointer\n"
         "from std.collections import Set\n"
-        "from squirrel_runtime.json import sqrrl___JsonScanner, sqrrl__json_string_literal,"
+        "from " + output_module_prefix + "squirrel_runtime.json import sqrrl___JsonScanner, sqrrl__json_string_literal,"
         " sqrrl__json_bool_literal, sqrrl__to_json_default, sqrrl__from_json_default, sqrrl__movable_rebind\n"
-        "from sqrrl__world import sqrrl___World, sqrrl___init\n"
+        "from " + output_module_prefix + "sqrrl__world import sqrrl___World, sqrrl___init\n"
     )
 
     # `Variant` itself (Mojo's own stdlib generic) is never one of

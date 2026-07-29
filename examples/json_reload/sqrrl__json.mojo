@@ -2,9 +2,9 @@ from std.memory import ArcPointer
 from std.collections import Set
 from squirrel_runtime.json import sqrrl___JsonScanner, sqrrl__json_string_literal, sqrrl__json_bool_literal, sqrrl__to_json_default, sqrrl__from_json_default, sqrrl__movable_rebind
 from sqrrl__world import sqrrl___World, sqrrl___init
-from company import sqrrl__Project, sqrrl__ProjectInner, sqrrl__ProjectTable
-from company import sqrrl__Department, sqrrl__DepartmentInner, sqrrl__DepartmentTable
-from company import sqrrl__Tag, sqrrl__TagInner, sqrrl__TagTable
+from company_impl import sqrrl__Project, sqrrl__ProjectInner, sqrrl__ProjectTable
+from company_impl import sqrrl__Department, sqrrl__DepartmentInner, sqrrl__DepartmentTable
+from company_impl import sqrrl__Tag, sqrrl__TagInner, sqrrl__TagTable
 
 
 def sqrrl__List_to_json[T: Movable](value: List[T], world: sqrrl___World) -> String:

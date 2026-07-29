@@ -41,6 +41,7 @@ def _is_ident_char(b: UInt8) -> Bool:
 
 def emit_file(
     path: String,
+    source: String,
     own_module_path: String,
     relation_schema: Dict[String, Dict[String, String]],
     struct_names: Dict[String, Bool],
@@ -60,13 +61,18 @@ def emit_file(
     json_used: Bool = False,
     bare_function_returns: Dict[String, String] = Dict[String, String](),
     bare_method_returns: Dict[String, Dict[String, String]] = Dict[String, Dict[String, String]](),
+    output_module_prefix: String = "",
 ) raises -> String:
-    """Emits the generated Mojo source for `path` (a single `.mojo.sqrrl`
-    file), prefixed with the runtime imports, an import for every
-    `cross_file_symbols` (`build_entity_symbols`) entry this file's own
-    transformed text actually references and that isn't declared in this
-    same file (`own_module_path`), and, if this file's script body touches
-    `sqrrl___world` at all, an import line for it.
+    """Emits the generated Mojo source for `source` (a single `.mojo.sqrrl`
+    file's own text -- `path` is only used to label errors, not read;
+    `entry_split.mojo`'s own split needs to call this twice, on two
+    different masked-out substrings of one real file, so the caller now
+    owns reading/deriving the source text rather than this function
+    reading `path` itself), prefixed with the runtime imports, an import
+    for every `cross_file_symbols` (`build_entity_symbols`) entry this
+    file's own transformed text actually references and that isn't
+    declared in this same file (`own_module_path`), and, if this file's
+    script body touches `sqrrl___world` at all, an import line for it.
 
     `json_used` (`driver/misc_builders.mojo`'s `project_uses_json`,
     computed project-wide *before* any file gets transformed) gates both
@@ -74,15 +80,22 @@ def emit_file(
     (via `transform_source`) adds the conformance/method at all -- a
     project that never touches JSON anywhere shouldn't carry either.
 
+    `output_module_prefix` (`convert_directory.mojo`'s own `output_
+    module_prefix`, e.g. `"src."`, matching `emit_json_module`'s own
+    parameter of the same name -- see its doc comment for the full
+    "why") prefixes `squirrel_runtime`/`sqrrl__world`/`sqrrl__json`'s own
+    bare imports here too, for the same reason: those three now live in
+    `output_root`, not necessarily this file's own directory, and once
+    that directory needs its own `__init__.mojo` (for `src.main_impl`-
+    style cross-file imports to work at all), a bare import of them from
+    inside it no longer resolves.
+
     Slimmed from rw_squirrel_2's own `emit_file`: no JSON imports (M5), no
     `EntityHandle`/`TableStateLike`/`Rel`-family runtime imports -- swapped
     for `EntityStorage`/`PlainIndex`/`UniqueIndex`/`MultiIndex` (see the
     plan's Architecture/file-layout sections; `EntityStorage` alone, no
     separate `EntityTable` -- see `entity_storage.mojo`'s own doc comment
     for why that layer was folded away)."""
-    var f = open(path, "r")
-    var source = f.read()
-    f.close()
     var transformed: String
     try:
         transformed = transform_source(
@@ -98,8 +111,8 @@ def emit_file(
     except e:
         raise Error(path + ": " + String(e))
 
-    var out = String("from squirrel_runtime.entity_storage import EntityStorage\n")
-    out += "from squirrel_runtime.index import PlainIndex, UniqueIndex, MultiIndex, OrderedIndex\n"
+    var out = String("from " + output_module_prefix + "squirrel_runtime.entity_storage import EntityStorage\n")
+    out += "from " + output_module_prefix + "squirrel_runtime.index import PlainIndex, UniqueIndex, MultiIndex, OrderedIndex\n"
     # `sqrrl__to_json` itself is never imported here (the JSON-container-
     # dispatch rearchitecture): it's a per-project *generated* function
     # now (`sqrrl__json.mojo`, only emitted when the project actually
@@ -110,7 +123,7 @@ def emit_file(
     # just moved, by checking codegen/entity.mojo's own generated method
     # body. The conformance itself is conditional too, same reason.
     if json_used:
-        out += "from squirrel_runtime.json import sqrrl___JsonSerializable\n"
+        out += "from " + output_module_prefix + "squirrel_runtime.json import sqrrl___JsonSerializable\n"
     out += "from std.memory import ArcPointer\n"
     out += "from std.hashlib import Hasher\n"
     out += "from std.collections import Set\n"
@@ -124,7 +137,7 @@ def emit_file(
     if _contains_word(transformed, "Variant"):
         out += "from std.utils import Variant\n"
     if "sqrrl___world" in transformed:
-        out += "from sqrrl__world import sqrrl___init, sqrrl___World\n"
+        out += "from " + output_module_prefix + "sqrrl__world import sqrrl___init, sqrrl___World\n"
     # Only a file that actually calls a whole-world JSON entry point needs
     # this import -- `sqrrl__json.mojo` itself is only generated at all
     # when *some* file in the project does (`convert_directory.mojo`), so
@@ -132,7 +145,7 @@ def emit_file(
     # a file that might not exist.
     if uses_json_entry_point(transformed):
         out += (
-            "from sqrrl__json import sqrrl___begin_init_from_json,"
+            "from " + output_module_prefix + "sqrrl__json import sqrrl___begin_init_from_json,"
             " sqrrl___end_init_from_json, sqrrl___init_from_json, sqrrl___world_to_json\n"
         )
 

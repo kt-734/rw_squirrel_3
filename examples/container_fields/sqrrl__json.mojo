@@ -2,8 +2,8 @@ from std.memory import ArcPointer
 from std.collections import Set
 from squirrel_runtime.json import sqrrl___JsonScanner, sqrrl__json_string_literal, sqrrl__json_bool_literal, sqrrl__to_json_default, sqrrl__from_json_default, sqrrl__movable_rebind
 from sqrrl__world import sqrrl___World, sqrrl___init
-from company import sqrrl__Employee, sqrrl__EmployeeInner, sqrrl__EmployeeTable
-from company import sqrrl__Department, sqrrl__DepartmentInner, sqrrl__DepartmentTable
+from company_impl import sqrrl__Employee, sqrrl__EmployeeInner, sqrrl__EmployeeTable
+from company_impl import sqrrl__Department, sqrrl__DepartmentInner, sqrrl__DepartmentTable
 from ring_module import Ring, sqrrl__Ring_to_json, sqrrl__Ring_from_json
 from grid_module import Grid, sqrrl__Grid_to_json, sqrrl__Grid_from_json
 

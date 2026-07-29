@@ -7,6 +7,15 @@ from squirrel_compiler.driver.topo_order import topo_sort_structs
 from squirrel_compiler.driver.misc_builders import build_bare_function_returns
 from squirrel_compiler.driver.json_module import emit_json_module
 from squirrel_compiler.parser import ParsedStruct, Field, FieldModifier, TypeParam, parse_hand_written_struct_fields
+from squirrel_compiler.driver.entry_split import (
+    file_has_top_level_main,
+    struct_declaration_ranges,
+    raw_import_line_ranges,
+    trait_declaration_ranges,
+    mask_source,
+    collapse_blank_runs,
+)
+from squirrel_compiler.driver.file_paths import output_module_prefix_for
 
 
 def test_transform_plain_struct_and_script() raises:
@@ -3734,6 +3743,110 @@ def test_emit_json_module_generic_plain_struct_relation_field_gets_monomorphized
     # to the monomorphized companion -- not the generic one -- passing
     # `world` it already has in scope.
     assert_true("parsed_box = sqrrl__Box_Employee_from_json(sc, world)" in out)
+
+
+def test_file_has_top_level_main_detects_literal_main() raises:
+    assert_true(file_has_top_level_main("@@struct @@Person:\n    name: String\n\ndef main() raises:\n    pass\n"))
+
+
+def test_file_has_top_level_main_false_without_one() raises:
+    # A top-level `@@@`-marked bare function, no `def main` at all --
+    # never a valid `mojo run` target regardless (confirmed via a real
+    # compile: "module does not define a `main` function"), so this
+    # correctly reports no split is needed.
+    assert_false(file_has_top_level_main("def @@@make_vendor(name: String) -> @@Vendor:\n    pass\n"))
+    assert_false(file_has_top_level_main("def main_helper() raises:\n    pass\n"))
+
+
+def test_struct_declaration_ranges_includes_preceding_decorator() raises:
+    # Confirmed real bug this guards against: without extending the
+    # range backward over `@fieldwise_init`, `mask_source(keep=True)`
+    # drops it from the impl half, leaving a struct with no field-
+    # matching constructor at all.
+    var src = String("@fieldwise_init\nstruct Address(Copyable, Movable):\n    var city: String\n")
+    var ranges = struct_declaration_ranges(src)
+    assert_equal(len(ranges), 1)
+    assert_equal(ranges[0].start, 0)
+    var text = String(src[byte = ranges[0].start : ranges[0].end])
+    assert_true(text.startswith("@fieldwise_init"))
+    assert_true("struct Address" in text)
+
+
+def test_struct_declaration_ranges_includes_trait_with_name() raises:
+    var src = String(
+        "trait HasId:\n"
+        + "    def id(self) -> Int:\n"
+        + "        ...\n"
+        + "\n"
+        + "@@struct @@Person(HasId):\n"
+        + "    name: String\n"
+    )
+    var ranges = struct_declaration_ranges(src)
+    assert_equal(len(ranges), 2)
+    # Sorted by start -- the trait comes first in this source.
+    assert_equal(ranges[0].name, "HasId")
+    assert_equal(ranges[1].name, "")
+
+
+def test_raw_import_line_ranges_finds_top_level_imports() raises:
+    var src = String("from ring_module import Ring\nimport grid_module\n\n@@struct @@X:\n    name: String\n")
+    var ranges = raw_import_line_ranges(src)
+    assert_equal(len(ranges), 2)
+    assert_true(String(src[byte = ranges[0].start : ranges[0].end]).startswith("from ring_module"))
+    assert_true(String(src[byte = ranges[1].start : ranges[1].end]).startswith("import grid_module"))
+
+
+def test_mask_source_keep_and_remove_are_complementary() raises:
+    var src = String("from ring_module import Ring\n\nstruct Address(Copyable, Movable):\n    var city: String\n\ndef main() raises:\n    pass\n")
+    var ranges = struct_declaration_ranges(src)
+    var struct_only = mask_source(src, ranges, keep=True)
+    var script_only = mask_source(src, ranges, keep=False)
+    # Same length and line count either way -- error positions computed
+    # from either half still point at the real file.
+    assert_equal(struct_only.byte_length(), src.byte_length())
+    assert_equal(script_only.byte_length(), src.byte_length())
+    assert_equal(struct_only.count("\n"), src.count("\n"))
+    assert_equal(script_only.count("\n"), src.count("\n"))
+    assert_true("struct Address" in struct_only)
+    assert_false("def main" in struct_only)
+    assert_true("def main" in script_only)
+    assert_false("struct Address" in script_only)
+
+
+def test_output_module_prefix_for_same_directory_is_empty() raises:
+    assert_equal(output_module_prefix_for("examples/basics", "examples/basics"), "")
+
+
+def test_output_module_prefix_for_normalizes_trailing_slashes() raises:
+    # Confirmed real bug this guards against: a trailing slash on either
+    # side alone used to make an *identical* directory compare unequal,
+    # prefixing every import with a directory that doesn't even exist
+    # relative to itself (`squirrelc examples/basics/`, trailing slash,
+    # wrongly emitted `from examples.basics.squirrel_runtime...`).
+    assert_equal(output_module_prefix_for("examples/basics", "examples/basics/"), "")
+    assert_equal(output_module_prefix_for("examples/basics/", "examples/basics"), "")
+    assert_equal(output_module_prefix_for("examples/basics/", "examples/basics/"), "")
+
+
+def test_collapse_blank_runs_keeps_at_most_max_consecutive() raises:
+    var text = String("a\n\n\n\n\nb\nc\n\nd")
+    assert_equal(collapse_blank_runs(text, max_consecutive=1), "a\n\nb\nc\n\nd")
+    assert_equal(collapse_blank_runs(text, max_consecutive=0), "a\nb\nc\nd")
+
+
+def test_collapse_blank_runs_normalizes_whitespace_only_lines() raises:
+    # Confirmed real bug this guards against: `mask_source` leaves a
+    # masked line as spaces, not truly empty -- a lone surviving one
+    # (below `max_consecutive`) printed as visible trailing whitespace
+    # instead of a clean blank line.
+    var text = String("a\n   \nb")
+    assert_equal(collapse_blank_runs(text, max_consecutive=1), "a\n\nb")
+
+
+def test_output_module_prefix_for_nested_subdirectory() raises:
+    assert_equal(output_module_prefix_for("absolute-db/src", "absolute-db"), "src.")
+    assert_equal(output_module_prefix_for("absolute-db/src/", "absolute-db"), "src.")
+    assert_equal(output_module_prefix_for("absolute-db/src", "absolute-db/"), "src.")
 
 
 def main() raises:

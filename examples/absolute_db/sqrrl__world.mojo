@@ -1,11 +1,10 @@
-from absolute_db import sqrrl__PublisherTable
-from absolute_db import sqrrl__SeriesTable
-from absolute_db import sqrrl__VolumeSeriesTable
-from absolute_db import sqrrl__ArcTable
-from absolute_db import sqrrl__SourceArcPartTable
-from absolute_db import sqrrl__IssueTable
-from absolute_db import sqrrl__VolumeTable
-from absolute_db import sqrrl__OwnedTable
+from absolute_db_impl import sqrrl__PublisherTable
+from absolute_db_impl import sqrrl__SeriesTable
+from absolute_db_impl import sqrrl__VolumeSeriesTable
+from absolute_db_impl import sqrrl__ArcTable
+from absolute_db_impl import sqrrl__IssueTable
+from absolute_db_impl import sqrrl__VolumeTable
+from absolute_db_impl import sqrrl__OwnedTable
 from std.os import abort
 
 
@@ -14,7 +13,6 @@ struct sqrrl___World(Movable):
     var Series: sqrrl__SeriesTable
     var VolumeSeries: sqrrl__VolumeSeriesTable
     var Arc: sqrrl__ArcTable
-    var SourceArcPart: sqrrl__SourceArcPartTable
     var Issue: sqrrl__IssueTable
     var Volume: sqrrl__VolumeTable
     var Owned: sqrrl__OwnedTable
@@ -24,7 +22,6 @@ struct sqrrl___World(Movable):
         self.Series = sqrrl__SeriesTable()
         self.VolumeSeries = sqrrl__VolumeSeriesTable()
         self.Arc = sqrrl__ArcTable()
-        self.SourceArcPart = sqrrl__SourceArcPartTable()
         self.Issue = sqrrl__IssueTable()
         self.Volume = sqrrl__VolumeTable()
         self.Owned = sqrrl__OwnedTable()
@@ -45,9 +42,6 @@ struct sqrrl___World(Movable):
         var leaked_Arc = self.Arc.count()
         if leaked_Arc > 0:
             abort("LeakedEntities: 'Arc' still has " + String(leaked_Arc) + " live entities outside sqrrl___world -- something external still references them")
-        var leaked_SourceArcPart = self.SourceArcPart.count()
-        if leaked_SourceArcPart > 0:
-            abort("LeakedEntities: 'SourceArcPart' still has " + String(leaked_SourceArcPart) + " live entities outside sqrrl___world -- something external still references them")
         var leaked_Issue = self.Issue.count()
         if leaked_Issue > 0:
             abort("LeakedEntities: 'Issue' still has " + String(leaked_Issue) + " live entities outside sqrrl___world -- something external still references them")

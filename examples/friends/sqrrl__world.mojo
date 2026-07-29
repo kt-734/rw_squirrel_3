@@ -1,5 +1,5 @@
-from friends import sqrrl__PersonTable
-from friends import sqrrl__GroupTable
+from friends_impl import sqrrl__PersonTable
+from friends_impl import sqrrl__GroupTable
 from std.os import abort
 
 

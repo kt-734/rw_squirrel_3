@@ -1,6 +1,6 @@
-from company import sqrrl__ProjectTable
-from company import sqrrl__DepartmentTable
-from company import sqrrl__TagTable
+from company_impl import sqrrl__ProjectTable
+from company_impl import sqrrl__DepartmentTable
+from company_impl import sqrrl__TagTable
 from std.os import abort
 
 

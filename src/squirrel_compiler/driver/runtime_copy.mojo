@@ -27,17 +27,33 @@ def ensure_init_files(sqrrl_files: List[String], target_root: String) raises:
             dir = dirname(dir)
 
 
-def _copy_dir(src_dir: String, dest_dir: String) raises:
+def _copy_dir(src_dir: String, dest_dir: String, import_prefix: String) raises:
     makedirs(dest_dir, exist_ok=True)
     for entry in listdir(src_dir):
         var src_path = join(src_dir, entry)
         var dest_path = join(dest_dir, entry)
         if isdir(src_path):
-            _copy_dir(src_path, dest_path)
+            _copy_dir(src_path, dest_path, import_prefix)
         elif entry.endswith(".mojo"):
             var f = open(src_path, "r")
             var content = f.read()
             f.close()
+            # `squirrel_runtime`'s own files are static, hand-written, and
+            # never templated by squirrelc -- their own internal cross-file
+            # imports (`from squirrel_runtime.id_allocator import ...`)
+            # are hardcoded assuming `squirrel_runtime` itself is a bare,
+            # top-level package. That's only true when it lands at
+            # `output_root` (`convert_directory.mojo`) directly; once it's
+            # nested under a `src/` subdirectory instead (which needs its
+            # own `__init__.mojo` for `src.main_impl`-style cross-file
+            # imports to work at all), Mojo treats `src` as a real package
+            # and these same bare imports no longer resolve from within it
+            # (confirmed via a real compile) -- so they're rewritten here,
+            # at copy time, exactly the same way `emit_file`/`emit_json_
+            # module`'s own generated `from squirrel_runtime...` lines
+            # already are.
+            if import_prefix != "":
+                content = content.replace("from squirrel_runtime.", "from " + import_prefix + "squirrel_runtime.")
             var out = open(dest_path, "w")
             out.write(content)
             out.close()
@@ -84,10 +100,15 @@ def _find_runtime_source_dir() raises -> String:
         dir = parent
 
 
-def copy_runtime(dest_root: String) raises:
+def copy_runtime(dest_root: String, import_prefix: String = "") raises:
     """Writes `squirrel_runtime`'s `.mojo` files into
     `dest_root/squirrel_runtime`, so generated files' `from
     squirrel_runtime...` imports resolve at the conversion root.
+
+    `import_prefix` (`convert_directory.mojo`'s own `output_module_
+    prefix`, e.g. `"src."`) rewrites `squirrel_runtime`'s own internal
+    cross-file imports to match, when `dest_root` isn't `target_root`
+    itself -- see `_copy_dir`'s own doc comment for the full "why".
 
     M1 scope: a plain filesystem copy from this checkout's own `src/
     squirrel_runtime` (`_find_runtime_source_dir`, anchored to where
@@ -96,4 +117,4 @@ def copy_runtime(dest_root: String) raises:
     rw_squirrel_2 uses (`tools/generate_embedded_runtime.mojo`) -- that's
     deferred to M7, a packaging convenience with no architectural weight
     (see the plan's Milestones section)."""
-    _copy_dir(_find_runtime_source_dir(), join(dest_root, "squirrel_runtime"))
+    _copy_dir(_find_runtime_source_dir(), join(dest_root, "squirrel_runtime"), import_prefix)

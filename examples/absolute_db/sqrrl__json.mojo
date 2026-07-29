@@ -3,14 +3,14 @@ from std.collections import Set
 from squirrel_runtime.json import sqrrl___JsonScanner, sqrrl__json_string_literal, sqrrl__json_bool_literal, sqrrl__to_json_default, sqrrl__from_json_default, sqrrl__movable_rebind
 from sqrrl__world import sqrrl___World, sqrrl___init
 from std.utils import Variant
-from absolute_db import sqrrl__Publisher, sqrrl__PublisherInner, sqrrl__PublisherTable
-from absolute_db import sqrrl__Series, sqrrl__SeriesInner, sqrrl__SeriesTable
-from absolute_db import sqrrl__VolumeSeries, sqrrl__VolumeSeriesInner, sqrrl__VolumeSeriesTable
-from absolute_db import sqrrl__Arc, sqrrl__ArcInner, sqrrl__ArcTable
-from absolute_db import sqrrl__SourceArcPart, sqrrl__SourceArcPartInner, sqrrl__SourceArcPartTable
-from absolute_db import sqrrl__Issue, sqrrl__IssueInner, sqrrl__IssueTable
-from absolute_db import sqrrl__Volume, sqrrl__VolumeInner, sqrrl__VolumeTable
-from absolute_db import sqrrl__Owned, sqrrl__OwnedInner, sqrrl__OwnedTable
+from absolute_db_impl import sqrrl__Publisher, sqrrl__PublisherInner, sqrrl__PublisherTable
+from absolute_db_impl import sqrrl__Series, sqrrl__SeriesInner, sqrrl__SeriesTable
+from absolute_db_impl import sqrrl__VolumeSeries, sqrrl__VolumeSeriesInner, sqrrl__VolumeSeriesTable
+from absolute_db_impl import sqrrl__Arc, sqrrl__ArcInner, sqrrl__ArcTable
+from absolute_db_impl import sqrrl__Issue, sqrrl__IssueInner, sqrrl__IssueTable
+from absolute_db_impl import sqrrl__Volume, sqrrl__VolumeInner, sqrrl__VolumeTable
+from absolute_db_impl import sqrrl__Owned, sqrrl__OwnedInner, sqrrl__OwnedTable
+from absolute_db_impl import SourceArcPart
 
 
 def sqrrl__List_to_json[T: Movable](value: List[T], world: sqrrl___World) -> String:
@@ -130,14 +130,12 @@ def sqrrl__to_json[T: AnyType](value: T, world: sqrrl___World) -> String:
         return String(rebind[sqrrl__Publisher](value).id())
     elif T == sqrrl__Series:
         return String(rebind[sqrrl__Series](value).id())
-    elif T == sqrrl__Arc:
-        return String(rebind[sqrrl__Arc](value).id())
     elif T == Optional[String]:
         return sqrrl__Optional_to_json(rebind[Optional[String]](value), world)
-    elif T == Variant[sqrrl__SourceArcPart, sqrrl__Series]:
-        return sqrrl__Variant_to_json(rebind[Variant[sqrrl__SourceArcPart, sqrrl__Series]](value), world)
-    elif T == sqrrl__SourceArcPart:
-        return String(rebind[sqrrl__SourceArcPart](value).id())
+    elif T == Variant[SourceArcPart, sqrrl__Series]:
+        return sqrrl__Variant_to_json(rebind[Variant[SourceArcPart, sqrrl__Series]](value), world)
+    elif T == sqrrl__Arc:
+        return String(rebind[sqrrl__Arc](value).id())
     elif T == Variant[sqrrl__Arc, sqrrl__VolumeSeries]:
         return sqrrl__Variant_to_json(rebind[Variant[sqrrl__Arc, sqrrl__VolumeSeries]](value), world)
     elif T == sqrrl__VolumeSeries:
@@ -148,6 +146,8 @@ def sqrrl__to_json[T: AnyType](value: T, world: sqrrl___World) -> String:
         return String(rebind[sqrrl__Volume](value).id())
     elif T == sqrrl__Issue:
         return String(rebind[sqrrl__Issue](value).id())
+    elif T == SourceArcPart:
+        return sqrrl__SourceArcPart_to_json(rebind[SourceArcPart](value), world)
     else:
         return sqrrl__to_json_default(value)
 
@@ -159,14 +159,12 @@ def sqrrl__from_json[T: Movable & ImplicitlyDeletable](mut sc: sqrrl___JsonScann
         return sqrrl__movable_rebind[sqrrl__Publisher, T](sqrrl__Publisher(world.Publisher.storage[].handle_for(UInt32(sc.parse_json_int()))))
     elif T == sqrrl__Series:
         return sqrrl__movable_rebind[sqrrl__Series, T](sqrrl__Series(world.Series.storage[].handle_for(UInt32(sc.parse_json_int()))))
-    elif T == sqrrl__Arc:
-        return sqrrl__movable_rebind[sqrrl__Arc, T](sqrrl__Arc(world.Arc.storage[].handle_for(UInt32(sc.parse_json_int()))))
     elif T == Optional[String]:
         return sqrrl__movable_rebind[Optional[String], T](sqrrl__Optional_from_json[String](sc, world))
-    elif T == Variant[sqrrl__SourceArcPart, sqrrl__Series]:
-        return sqrrl__movable_rebind[Variant[sqrrl__SourceArcPart, sqrrl__Series], T](sqrrl__Variant_from_json[sqrrl__SourceArcPart, sqrrl__Series](sc, world))
-    elif T == sqrrl__SourceArcPart:
-        return sqrrl__movable_rebind[sqrrl__SourceArcPart, T](sqrrl__SourceArcPart(world.SourceArcPart.storage[].handle_for(UInt32(sc.parse_json_int()))))
+    elif T == Variant[SourceArcPart, sqrrl__Series]:
+        return sqrrl__movable_rebind[Variant[SourceArcPart, sqrrl__Series], T](sqrrl__Variant_from_json[SourceArcPart, sqrrl__Series](sc, world))
+    elif T == sqrrl__Arc:
+        return sqrrl__movable_rebind[sqrrl__Arc, T](sqrrl__Arc(world.Arc.storage[].handle_for(UInt32(sc.parse_json_int()))))
     elif T == Variant[sqrrl__Arc, sqrrl__VolumeSeries]:
         return sqrrl__movable_rebind[Variant[sqrrl__Arc, sqrrl__VolumeSeries], T](sqrrl__Variant_from_json[sqrrl__Arc, sqrrl__VolumeSeries](sc, world))
     elif T == sqrrl__VolumeSeries:
@@ -177,6 +175,8 @@ def sqrrl__from_json[T: Movable & ImplicitlyDeletable](mut sc: sqrrl___JsonScann
         return sqrrl__movable_rebind[sqrrl__Volume, T](sqrrl__Volume(world.Volume.storage[].handle_for(UInt32(sc.parse_json_int()))))
     elif T == sqrrl__Issue:
         return sqrrl__movable_rebind[sqrrl__Issue, T](sqrrl__Issue(world.Issue.storage[].handle_for(UInt32(sc.parse_json_int()))))
+    elif T == SourceArcPart:
+        return sqrrl__movable_rebind[SourceArcPart, T](sqrrl__SourceArcPart_from_json(sc, world))
     else:
         return sqrrl__from_json_default[T](sc)
 
@@ -448,71 +448,6 @@ def sqrrl__Arc_all_from_json(table: sqrrl__ArcTable, world: sqrrl___World, mut t
                 break
         sc.expect_byte(UInt8(ord("]")))
 
-def sqrrl__SourceArcPart_to_json(e: sqrrl__SourceArcPart, world: sqrrl___World) -> String:
-    var out = String("{")
-    out += '"arc":'
-    out += String(e._inner[].get_sqrrl__arc().id())
-    out += ","
-    out += '"part":'
-    out += sqrrl__to_json(e._inner[].get_part(), world)
-    out += "}"
-    return out^
-
-def sqrrl__SourceArcPart_from_json_with_id(table: sqrrl__SourceArcPartTable, world: sqrrl___World, id: UInt32, mut sc: sqrrl___JsonScanner) raises -> sqrrl__SourceArcPart:
-    var parsed_arc: Optional[sqrrl__Arc] = None
-    var parsed_part: Optional[String] = None
-    sc.expect_byte(UInt8(ord("{")))
-    if not sc.try_consume_byte(UInt8(ord("}"))):
-        while True:
-            var key = sc.parse_json_string()
-            sc.expect_byte(UInt8(ord(":")))
-            if key == "arc":
-                var rid_arc = UInt32(sc.parse_json_int())
-                parsed_arc = sqrrl__Arc(world.Arc.storage[].handle_for(rid_arc))
-            elif key == "part":
-                parsed_part = sc.parse_json_string()
-            else:
-                raise Error("InvalidJson: unknown field " + key + " for SourceArcPart")
-            if not sc.try_consume_byte(UInt8(ord(","))):
-                break
-        sc.expect_byte(UInt8(ord("}")))
-    if not parsed_arc:
-        raise Error("InvalidJson: missing field arc for SourceArcPart")
-    if not parsed_part:
-        raise Error("InvalidJson: missing field part for SourceArcPart")
-    table.storage[].alloc_specific_id(id)
-    var v_arc = parsed_arc.value()
-    var v_part = parsed_part.value()
-    var inner = ArcPointer(sqrrl__SourceArcPartInner(_id=id, _table=table.storage, _sqrrl__arc=v_arc, _part=v_part))
-    table.storage[].register_weak(id, inner)
-    return sqrrl__SourceArcPart(inner^)
-
-def sqrrl__SourceArcPart_all_to_json(table: sqrrl__SourceArcPartTable, world: sqrrl___World) -> String:
-    var out = String("[")
-    var first = True
-    for id in table.storage[].all():
-        if not first:
-            out += ","
-        var e = sqrrl__SourceArcPart(table.storage[].handle_for(id))
-        out += "[" + String(id) + "," + sqrrl__SourceArcPart_to_json(e, world) + "]"
-        first = False
-    out += "]"
-    return out^
-
-def sqrrl__SourceArcPart_all_from_json(table: sqrrl__SourceArcPartTable, world: sqrrl___World, mut temp: List[sqrrl__SourceArcPart], mut sc: sqrrl___JsonScanner) raises:
-    sc.expect_byte(UInt8(ord("[")))
-    if not sc.try_consume_byte(UInt8(ord("]"))):
-        while True:
-            sc.expect_byte(UInt8(ord("[")))
-            var eid = UInt32(sc.parse_json_int())
-            sc.expect_byte(UInt8(ord(",")))
-            var e = sqrrl__SourceArcPart_from_json_with_id(table, world, eid, sc)
-            sc.expect_byte(UInt8(ord("]")))
-            temp.append(e)
-            if not sc.try_consume_byte(UInt8(ord(","))):
-                break
-        sc.expect_byte(UInt8(ord("]")))
-
 def sqrrl__Issue_to_json(e: sqrrl__Issue, world: sqrrl___World) -> String:
     var out = String("{")
     out += '"title":'
@@ -529,7 +464,7 @@ def sqrrl__Issue_to_json(e: sqrrl__Issue, world: sqrrl___World) -> String:
 
 def sqrrl__Issue_from_json_with_id(table: sqrrl__IssueTable, world: sqrrl___World, id: UInt32, mut sc: sqrrl___JsonScanner) raises -> sqrrl__Issue:
     var parsed_title: Optional[Optional[String]] = None
-    var parsed_source: Optional[Variant[sqrrl__SourceArcPart, sqrrl__Series]] = None
+    var parsed_source: Optional[Variant[SourceArcPart, sqrrl__Series]] = None
     var parsed_no: Optional[Int] = None
     sc.expect_byte(UInt8(ord("{")))
     if not sc.try_consume_byte(UInt8(ord("}"))):
@@ -539,7 +474,7 @@ def sqrrl__Issue_from_json_with_id(table: sqrrl__IssueTable, world: sqrrl___Worl
             if key == "title":
                 parsed_title = sqrrl__from_json[Optional[String]](sc, world)
             elif key == "source":
-                parsed_source = sqrrl__Variant_from_json[sqrrl__SourceArcPart, sqrrl__Series](sc, world)
+                parsed_source = sqrrl__Variant_from_json[SourceArcPart, sqrrl__Series](sc, world)
             elif key == "no":
                 parsed_no = Int(sc.parse_json_int())
             else:
@@ -739,19 +674,51 @@ def sqrrl__Owned_all_from_json(table: sqrrl__OwnedTable, world: sqrrl___World, m
                 break
         sc.expect_byte(UInt8(ord("]")))
 
+def sqrrl__SourceArcPart_to_json(value: SourceArcPart, world: sqrrl___World) -> String:
+    var out = String("{")
+    out += '"arc":'
+    out += String(value.sqrrl__arc.id())
+    out += ","
+    out += '"part":'
+    out += sqrrl__to_json(value.part, world)
+    out += "}"
+    return out^
+
+def sqrrl__SourceArcPart_from_json(mut sc: sqrrl___JsonScanner, world: sqrrl___World) raises -> SourceArcPart:
+    var parsed_arc: Optional[sqrrl__Arc] = None
+    var parsed_part: Optional[String] = None
+    sc.expect_byte(UInt8(ord("{")))
+    if not sc.try_consume_byte(UInt8(ord("}"))):
+        while True:
+            var key = sc.parse_json_string()
+            sc.expect_byte(UInt8(ord(":")))
+            if key == "arc":
+                var rid_arc = UInt32(sc.parse_json_int())
+                parsed_arc = sqrrl__Arc(world.Arc.storage[].handle_for(rid_arc))
+            elif key == "part":
+                parsed_part = sc.parse_json_string()
+            else:
+                raise Error("InvalidJson: unknown field " + key + " for SourceArcPart")
+            if not sc.try_consume_byte(UInt8(ord(","))):
+                break
+        sc.expect_byte(UInt8(ord("}")))
+    if not parsed_arc:
+        raise Error("InvalidJson: missing field arc for SourceArcPart")
+    if not parsed_part:
+        raise Error("InvalidJson: missing field part for SourceArcPart")
+    return SourceArcPart(sqrrl__arc=parsed_arc.take(), part=parsed_part.take())
+
 struct sqrrl___TempKeepAlives(Movable):
     var Publisher: List[sqrrl__Publisher]
     var Series: List[sqrrl__Series]
     var VolumeSeries: List[sqrrl__VolumeSeries]
     var Arc: List[sqrrl__Arc]
-    var SourceArcPart: List[sqrrl__SourceArcPart]
 
     def __init__(out self):
         self.Publisher = List[sqrrl__Publisher]()
         self.Series = List[sqrrl__Series]()
         self.VolumeSeries = List[sqrrl__VolumeSeries]()
         self.Arc = List[sqrrl__Arc]()
-        self.SourceArcPart = List[sqrrl__SourceArcPart]()
 
 def sqrrl___world_to_json(world: sqrrl___World) -> String:
     var out = String("{")
@@ -766,9 +733,6 @@ def sqrrl___world_to_json(world: sqrrl___World) -> String:
     out += ","
     out += '"Arc":'
     out += sqrrl__Arc_all_to_json(world.Arc, world)
-    out += ","
-    out += '"SourceArcPart":'
-    out += sqrrl__SourceArcPart_all_to_json(world.SourceArcPart, world)
     out += ","
     out += '"Issue":'
     out += sqrrl__Issue_all_to_json(world.Issue, world)
@@ -795,8 +759,6 @@ def sqrrl___world_from_json(mut world: sqrrl___World, mut sc: sqrrl___JsonScanne
                 sqrrl__VolumeSeries_all_from_json(world.VolumeSeries, world, temp.VolumeSeries, sc)
             elif key == "Arc":
                 sqrrl__Arc_all_from_json(world.Arc, world, temp.Arc, sc)
-            elif key == "SourceArcPart":
-                sqrrl__SourceArcPart_all_from_json(world.SourceArcPart, world, temp.SourceArcPart, sc)
             elif key == "Issue":
                 sqrrl__Issue_all_from_json(world.Issue, world, sc)
             elif key == "Volume":

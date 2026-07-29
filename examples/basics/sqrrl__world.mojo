@@ -1,5 +1,5 @@
-from greeter import sqrrl__DepartmentTable
-from greeter import sqrrl__PersonTable
+from greeter_impl import sqrrl__DepartmentTable
+from greeter_impl import sqrrl__PersonTable
 from std.os import abort
 
 
